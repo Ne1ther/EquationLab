@@ -1,0 +1,968 @@
+[
+  {
+    "id": "greek-0-lower",
+    "family": "greek",
+    "pair": 0,
+    "name": "Alpha",
+    "symbol": "α",
+    "latex": "\\alpha",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-0-upper",
+    "family": "greek",
+    "pair": 0,
+    "name": "Alpha",
+    "symbol": "Α",
+    "latex": "Α",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-1-lower",
+    "family": "greek",
+    "pair": 1,
+    "name": "Beta",
+    "symbol": "β",
+    "latex": "\\beta",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-1-upper",
+    "family": "greek",
+    "pair": 1,
+    "name": "Beta",
+    "symbol": "Β",
+    "latex": "Β",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-2-lower",
+    "family": "greek",
+    "pair": 2,
+    "name": "Gamma",
+    "symbol": "γ",
+    "latex": "\\gamma",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-2-upper",
+    "family": "greek",
+    "pair": 2,
+    "name": "Gamma",
+    "symbol": "Γ",
+    "latex": "\\Gamma",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-3-lower",
+    "family": "greek",
+    "pair": 3,
+    "name": "Delta",
+    "symbol": "δ",
+    "latex": "\\delta",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-3-upper",
+    "family": "greek",
+    "pair": 3,
+    "name": "Delta",
+    "symbol": "Δ",
+    "latex": "\\Delta",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-4-lower",
+    "family": "greek",
+    "pair": 4,
+    "name": "Epsilon",
+    "symbol": "ε",
+    "latex": "\\varepsilon",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-4-upper",
+    "family": "greek",
+    "pair": 4,
+    "name": "Epsilon",
+    "symbol": "Ε",
+    "latex": "Ε",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-5-lower",
+    "family": "greek",
+    "pair": 5,
+    "name": "Zeta",
+    "symbol": "ζ",
+    "latex": "\\zeta",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-5-upper",
+    "family": "greek",
+    "pair": 5,
+    "name": "Zeta",
+    "symbol": "Ζ",
+    "latex": "Ζ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-6-lower",
+    "family": "greek",
+    "pair": 6,
+    "name": "Eta",
+    "symbol": "η",
+    "latex": "\\eta",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-6-upper",
+    "family": "greek",
+    "pair": 6,
+    "name": "Eta",
+    "symbol": "Η",
+    "latex": "Η",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-7-lower",
+    "family": "greek",
+    "pair": 7,
+    "name": "Theta",
+    "symbol": "θ",
+    "latex": "\\theta",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-7-upper",
+    "family": "greek",
+    "pair": 7,
+    "name": "Theta",
+    "symbol": "Θ",
+    "latex": "\\Theta",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-8-lower",
+    "family": "greek",
+    "pair": 8,
+    "name": "Iota",
+    "symbol": "ι",
+    "latex": "\\iota",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-8-upper",
+    "family": "greek",
+    "pair": 8,
+    "name": "Iota",
+    "symbol": "Ι",
+    "latex": "Ι",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-9-lower",
+    "family": "greek",
+    "pair": 9,
+    "name": "Kappa",
+    "symbol": "κ",
+    "latex": "\\kappa",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-9-upper",
+    "family": "greek",
+    "pair": 9,
+    "name": "Kappa",
+    "symbol": "Κ",
+    "latex": "Κ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-10-lower",
+    "family": "greek",
+    "pair": 10,
+    "name": "Lambda",
+    "symbol": "λ",
+    "latex": "\\lambda",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-10-upper",
+    "family": "greek",
+    "pair": 10,
+    "name": "Lambda",
+    "symbol": "Λ",
+    "latex": "\\Lambda",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-11-lower",
+    "family": "greek",
+    "pair": 11,
+    "name": "Mu",
+    "symbol": "μ",
+    "latex": "\\mu",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-11-upper",
+    "family": "greek",
+    "pair": 11,
+    "name": "Mu",
+    "symbol": "Μ",
+    "latex": "Μ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-12-lower",
+    "family": "greek",
+    "pair": 12,
+    "name": "Nu",
+    "symbol": "ν",
+    "latex": "\\nu",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-12-upper",
+    "family": "greek",
+    "pair": 12,
+    "name": "Nu",
+    "symbol": "Ν",
+    "latex": "Ν",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-13-lower",
+    "family": "greek",
+    "pair": 13,
+    "name": "Xi",
+    "symbol": "ξ",
+    "latex": "\\xi",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-13-upper",
+    "family": "greek",
+    "pair": 13,
+    "name": "Xi",
+    "symbol": "Ξ",
+    "latex": "\\Xi",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-14-lower",
+    "family": "greek",
+    "pair": 14,
+    "name": "Omicron",
+    "symbol": "ο",
+    "latex": "\\omicron",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-14-upper",
+    "family": "greek",
+    "pair": 14,
+    "name": "Omicron",
+    "symbol": "Ο",
+    "latex": "Ο",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-15-lower",
+    "family": "greek",
+    "pair": 15,
+    "name": "Pi",
+    "symbol": "π",
+    "latex": "\\pi",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-15-upper",
+    "family": "greek",
+    "pair": 15,
+    "name": "Pi",
+    "symbol": "Π",
+    "latex": "\\Pi",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-16-lower",
+    "family": "greek",
+    "pair": 16,
+    "name": "Rho",
+    "symbol": "ρ",
+    "latex": "\\rho",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-16-upper",
+    "family": "greek",
+    "pair": 16,
+    "name": "Rho",
+    "symbol": "Ρ",
+    "latex": "Ρ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-17-lower",
+    "family": "greek",
+    "pair": 17,
+    "name": "Sigma",
+    "symbol": "σ",
+    "latex": "\\sigma",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-17-upper",
+    "family": "greek",
+    "pair": 17,
+    "name": "Sigma",
+    "symbol": "Σ",
+    "latex": "\\Sigma",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-18-lower",
+    "family": "greek",
+    "pair": 18,
+    "name": "Tau",
+    "symbol": "τ",
+    "latex": "\\tau",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-18-upper",
+    "family": "greek",
+    "pair": 18,
+    "name": "Tau",
+    "symbol": "Τ",
+    "latex": "Τ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-19-lower",
+    "family": "greek",
+    "pair": 19,
+    "name": "Upsilon",
+    "symbol": "υ",
+    "latex": "\\upsilon",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-19-upper",
+    "family": "greek",
+    "pair": 19,
+    "name": "Upsilon",
+    "symbol": "Υ",
+    "latex": "\\Upsilon",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-20-lower",
+    "family": "greek",
+    "pair": 20,
+    "name": "Phi",
+    "symbol": "φ",
+    "latex": "\\varphi",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-20-upper",
+    "family": "greek",
+    "pair": 20,
+    "name": "Phi",
+    "symbol": "Φ",
+    "latex": "\\Phi",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-21-lower",
+    "family": "greek",
+    "pair": 21,
+    "name": "Chi",
+    "symbol": "χ",
+    "latex": "\\chi",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-21-upper",
+    "family": "greek",
+    "pair": 21,
+    "name": "Chi",
+    "symbol": "Χ",
+    "latex": "Χ",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-22-lower",
+    "family": "greek",
+    "pair": 22,
+    "name": "Psi",
+    "symbol": "ψ",
+    "latex": "\\psi",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-22-upper",
+    "family": "greek",
+    "pair": 22,
+    "name": "Psi",
+    "symbol": "Ψ",
+    "latex": "\\Psi",
+    "kind": "upper"
+  },
+  {
+    "id": "greek-23-lower",
+    "family": "greek",
+    "pair": 23,
+    "name": "Omega",
+    "symbol": "ω",
+    "latex": "\\omega",
+    "kind": "lower"
+  },
+  {
+    "id": "greek-23-upper",
+    "family": "greek",
+    "pair": 23,
+    "name": "Omega",
+    "symbol": "Ω",
+    "latex": "\\Omega",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-0-lower",
+    "family": "latin",
+    "pair": 0,
+    "name": "a",
+    "symbol": "a",
+    "latex": "a",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-0-upper",
+    "family": "latin",
+    "pair": 0,
+    "name": "A",
+    "symbol": "A",
+    "latex": "A",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-1-lower",
+    "family": "latin",
+    "pair": 1,
+    "name": "b",
+    "symbol": "b",
+    "latex": "b",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-1-upper",
+    "family": "latin",
+    "pair": 1,
+    "name": "B",
+    "symbol": "B",
+    "latex": "B",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-2-lower",
+    "family": "latin",
+    "pair": 2,
+    "name": "c",
+    "symbol": "c",
+    "latex": "c",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-2-upper",
+    "family": "latin",
+    "pair": 2,
+    "name": "C",
+    "symbol": "C",
+    "latex": "C",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-3-lower",
+    "family": "latin",
+    "pair": 3,
+    "name": "d",
+    "symbol": "d",
+    "latex": "d",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-3-upper",
+    "family": "latin",
+    "pair": 3,
+    "name": "D",
+    "symbol": "D",
+    "latex": "D",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-4-lower",
+    "family": "latin",
+    "pair": 4,
+    "name": "e",
+    "symbol": "e",
+    "latex": "e",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-4-upper",
+    "family": "latin",
+    "pair": 4,
+    "name": "E",
+    "symbol": "E",
+    "latex": "E",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-5-lower",
+    "family": "latin",
+    "pair": 5,
+    "name": "f",
+    "symbol": "f",
+    "latex": "f",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-5-upper",
+    "family": "latin",
+    "pair": 5,
+    "name": "F",
+    "symbol": "F",
+    "latex": "F",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-6-lower",
+    "family": "latin",
+    "pair": 6,
+    "name": "g",
+    "symbol": "g",
+    "latex": "g",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-6-upper",
+    "family": "latin",
+    "pair": 6,
+    "name": "G",
+    "symbol": "G",
+    "latex": "G",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-7-lower",
+    "family": "latin",
+    "pair": 7,
+    "name": "h",
+    "symbol": "h",
+    "latex": "h",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-7-upper",
+    "family": "latin",
+    "pair": 7,
+    "name": "H",
+    "symbol": "H",
+    "latex": "H",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-8-lower",
+    "family": "latin",
+    "pair": 8,
+    "name": "i",
+    "symbol": "i",
+    "latex": "i",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-8-upper",
+    "family": "latin",
+    "pair": 8,
+    "name": "I",
+    "symbol": "I",
+    "latex": "I",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-9-lower",
+    "family": "latin",
+    "pair": 9,
+    "name": "j",
+    "symbol": "j",
+    "latex": "j",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-9-upper",
+    "family": "latin",
+    "pair": 9,
+    "name": "J",
+    "symbol": "J",
+    "latex": "J",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-10-lower",
+    "family": "latin",
+    "pair": 10,
+    "name": "k",
+    "symbol": "k",
+    "latex": "k",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-10-upper",
+    "family": "latin",
+    "pair": 10,
+    "name": "K",
+    "symbol": "K",
+    "latex": "K",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-11-lower",
+    "family": "latin",
+    "pair": 11,
+    "name": "l",
+    "symbol": "l",
+    "latex": "l",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-11-upper",
+    "family": "latin",
+    "pair": 11,
+    "name": "L",
+    "symbol": "L",
+    "latex": "L",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-12-lower",
+    "family": "latin",
+    "pair": 12,
+    "name": "m",
+    "symbol": "m",
+    "latex": "m",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-12-upper",
+    "family": "latin",
+    "pair": 12,
+    "name": "M",
+    "symbol": "M",
+    "latex": "M",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-13-lower",
+    "family": "latin",
+    "pair": 13,
+    "name": "n",
+    "symbol": "n",
+    "latex": "n",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-13-upper",
+    "family": "latin",
+    "pair": 13,
+    "name": "N",
+    "symbol": "N",
+    "latex": "N",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-14-lower",
+    "family": "latin",
+    "pair": 14,
+    "name": "o",
+    "symbol": "o",
+    "latex": "o",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-14-upper",
+    "family": "latin",
+    "pair": 14,
+    "name": "O",
+    "symbol": "O",
+    "latex": "O",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-15-lower",
+    "family": "latin",
+    "pair": 15,
+    "name": "p",
+    "symbol": "p",
+    "latex": "p",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-15-upper",
+    "family": "latin",
+    "pair": 15,
+    "name": "P",
+    "symbol": "P",
+    "latex": "P",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-16-lower",
+    "family": "latin",
+    "pair": 16,
+    "name": "q",
+    "symbol": "q",
+    "latex": "q",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-16-upper",
+    "family": "latin",
+    "pair": 16,
+    "name": "Q",
+    "symbol": "Q",
+    "latex": "Q",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-17-lower",
+    "family": "latin",
+    "pair": 17,
+    "name": "r",
+    "symbol": "r",
+    "latex": "r",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-17-upper",
+    "family": "latin",
+    "pair": 17,
+    "name": "R",
+    "symbol": "R",
+    "latex": "R",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-18-lower",
+    "family": "latin",
+    "pair": 18,
+    "name": "s",
+    "symbol": "s",
+    "latex": "s",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-18-upper",
+    "family": "latin",
+    "pair": 18,
+    "name": "S",
+    "symbol": "S",
+    "latex": "S",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-19-lower",
+    "family": "latin",
+    "pair": 19,
+    "name": "t",
+    "symbol": "t",
+    "latex": "t",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-19-upper",
+    "family": "latin",
+    "pair": 19,
+    "name": "T",
+    "symbol": "T",
+    "latex": "T",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-20-lower",
+    "family": "latin",
+    "pair": 20,
+    "name": "u",
+    "symbol": "u",
+    "latex": "u",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-20-upper",
+    "family": "latin",
+    "pair": 20,
+    "name": "U",
+    "symbol": "U",
+    "latex": "U",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-21-lower",
+    "family": "latin",
+    "pair": 21,
+    "name": "v",
+    "symbol": "v",
+    "latex": "v",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-21-upper",
+    "family": "latin",
+    "pair": 21,
+    "name": "V",
+    "symbol": "V",
+    "latex": "V",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-22-lower",
+    "family": "latin",
+    "pair": 22,
+    "name": "w",
+    "symbol": "w",
+    "latex": "w",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-22-upper",
+    "family": "latin",
+    "pair": 22,
+    "name": "W",
+    "symbol": "W",
+    "latex": "W",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-23-lower",
+    "family": "latin",
+    "pair": 23,
+    "name": "x",
+    "symbol": "x",
+    "latex": "x",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-23-upper",
+    "family": "latin",
+    "pair": 23,
+    "name": "X",
+    "symbol": "X",
+    "latex": "X",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-24-lower",
+    "family": "latin",
+    "pair": 24,
+    "name": "y",
+    "symbol": "y",
+    "latex": "y",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-24-upper",
+    "family": "latin",
+    "pair": 24,
+    "name": "Y",
+    "symbol": "Y",
+    "latex": "Y",
+    "kind": "upper"
+  },
+  {
+    "id": "latin-25-lower",
+    "family": "latin",
+    "pair": 25,
+    "name": "z",
+    "symbol": "z",
+    "latex": "z",
+    "kind": "lower"
+  },
+  {
+    "id": "latin-25-upper",
+    "family": "latin",
+    "pair": 25,
+    "name": "Z",
+    "symbol": "Z",
+    "latex": "Z",
+    "kind": "upper"
+  },
+  {
+    "id": "variant-0",
+    "family": "variants",
+    "pair": 0,
+    "name": "Epsilon",
+    "symbol": "ϵ",
+    "latex": "\\epsilon",
+    "kind": "variant",
+    "requiresUnicodeFont": true
+  },
+  {
+    "id": "variant-1",
+    "family": "variants",
+    "pair": 1,
+    "name": "Theta",
+    "symbol": "ϑ",
+    "latex": "\\vartheta",
+    "kind": "variant"
+  },
+  {
+    "id": "variant-2",
+    "family": "variants",
+    "pair": 2,
+    "name": "Phi",
+    "symbol": "ϕ",
+    "latex": "\\phi",
+    "kind": "variant"
+  },
+  {
+    "id": "variant-3",
+    "family": "variants",
+    "pair": 3,
+    "name": "Pi",
+    "symbol": "ϖ",
+    "latex": "\\varpi",
+    "kind": "variant"
+  },
+  {
+    "id": "variant-4",
+    "family": "variants",
+    "pair": 4,
+    "name": "Rho",
+    "symbol": "ϱ",
+    "latex": "\\varrho",
+    "kind": "variant",
+    "requiresUnicodeFont": true
+  },
+  {
+    "id": "variant-5",
+    "family": "variants",
+    "pair": 5,
+    "name": "Sigma",
+    "symbol": "ς",
+    "latex": "\\varsigma",
+    "kind": "variant"
+  },
+  {
+    "id": "variant-6",
+    "family": "variants",
+    "pair": 6,
+    "name": "Kappa",
+    "symbol": "ϰ",
+    "latex": "\\varkappa",
+    "kind": "variant",
+    "requiresUnicodeFont": true
+  }
+]

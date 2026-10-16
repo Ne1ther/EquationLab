@@ -1,0 +1,272 @@
+MathfieldElement.fontsDirectory='vendor/fonts';MathfieldElement.soundsDirectory=null;
+const $=id=>document.getElementById(id),mf=$('formula');mf.mathVirtualKeyboardPolicy='manual';mf.smartFence=true;mf.maxMatrixCols=31;mf.environmentPopoverPolicy='off';
+const editorMacros={
+ eltab:{def:'\\hspace{1em}',args:0,expand:false,captureSelection:true},
+ sfrac:{def:'{}^{#1}\\! /\\! {}_{#2}',args:2,expand:false},
+ sout:{def:'\\enclose{horizontalstrike}{#1}',args:1,expand:false},
+ underbracket:{def:'\\underset{\\unicode{"23B5}}{#1}',args:1,expand:false},
+ overbracket:{def:'\\overset{\\unicode{"23B4}}{#1}',args:1,expand:false}
+ ,bra:{def:'\\left\\langle#1\\right|',args:1,expand:false}
+ ,ket:{def:'\\left|#1\\right\\rangle',args:1,expand:false}
+ ,braket:{def:'\\left\\langle#1\\right\\rangle',args:1,expand:false}
+ ,eqqcolon:{def:'\\unicode{"2255}',args:0,expand:false}
+ ,mtdoublearrow:{def:'\\overset{#2}{\\underset{#3}{\\rightleftarrows}}',args:3,expand:false}
+ ,mtmatrix:{def:'#4',args:4,expand:false}
+ ,underrightharpoon:{def:'\\underset{\\rightharpoonup}{#1}',args:1,expand:false}
+ ,hline:{def:'\\hspace{0em}',args:0,expand:false}
+};
+mf.macros={...mf.macros,...window.prepareEquationMacros({...editorMacros,...window.equationCatalogMacros})};
+window.installEquationMacroEditing(mf);
+const pending=new Map();let sequence=0,revision=0,timer,valid=false,busy=false,source=null,selected=null,mode='rebuild';
+var editorViewport;
+let wordTicket=null,wordSaveQueued=false;const idleWaiters=new Set();
+let editingRuler,editorHistory=[],editorHistoryIndex=-1,restoringHistory=false;
+function rulerPatch(){return editingRuler===undefined?{}:{ruler:editingRuler};}
+// MathLive 0.111.1 adapter: same matrix model used by its own context menu.
+function matrixContext(){const env=mf._mathfield?.model?.parentEnvironment;if(!env||!['array','matrix','pmatrix','bmatrix','Bmatrix','vmatrix','Vmatrix','cases'].includes(env.environmentName))return null;return {rows:env.rows.length,columns:env.rows.reduce((n,row)=>Math.max(n,row.length),0)};}
+function historySnapshot(){return {latex:mf.value,ruler:editingRuler===undefined?null:editingRuler.map(t=>({...t})),selection:mf.selection};}
+function recordEditorHistory(){
+ if(restoringHistory)return;const next=historySnapshot(),old=editorHistory[editorHistoryIndex];
+ if(old&&old.latex===next.latex&&JSON.stringify(old.ruler)===JSON.stringify(next.ruler))return;
+ editorHistory.splice(editorHistoryIndex+1);editorHistory.push(next);if(editorHistory.length>150)editorHistory.shift();editorHistoryIndex=editorHistory.length-1;
+}
+window.resetEditorHistory=()=>{editorHistory=[];editorHistoryIndex=-1;recordEditorHistory();};
+function editorUndo(redo=false){const index=editorHistoryIndex+(redo?1:-1);if(index<0||index>=editorHistory.length)return;editorHistoryIndex=index;const saved=editorHistory[index];restoringHistory=true;try{editingRuler=saved.ruler===null?undefined:saved.ruler.map(t=>({...t}));mf.value=saved.latex;if(saved.selection)mf.selection=saved.selection;changed();}finally{restoringHistory=false;}mf.focus();}
+window.nativeReply=({id,result})=>{const p=pending.get(id);if(!p)return;pending.delete(id);result.ok?p.resolve(result.data):result.cancelled?p.resolve(null):p.reject(Error(result.error));};
+function native(action,payload={}){return new Promise((resolve,reject)=>{const id=String(++sequence);pending.set(id,{resolve,reject});window.webkit.messageHandlers.native.postMessage({id,action,payload});});}
+function sourceEditMode(){return mode==='rebuild'&&selected&&mf.value===selected.editorBaseline?'characters':mode;}
+function message(text,error=false){$('message').textContent=text;$('message').classList.toggle('error',error);requestWorkbenchSync();}
+function status(title,detail,error=false,bytes=''){$('status-title').textContent=title;$('status-detail').textContent=detail;$('native-status').classList.toggle('error',error);$('native-bytes').textContent=bytes;requestWorkbenchSync();}
+// A typography-only check must not flash the export controls off and on. A
+// click can wait for that check, but may never submit the previous preferences.
+let validationRunning=null,validationRequested=false,validationPending=false,validatedFormulaKey=null;
+function formulaKey(){return JSON.stringify([mf.value,editingRuler,source?.path??null,selected?.index??null,selected?.nativeSha256??null,selected?.error??null,mode,[...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])]);}
+function exportAvailable(){return valid||validationPending&&validatedFormulaKey!==null&&formulaKey()===validatedFormulaKey;}
+function controls(){const blocked=busy||!exportAvailable();for(const id of ['export','save-edit','word-session-save','copy-png'])$(id).disabled=blocked;$('copy-latex').disabled=busy||!mf.value.trim();document.querySelector('.editor-card').inert=busy;requestWorkbenchSync();}
+async function ensureValid(){clearTimeout(timer);if(!valid)await validate();if(!valid)throw Error('请先完成原生数据检查');}
+async function validate(){
+ validationRequested=true;validationPending=true;
+ if(validationRunning)return validationRunning;
+ validationRunning=(async()=>{
+  while(validationRequested){
+   validationRequested=false;const rev=++revision,latex=mf.value,key=formulaKey();$('latex').value=latex;valid=false;controls();
+   if(!latex.trim()){validationPending=false;validatedFormulaKey=null;window.desktopFontPreview?.(null);controls();status('公式为空','先输入公式或选择模板。');continue;}
+   try{
+    const patch=window.desktopTypographyPatch?.();
+    const r=source&&selected?await native('editPreview',{input:source.path,index:selected.index,mode:sourceEditMode(),latex,replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])),typography:patch,...rulerPatch()}):await native('validate',{latex,typography:patch,...rulerPatch()});
+    if(rev!==revision)continue;
+    valid=true;validationPending=false;validatedFormulaKey=key;window.desktopFontPreview?.(r.svg);status('原生 MathType 数据检查通过','可导出 Equation.DSMT4 对象，包含 Equation Native 数据。',false,r.nativeBytes?r.nativeBytes+' B':'');
+   }catch(e){if(rev!==revision)continue;validationPending=false;validatedFormulaKey=null;status('此结构暂不能写入原生 MathType','可以继续编辑；导出已阻止。'+e.message,true);window.desktopFontPreview?.(null);}
+   controls();
+  }
+ })();
+ try{await validationRunning;}finally{validationRunning=null;}
+}
+function changed(){window.syncEquationMacros(mf);recordEditorHistory();editorViewport?.refresh();clearTimeout(timer);revision++;$('latex').value=mf.value;valid=false;validationPending=true;controls();status('正在检查原生数据…','检查通过后即可导出 MathType 对象。');timer=setTimeout(validate,90);}
+mf.addEventListener('input',changed);$('latex').addEventListener('input',()=>{mf.value=$('latex').value;changed();});
+const groups={
+'常用结构':[['a/b','\\frac{#0}{#?}','分式'],['xⁿ','#0^{#?}','上标'],['xᵢ','#0_{#?}','下标'],['√x','\\sqrt{#0}','根号'],['ⁿ√x','\\sqrt[#?]{#0}','n次根'],['(x)','\\left(#0\\right)','圆括号'],['[x]','\\left[#0\\right]','方括号'],['{x}','\\left\\{#0\\right\\}','花括号'],['|x|','\\left|#0\\right|','绝对值'],['a/b','\\tfrac{#0}{#?}','小分式'],['a/b','\\sfrac{#0}{#?}','斜分式'],['xᵢⁿ','#0_{#?}^{#?}','上下标'],['⟨x⟩','\\left\\langle #0\\right\\rangle','尖括号'],['‖x‖','\\left\\|#0\\right\\|','范数'],['⌊x⌋','\\left\\lfloor #0\\right\\rfloor','向下取整'],['⌈x⌉','\\left\\lceil #0\\right\\rceil','向上取整']],
+'积分与求和':[['∫','\\int_{#?}^{#?}#0','积分'],['∬','\\iint_{#?}^{#?}#0','二重积分'],['∑','\\sum_{i=1}^{n}#0','求和'],['∏','\\prod_{i=1}^{n}#0','乘积'],['lim','\\lim_{x\\to 0}#0','极限'],['∫','\\int #0','不定积分'],['∭','\\iiint_{#?}^{#?}#0','三重积分'],['∮','\\oint_{#?}#0','围道积分'],['∐','\\coprod_{i=1}^{n}#0','余积'],['⋃','\\bigcup_{i=1}^{n}#0','大并集'],['⋂','\\bigcap_{i=1}^{n}#0','大交集'],['limsup','\\limsup_{n\\to\\infty}#0','上极限']],
+'矩阵':[['[aᵢⱼ]','\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}','2×2'],['(aᵢⱼ)','\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}','圆括号'],['|A|','\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}','行列式'],['{x','\\begin{cases}#?&#?\\\\#?&#?\\end{cases}','分段'],['a = b','\\begin{aligned}#?&=#?\\\\#?&=#?\\end{aligned}','对齐'],['[aᵢⱼ]','\\begin{bmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{bmatrix}','3×3'],['aᵢⱼ','\\begin{matrix}#?&#?\\\\#?&#?\\end{matrix}','无括号'],['{aᵢⱼ}','\\begin{Bmatrix}#?&#?\\\\#?&#?\\end{Bmatrix}','花括号'],['‖A‖','\\begin{Vmatrix}#?&#?\\\\#?&#?\\end{Vmatrix}','双竖线'],['[aᵢ]','\\begin{bmatrix}#?\\\\#?\\\\#?\\end{bmatrix}','列向量'],['[aⱼ]','\\begin{bmatrix}#?&#?&#?\\end{bmatrix}','行向量'],['[A|b]','\\left[\\begin{array}{cc|c}#?&#?&#?\\\\#?&#?&#?\\end{array}\\right]','增广矩阵']],
+'希腊字母':[['α','\\alpha'],['β','\\beta'],['γ','\\gamma'],['δ','\\delta'],['θ','\\theta'],['λ','\\lambda'],['μ','\\mu'],['π','\\pi'],['ρ','\\rho'],['σ','\\sigma'],['φ','\\varphi'],['ω','\\omega'],['Δ','\\Delta'],['Ω','\\Omega']],
+'运算与关系':[['±','\\pm'],['×','\\times'],['⋅','\\cdot'],['≤','\\leq'],['≥','\\geq'],['≠','\\neq'],['≈','\\approx'],['∈','\\in'],['∞','\\infty'],['∂','\\partial'],['∇','\\nabla'],['→','\\to'],['÷','\\div'],['⩽','\\leqslant'],['⩾','\\geqslant'],['∉','\\notin'],['⊆','\\subseteq'],['∩','\\cap'],['∪','\\cup'],['⇒','\\Rightarrow']],
+'标记与函数':[['x̄','\\overline{#0}','上划线'],['x̂','\\hat{#0}','帽子'],['x⃗','\\vec{#0}','向量'],['ẋ','\\dot{#0}','点'],['sin','\\sin #0'],['cos','\\cos #0'],['log','\\log #0'],['ln','\\ln #0'],['abc','\\mathrm{#0}','正体'],['𝐱','\\mathbf{#0}','粗体'],['x̲','\\underline{#0}','下划线'],['ẍ','\\ddot{#0}','双点'],['x̂','\\widehat{#0}','宽帽符号'],['x̃','\\widetilde{#0}','宽波浪线'],['⏞','\\overbrace{#0}^{#?}','上花括注'],['⏟','\\underbrace{#0}_{#?}','下花括注'],['tan','\\tan #0'],['exp','\\exp #0']]
+};
+for(const name of Object.keys(groups)){const b=document.createElement('button');b.textContent=name;b.onclick=()=>palette(name);$('categories').append(b);}
+function palette(name){[...$('categories').children].forEach(b=>b.classList.toggle('selected',b.textContent===name));$('palette').replaceChildren();for(const [label,latex,hint]of groups[name]){const b=document.createElement('button');b.textContent=label;b.title=hint||label;b.disabled=!!selected&&(mode==='characters'||!!selected.error);if(hint){const s=document.createElement('small');s.textContent=hint;b.append(s);}b.onclick=()=>{mf.focus();mf.insert(latex,{selectionMode:'placeholder'});changed();};$('palette').append(b);}}
+palette('常用结构');$('undo').onclick=()=>editorUndo();$('redo').onclick=()=>editorUndo(true);$('keyboard').onclick=()=>{if(window.mathVirtualKeyboard.visible)window.mathVirtualKeyboard.hide();else{mf.focus();window.mathVirtualKeyboard.show();}};
+async function perform(fn){if(busy)return false;busy=true;controls();message('正在处理…');try{await fn();return true;}catch(e){message(e.message,true);return false;}finally{busy=false;controls();for(const wake of [...idleWaiters])wake();}}
+function resetNewFormula(){if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return false;}source=null;selected=null;editingRuler=undefined;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;$('title').textContent='新建公式';$('eyebrow').textContent='FORMULA EDITOR';$('subtitle').textContent='点击模板、输入内容，再导出可编辑的 Word 公式。';mf.readOnly=false;$('latex').readOnly=false;for(const b of $('palette').querySelectorAll('button'))b.disabled=false;mf.value='';window.resetEditorHistory?.();renderObjects();window.desktopTypographyNew?.();changed();}
+window.nativeNew=()=>busy?false:resetNewFormula();
+window.nativeOpen=()=>perform(async()=>{if(wordTicket)throw Error('请先保存或取消当前 Word 编辑会话');const r=await native('open');if(!r){message('');return;}source=r;message('已读取 '+r.objects.length+' 个 MathType 对象');renderObjects();$('subtitle').textContent=r.path;if(r.objects.length)selectObject(0);else message('这个文档未找到 MathType OLE 公式。Word 自带公式和纯图片不在此列表。');});
+function renderObjects(){$('objects').replaceChildren();$('count').textContent=source?.objects.length||'';for(const o of source?.objects||[]){const b=document.createElement('button');b.className='object-row'+(selected?.index===o.index?' selected':'');b.textContent=`${o.index+1}. ${o.latex||'暂不支持的原生结构'}`;const s=document.createElement('small');s.textContent=o.error?'只读 · '+o.progId:'Equation Native · '+o.application;b.append(s);b.onclick=()=>selectObject(o.index);$('objects').append(b);}}
+function selectObject(index){selected=source.objects[index];mode='rebuild';$('title').textContent='编辑文档中的公式';$('eyebrow').textContent='LEGACY MATHTYPE';$('source-panel').hidden=false;$('save-edit').hidden=false;$('arrange-source').hidden=false;$('source-class').textContent=selected.progId;mf.value=selected.latex||'';selected.editorBaseline=mf.value;editingRuler=selected.ruler??undefined;window.resetEditorHistory?.();window.desktopTypographyLoad?.(selected.typography);renderModes();renderObjects();$('original-preview').replaceChildren();if(selected.image){const image=document.createElement('img');image.src=selected.image;image.alt='原文档中的公式预览';$('original-preview').append(image);}if(selected.error){status('当前公式只读',selected.error,true);valid=false;controls();}else changed();}
+function renderModes(){mf.readOnly=mode==='characters'||!!selected?.error;$('latex').readOnly=mode==='characters'||!!selected?.error;for(const b of $('palette').querySelectorAll('button'))b.disabled=mode==='characters'||!!selected?.error;$('mode-characters').classList.toggle('selected',mode==='characters');$('mode-rebuild').classList.toggle('selected',mode==='rebuild');$('character-editor').hidden=mode!=='characters';$('character-editor').replaceChildren();$('mode-note').textContent=mode==='characters'?'只修改字符字节，保留原生结构、样式和伴随数据。支持数字、英文字母及已确认编码的希腊字母。':'可编辑分式、根式和上下标等结构；修改结构可能重新排布局部样式。只替换字符时可用“保留结构”。';for(const c of (selected?.characters||[]).filter(c=>c.editable)){const label=document.createElement('label');label.textContent=c.char+' →';const input=document.createElement('input');input.value=c.char;input.maxLength=1;input.dataset.offset=c.offset;input.setAttribute('aria-label',`替换字符 ${c.char}，位置 ${c.offset}`);input.disabled=c.editable!==true||!!selected.error;if(c.editReason)input.title=c.editReason;input.oninput=previewCharacterEdit;label.append(input);$('character-editor').append(label);}if(selected?.error){mf.readOnly=true;valid=false;}if(window.workbenchEnglish!==undefined)window.setWorkbenchLanguage?.(window.workbenchEnglish?'en':'zh-Hans');}
+async function previewCharacterEdit(){const rev=++revision;valid=false;validationPending=true;controls();const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));try{const r=await native('editPreview',{input:source.path,index:selected.index,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});if(rev!==revision)return;mf.value=r.latex;$('latex').value=r.latex;window.desktopFontPreview?.(r.svg);valid=true;validationPending=false;validatedFormulaKey=formulaKey();status('原生字符修改检查通过','保存时只替换对应字符字节，原公式结构和样式保留。');}catch(e){if(rev!==revision)return;validationPending=false;validatedFormulaKey=null;status('字符暂不能这样替换',e.message,true);}controls();}
+$('mode-characters').onclick=()=>{if(!selected)return;mode='characters';mf.value=selected.latex||'';renderModes();changed();};$('mode-rebuild').onclick=()=>{if(!selected)return;mode='rebuild';renderModes();changed();};
+window.nativeExport=()=>perform(async()=>{if(wordTicket)throw Error('请使用保存并返回 Word');await ensureValid();const exportSource=source&&selected?{path:source.path,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;const r=await native('export',{equations:[{latex:mf.value,layout:wordLayout(),typography:window.desktopTypographyPatch?.(),...rulerPatch()}],fragment:true,source:exportSource});if(r)message('已导出原生 MathType Word：'+r.path);else message('');});
+$('export').onclick=window.nativeExport;$('nav-new').onclick=window.nativeNew;$('nav-open').onclick=window.nativeOpen;
+$('save-edit').onclick=()=>perform(async()=>{if(!source||!selected)throw Error('请先选择可编辑的原生公式');await ensureValid();const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));const r=await native('edit',{input:source.path,index:selected.index,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});if(r)message('已另存副本，原始文档保留：'+r.path);else message('');});
+$('copy-latex').onclick=()=>perform(async()=>{await native('copyLatex',{latex:mf.value});message('已复制 LaTeX');});$('copy-png').onclick=()=>perform(async()=>{await ensureValid();const original=source&&selected?{path:source.path,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;await native('copyPNG',{latex:mf.value,typography:window.desktopTypographyPatch?.(),...rulerPatch(),source:original});message('已复制当前原生偏好的预览图片；提交可编辑公式请使用“导出 MathType Word”。');});
+let favorites;try{favorites=JSON.parse(localStorage.getItem('equationlab.favorites')||'[]');}catch{favorites=[];}
+function renderFavorites(){$('favorites').replaceChildren();for(const value of favorites){const b=document.createElement('button');b.className='favorite';b.textContent=value;b.title=value;b.onclick=()=>{if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return;}window.nativeNew();mf.value=value;changed();};$('favorites').append(b);}}
+$('add-favorite').onclick=()=>{if(!mf.value.trim())return;favorites=[mf.value,...favorites.filter(v=>v!==mf.value)].slice(0,20);localStorage.setItem('equationlab.favorites',JSON.stringify(favorites));renderFavorites();message('已收藏当前公式');};renderFavorites();validate();
+
+function syncSidebar(ended=false){native('state',{wordSession:!!wordTicket,wordSessionEnded:ended,objects:(source?.objects||[]).map(o=>({id:o.index,label:`${o.index+1}. ${o.latex||'暂不支持的结构'}`,detail:o.error?'只读 · '+o.progId:'原生 MathType · '+o.application})),favorites,selected:selected?.index??null}).catch(()=>{});requestWorkbenchSync();}
+window.nativeSelectObject=index=>{if(!busy)selectObject(index);};window.nativeFavorite=index=>{if(busy)return;if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return;}window.nativeNew();mf.value=favorites[index];changed();};$('favorite-top').onclick=()=>$('add-favorite').click();
+const originalRenderObjects=renderObjects;renderObjects=function(){originalRenderObjects();syncSidebar();};const originalRenderFavorites=renderFavorites;renderFavorites=function(){originalRenderFavorites();syncSidebar();};syncSidebar();
+
+function wordLayout(){return {mode:$('layout-mode').value,numberFormat:$('layout-format').value,chapter:Number($('layout-chapter').value),section:Number($('layout-section').value)};}
+$('arrange').onclick=()=>perform(async()=>{if(!source||!selected)throw Error('请先打开 Word 并选择公式');const r=await native('arrange',{input:source.path,indices:$('arrange-all').checked?source.objects.map(o=>o.index):[selected.index],layout:wordLayout()});if(r)message('已另存编排后的副本，公式原生数据保留：'+r.path);else message('');});
+
+window.nativeOpenWordSession=async ticket=>{
+ while(busy)await new Promise((resolve,reject)=>{const wake=()=>{clearTimeout(timeout);idleWaiters.delete(wake);resolve();};const timeout=setTimeout(()=>{idleWaiters.delete(wake);reject(Error('编辑器仍在处理其他任务，请稍后重试'));},20000);idleWaiters.add(wake);});
+ return perform(async()=>{
+ if(!/^[a-f0-9]{64}$/.test(ticket))throw Error('无效的 Word 编辑会话');
+ if(wordTicket&&wordTicket!==ticket)throw Error('请先保存或取消当前 Word 编辑会话');
+ let r;try{r=await native('wordSessionRead',{ticket});}catch(e){await native('wordSessionCancel',{ticket}).catch(()=>{});syncSidebar(true);throw e;}wordTicket=ticket;source=r;renderObjects();selectObject(0);
+ $('word-session-actions').hidden=false;$('export').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
+ $('title').textContent='编辑 Word 中的原生公式';$('subtitle').textContent='关闭窗口会自动保存回原位置；也可以点取消放弃修改。';syncSidebar();message('已载入 Word 原生公式。');
+ });
+};
+window.nativeCommitWordSession=()=>perform(async()=>{
+ if(wordSaveQueued){await waitForWordSave();finishWordSave();return;}
+ clearTimeout(timer);await validate();
+ if(!wordTicket||!valid||!selected||selected.error)throw Error('当前公式尚不能保存。请修正标出的内容，或点“取消”保留 Word 原公式。');
+ const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));
+ const result=await native('wordSessionSave',{ticket:wordTicket,input:source.path,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});
+ if(result.acknowledgement){wordSaveQueued=true;mf.readOnly=true;$('latex').readOnly=true;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=true;await waitForWordSave();}
+ finishWordSave();
+});
+function finishWordSave(){wordTicket=null;wordSaveQueued=false;syncSidebar(true);resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已保存回 Word 原生公式。');}
+async function waitForWordSave(){
+ message('正在保存回 Word…');const deadline=Date.now()+20000;
+ while(Date.now()<deadline){
+  const result=await native('wordSessionStatus',{ticket:wordTicket});
+  if(result.state==='committed')return;
+  if(result.state==='failed')throw Error('Word 未能完成保存，编辑内容仍保留在此窗口。请保持窗口打开并检查 Word。');
+  await new Promise(resolve=>setTimeout(resolve,250));
+ }
+ throw Error('尚未收到 Word 的保存确认，窗口已保留。请回到 Word 检查，稍后再次关闭。');
+}
+window.nativePrepareToClose=async()=>{
+ if(busy){message('正在处理当前操作，完成后请再次关闭窗口。');return false;}
+ if(!wordTicket)return true;
+ if(!wordSaveQueued&&selected&&mf.value===selected.editorBaseline&&!window.desktopTypographyPatch?.()&&JSON.stringify(editingRuler??[])===JSON.stringify(selected.ruler??[])&&[...$('character-editor').querySelectorAll('input')].every(input=>input.value===(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char))){return await window.nativeCancelWordSession();}
+ return await window.nativeCommitWordSession();
+};
+window.nativeCancelWordSession=()=>perform(async()=>{if(wordTicket)await native('wordSessionCancel',{ticket:wordTicket}).catch(e=>{if(!/Unknown or expired native session/.test(e.message))throw e;});wordTicket=null;syncSidebar(true);resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已取消，原公式保留。');});
+$('word-session-save').onclick=window.nativeCommitWordSession;$('word-session-cancel').onclick=window.nativeCancelWordSession;
+
+// The native workbench owns navigation, palettes and inspectors. The existing
+// editor and preference controls remain the source of truth for every action.
+var workbenchScheduled=false,workbenchZoom=0;
+editorViewport=window.createEquationViewport(mf,{getZoom:()=>workbenchZoom,onScaleChange:()=>requestWorkbenchSync()});
+const workbenchLastFields=new Map();
+const workbenchFavoriteImages=new Map();
+let workbenchFavoriteRenderRunning=false;
+function requestWorkbenchSync(){
+ if(!window.workbenchAction||workbenchScheduled)return;
+ workbenchScheduled=true;
+ // A WKWebView may suspend animation frames while its native window is in
+ // the background. Native controls still need current state in that case.
+ setTimeout(()=>{workbenchScheduled=false;try{publishWorkbenchState();}catch(error){window.webkit.messageHandlers.native.postMessage({action:'workbenchError',payload:{error:error.message}});}},16);
+}
+function workbenchFields(container,kind){
+ return [...$(container).children].map(row=>{
+  const input=row.querySelector('input'),select=row.querySelector('select');
+  if(!input)return null;
+  return {id:kind+'-'+row.dataset.id,label:row.querySelector('span')?.textContent||'',value:input.value,options:[],disabled:input.disabled||busy,unit:kind==='font'?'':select?.value||'',units:kind==='font'?[]:[...select?.options||[]].map(o=>o.value),style:kind==='font'?select?.value||'0':'0'};
+ }).filter(Boolean);
+}
+function publishWorkbenchState(){
+ const layout=['layout-mode','layout-format','layout-chapter','layout-section'].map(id=>{
+  const el=$(id);return {id,label:{'layout-mode':'公式位置','layout-format':'编号格式','layout-chapter':'章','layout-section':'节'}[id],value:el.value,options:[...el.options||[]].map(o=>({value:o.value,label:o.textContent})),disabled:el.disabled||busy,unit:'',units:[],style:'0'};
+ });
+ const state={
+  documentName:wordTicket?'Word 中的公式':source?.path?.split(/[\\/]/).pop()||'新建公式',documentPath:source?.path||'',latex:mf.value,
+  selected:selected?.index??null,
+  objects:(source?.objects||[]).map(o=>({id:o.index,label:'公式 '+(o.index+1),detail:o.error||'原生 MathType · '+o.application,latex:o.latex||'',image:o.image||null,readOnly:!!o.error})),
+  favorites:favorites.map((latex,id)=>({id,label:'收藏 '+(id+1),detail:'收藏公式',latex,image:workbenchFavoriteImages.get(latex)||source?.objects?.find(o=>o.latex===latex)?.image||null,readOnly:false})),
+  categories:Object.keys(groups),templates:Object.entries(groups).flatMap(([category,items])=>items.map(([label,latex,hint],index)=>({id:category+':'+index,category,label,latex,hint:hint||''}))),
+  activeCategory:[...$('categories').children].find(b=>b.classList.contains('selected'))?.textContent||'常用结构',
+  fonts:workbenchFields('desktop-fonts','font'),sizes:workbenchFields('desktop-sizes','sizes'),extraSizes:workbenchFields('desktop-extra-sizes','extraSizes'),spaces:workbenchFields('desktop-spaces','spaces'),layout,
+  statusTitle:$('status-title').textContent,statusDetail:$('status-detail').textContent,statusError:$('native-status').classList.contains('error'),matrix:matrixContext(),
+  message:$('message').textContent,messageError:$('message').classList.contains('error'),valid,canExport:exportAvailable(),busy,mode:selected?mode:'rebuild',readOnly:!!mf.readOnly||busy,
+  canSaveEdit:!$('save-edit').hidden,canArrange:!$('arrange-source').hidden,canFactoryReset:!$('desktop-factory-fonts').disabled,arrangeAll:$('arrange-all').checked,zoom:workbenchZoom,effectiveZoom:editorViewport.effectiveZoom,keyboardVisible:!!window.mathVirtualKeyboard?.visible,ruler:editingRuler??[]
+ };
+ const delta={};for(const [key,value]of Object.entries(state)){const encoded=JSON.stringify(value);if(encoded!==workbenchLastFields.get(key)){workbenchLastFields.set(key,encoded);delta[key]=value;}}
+ if(Object.keys(delta).length)window.webkit.messageHandlers.native.postMessage({action:'workbenchState',payload:delta});
+ document.body.classList.toggle('character-mode',!!selected&&mode==='characters');
+ document.body.classList.toggle('source-mode',!!selected);
+ refreshFavoriteThumbnails();
+}
+async function refreshFavoriteThumbnails(){
+ if(workbenchFavoriteRenderRunning)return;
+ const missing=favorites.filter(latex=>!workbenchFavoriteImages.has(latex)&&!source?.objects?.some(o=>o.latex===latex&&o.image));
+ if(!missing.length)return;
+ workbenchFavoriteRenderRunning=true;
+ try{
+  for(const latex of missing){
+   if(validationPending||validationRunning)break;
+   await new Promise(resolve=>setTimeout(resolve,24));
+   if(validationPending||validationRunning)break;
+   // One preview process at a time; unsupported favorites get a stable fallback.
+   try{const result=await native('preview',{latex});workbenchFavoriteImages.set(latex,result.png?'data:image/png;base64,'+result.png:'');}
+   catch{workbenchFavoriteImages.set(latex,'');}
+   requestWorkbenchSync();
+  }
+ }finally{workbenchFavoriteRenderRunning=false;}
+}
+function workbenchField(id){
+ if(id.startsWith('layout-'))return $(id);
+ const match=/^(font|sizes|extraSizes|spaces)-(\d+)$/.exec(id);if(!match)return null;
+ const [_,kind,index]=match;
+ return document.querySelector(kind==='font'?`.preference-font[data-id="${index}"]`:`.preference-dimension[data-kind="${kind}"][data-id="${index}"]`);
+}
+window.workbenchAction=async(action,payload={})=>{
+ if(busy&&!['language','category','zoom'].includes(action))return false;
+ if(action==='click'){
+  const el=$(payload.id);if(!el)throw Error('此命令尚不可用');if(el.disabled)return false;el.click();
+ }else if(action==='category'){
+  if(!groups[payload.name])throw Error('未知的模板分类');palette(payload.name);
+ }else if(action==='template'){
+  if(mf.readOnly)return false;
+  const split=payload.id.lastIndexOf(':'),category=payload.id.slice(0,split),index=Number(payload.id.slice(split+1)),item=groups[category]?.[index];
+  if(!item)throw Error('未知的公式模板');mf.focus();mf.insert(item[1],{selectionMode:'placeholder'});changed();
+ }else if(action==='preferencesImport'){
+  await perform(()=>window.desktopImportPreferences());
+ }else if(action==='preferencesExport'){
+  await perform(()=>window.desktopExportPreferences());
+ }else if(action==='exportGraphic'){
+  await perform(async()=>{await ensureValid();const original=source&&selected?{path:source.path,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;const result=await native('exportGraphic',{format:payload.format,latex:mf.value,typography:window.desktopTypographyPatch?.(),source:original,...rulerPatch()});if(result)message('已导出：'+result.path);});
+ }else if(action==='insertCatalog'){
+  if(mf.readOnly)return false;if(typeof payload.latex!=='string'||payload.latex.length>20000)throw Error('无效的模板');mf.insert(payload.latex,{selectionMode:'placeholder'});changed();
+ }else if(action==='matrixInsert'){
+  if(mf.readOnly)return false;const {rows,columns,environment,alignment,divider}=payload;
+  if(!Number.isInteger(rows)||!Number.isInteger(columns)||rows<1||columns<1||rows>31||columns>31||!['matrix','pmatrix','bmatrix','Bmatrix','vmatrix','Vmatrix'].includes(environment)||!['l','c','r'].includes(alignment))throw Error('矩阵尺寸须为1至31，且使用有效的括号和对齐方式');
+  const cells=Array.from({length:rows},()=>Array(columns).fill('#?').join('&')).join('\\\\');
+  let latex;if(alignment==='c'&&!divider)latex='\\begin{'+environment+'}'+cells+'\\end{'+environment+'}';else{const spec=Array(columns).fill(alignment);if(divider&&columns>1)spec[columns-1]='|'+spec[columns-1];latex='\\begin{array}{'+spec.join('')+'}'+cells+'\\end{array}';const fences={pmatrix:['(',')'],bmatrix:['[',']'],Bmatrix:['\\{','\\}'],vmatrix:['|','|'],Vmatrix:['\\|','\\|']};if(fences[environment])latex='\\left'+fences[environment][0]+latex+'\\right'+fences[environment][1];}
+  if(payload.equalColumns||payload.equalRows)latex='\\mtmatrix{'+(['l','c','r'].indexOf(alignment)+(payload.equalColumns?128:0))+'}{'+(1+(payload.equalRows?128:0))+'}{4}{'+latex+'}';
+  mf.focus();mf.insert(latex,{selectionMode:'placeholder'});changed();
+ }else if(action==='ruler'){
+  if(mf.readOnly)return false;if(!Array.isArray(payload.tabs)||payload.tabs.length>100||payload.tabs.some(t=>!Number.isInteger(t.position)||t.position<0||t.position>32767||!Number.isInteger(t.type)||t.type<0||t.type>4)||new Set(payload.tabs.map(t=>t.position)).size!==payload.tabs.length)throw Error('无效的制表位');editingRuler=payload.tabs.map(t=>({...t})).sort((a,b)=>a.position-b.position);changed();
+ }else if(action==='editorCommand'){
+  if(payload.command==='undo')editorUndo();else if(payload.command==='redo')editorUndo(true);else{const allowed=['cutToClipboard','copyToClipboard','pasteFromClipboard','selectAll','addRowBefore','addRowAfter','addColumnBefore','addColumnAfter','removeRow','removeColumn','insertTab'];if(!allowed.includes(payload.command))throw Error('未知的编辑命令');if(mf.readOnly&&payload.command!=='copyToClipboard'&&payload.command!=='selectAll')return false;mf.focus();if(payload.command==='insertTab')mf.insert('\\eltab ',{selectionMode:'after'});else{const matrix=matrixContext();if(['addRowBefore','addRowAfter','addColumnBefore','addColumnAfter','removeRow','removeColumn'].includes(payload.command)){if(!matrix)throw Error('请先把光标放在矩阵单元格内');if(payload.command.startsWith('addRow')&&matrix.rows>=31||payload.command.startsWith('addColumn')&&matrix.columns>=31)throw Error('原版矩阵每维最多31');if(payload.command==='removeRow'&&matrix.rows<=1||payload.command==='removeColumn'&&matrix.columns<=1)throw Error('矩阵至少保留一行一列');}mf.executeCommand(payload.command);}if(!['copyToClipboard','selectAll'].includes(payload.command))changed();}
+ }else if(action==='insertLetter'){
+  if(mf.readOnly)return false;
+  if(typeof payload.latex!=='string'||payload.latex.length>64)throw Error('无效的字母');
+  if(payload.focus!==false)mf.focus();mf.insert(payload.latex,{selectionMode:'after'});changed();
+ }else if(['field','unit','fontStyle'].includes(action)){
+  const row=workbenchField(payload.id);if(!row)throw Error('此原生设置尚未载入');
+  const el=payload.id.startsWith('layout-')?row:row.querySelector(action==='field'?'input':'select');
+  if(!el||el.disabled)return false;el.value=String(payload.value);el.dispatchEvent(new Event(el.tagName==='SELECT'||action==='fontStyle'?'change':'input',{bubbles:true}));
+  if(payload.id.startsWith('font-')&&action==='field')el.dispatchEvent(new Event('change',{bubbles:true}));
+ }else if(action==='arrangeAll'){
+  $('arrange-all').checked=!!payload.value;
+ }else if(action==='language'){
+  window.setWorkbenchLanguage?.(payload.value);
+ }else if(action==='zoom'){
+  const value=Number(payload.value);if(![0,50,75,100,125,150,200,250,300].includes(value))throw Error('未知缩放比例');
+  workbenchZoom=value;editorViewport.refresh();
+ }else throw Error('未知工作台命令');
+ requestWorkbenchSync();return true;
+};
+document.body.classList.add('workbench-canvas');
+$('word-preview').append($('desktop-font-preview'));
+document.querySelector('.editor-card').prepend($('source-panel'));
+$('latex-details').querySelector('summary').append($('copy-latex'));
+$('copy-latex').setAttribute('aria-label','复制 LaTeX');
+$('word-preview-zoom').addEventListener('click',event=>event.stopPropagation());
+$('word-preview-zoom').addEventListener('change',event=>document.documentElement.style.setProperty('--word-preview-scale',event.target.value));
+$('mode-characters').textContent='保留结构 · 替换字符';
+$('mode-rebuild').textContent='编辑公式结构';
+requestWorkbenchSync();
+window.mathVirtualKeyboard?.addEventListener('virtual-keyboard-toggle',requestWorkbenchSync);
+
+// Both entry points share the native menu; no web-menu animation or label rendering.
+mf.menuItems=[];mf.addEventListener('contextmenu',event=>{event.preventDefault();event.stopImmediatePropagation();window.webkit.messageHandlers.native.postMessage({action:'editorMenu',payload:{matrix:matrixContext(),x:event.clientX,y:event.clientY}});},{capture:true});
+mf.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='z'){event.preventDefault();event.stopImmediatePropagation();editorUndo(event.shiftKey);}},true);
+window.resetEditorHistory();
+
+mf.addEventListener('selection-change',requestWorkbenchSync);

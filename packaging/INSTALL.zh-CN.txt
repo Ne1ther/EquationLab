@@ -1,0 +1,32 @@
+Equation Lab 0.4.5 · macOS 开发预览
+
+安装与独立使用
+将 Equation Lab.app 拖入 Applications，再打开应用。公式编辑器、字体处理工具、Node 运行时及依赖均已内置，无需本地编译或额外安装环境。
+可以独立新建公式、打开含 MathType 对象的 DOCX、继续编辑并另存副本，或复制 LaTeX 和公式图片。独立使用不需要安装 Word。
+
+在 Word 中双击公式打开 App
+1. 保存文档并完全退出 Word。
+2. 打开 Equation Lab，点击窗口顶部“Office 插件”，选择“安装 / 更新双击编辑…”。顶部 Word 菜单也提供“安装 / 管理 Office 插件…”入口。
+3. 选择 Word 当前使用的 Startup 文件夹。应用会默认定位 Office 的标准 Startup 文件夹；使用自定义位置时应选择对应位置。
+4. 重新打开 Word。自动启动模板会加载原生桥接组件；双击已支持的 MathType 原生公式可唤起 Equation Lab。
+5. 在 App 中选择“保存并返回 Word”，再保存 Word 文档。取消编辑会保留原公式。
+启动模板由开发者编译，用户无需导入 VBA 或手动运行注册宏。Word 自身的宏策略仍然生效。
+可以通过“Word → 检查 Word 连接”查看状态，通过“移除 Word 插件”移除自有双击编辑组件。卸载前请退出 Word。
+
+Word 顶栏与侧栏
+点击 App 窗口顶部“Office 插件”，选择“安装 Word 插件…”或“修复 / 更新插件…”。此入口安装含插入、编辑、编号引用、格式和文档命令的 Word 加载项。
+先在文件夹窗口确认默认定位的 Word Documents 目录，安装器会创建或更新其中的 wef 加载项文件夹。首次安装时，macOS 会请求信任仅用于 localhost 的本机 HTTPS 证书；已受信任的有效证书直接复用。证书和私钥在本机生成，不随安装包分发。
+安装器同时安装当前用户的 Equation Lab 后台服务，随 macOS 登录自动启动；关闭 App 后 Word 按钮仍可连接本机引擎。安装后重开 Word，从“开始 → 加载项 → Equation Lab”激活顶栏。Word 某些版本重启后需要再次激活本地加载项，安装清单不能保证每个文档自动显示顶栏。
+“Office 插件”窗口提供连接检查与移除入口。移除顶栏与侧栏时，也移除后台服务；保留本机证书及原生双击组件。
+双击编辑与顶栏/侧栏可分别安装，也可以同时使用，均共用同一 App 的公式引擎。
+
+系统要求与版本范围
+Apple Silicon Mac，macOS 14 或更新版本。Word 集成需要 Microsoft Word for Mac；完整顶栏命令需要 Word 16.61 或更新版本。
+当前 Office 接入针对 Word，尚不包含 Excel 或 PowerPoint 的公式对象集成。只读或尚不支持的结构会明确提示，不能把当前版本视为原版 MathType 全功能替代。
+
+签名状态
+此包为 ad-hoc 签名的开发预览，尚未使用 Developer ID 签名或通过 Apple 公证。macOS 可能显示来源确认或阻止提示。应用不会修改 Gatekeeper、宏安全策略或全局证书验证设置。
+
+数据与权限
+只有选择安装后才会向当前用户的 Word Startup、加载项目录或 ~/Library/LaunchAgents/ 写入自有组件。安装记录与本机证书位于 ~/Library/Application Support/Equation Lab/。后台服务仅监听本机回环地址；空闲时延后加载公式排版依赖。
+应用不会自动退出或重启 Word。请优先使用副本验证文档；跨平台完整功能覆盖仍以实际验证结果为准。

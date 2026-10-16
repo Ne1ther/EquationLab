@@ -1,0 +1,424 @@
+{
+  "schema": "equationlab.icon-optical-assets.v1",
+  "product": "Equation Lab",
+  "version": 6,
+  "status": "review-candidate",
+  "selected": false,
+  "source": "../v5/svg/e2-lab-orange-paper.svg",
+  "sourceSha256": "fa77cdb45353b3b16cde583febd2598f15afabfaf24ab53db79191f5a0bee64c",
+  "preservedPaths": {
+    "letter": "592ed26bf8f01670ecdb134ba44451adec3229d566201441700b77669f92a725",
+    "power": "f5ad07ba97207756dfdff4a6b3ee77b41f9c60464cdbd2ff6d621ed6b6a846ad",
+    "labOutline": "d2ae1cf4fd1b48d4af47294f8583888870f14a7687a8b2826445817ce123eb98"
+  },
+  "masterSVG": "svg/e2-lab-cream-optical.svg",
+  "brandPNG": "png/e2-lab-cream-optical-1024.png",
+  "icns": "EquationLab.icns",
+  "iconsetDirectory": "EquationLab.iconset",
+  "slots": [
+    {
+      "points": 16,
+      "scale": 1,
+      "pixels": 16,
+      "filename": "icon_16x16.png"
+    },
+    {
+      "points": 16,
+      "scale": 2,
+      "pixels": 32,
+      "filename": "icon_16x16@2x.png"
+    },
+    {
+      "points": 32,
+      "scale": 1,
+      "pixels": 32,
+      "filename": "icon_32x32.png"
+    },
+    {
+      "points": 32,
+      "scale": 2,
+      "pixels": 64,
+      "filename": "icon_32x32@2x.png"
+    },
+    {
+      "points": 128,
+      "scale": 1,
+      "pixels": 128,
+      "filename": "icon_128x128.png"
+    },
+    {
+      "points": 128,
+      "scale": 2,
+      "pixels": 256,
+      "filename": "icon_128x128@2x.png"
+    },
+    {
+      "points": 256,
+      "scale": 1,
+      "pixels": 256,
+      "filename": "icon_256x256.png"
+    },
+    {
+      "points": 256,
+      "scale": 2,
+      "pixels": 512,
+      "filename": "icon_256x256@2x.png"
+    },
+    {
+      "points": 512,
+      "scale": 1,
+      "pixels": 512,
+      "filename": "icon_512x512.png"
+    },
+    {
+      "points": 512,
+      "scale": 2,
+      "pixels": 1024,
+      "filename": "icon_512x512@2x.png"
+    }
+  ],
+  "palette": {
+    "paper": [
+      "#fff9e8",
+      "#f8efd5",
+      "#eadcb5"
+    ],
+    "ink": "#292c30",
+    "powerCore": "#ec6b22",
+    "powerHighlight": "#ffbd79"
+  },
+  "profiles": {
+    "16": {
+      "scale": 1.24,
+      "grain": false,
+      "glow": false,
+      "lab": "solid"
+    },
+    "32": {
+      "scale": 1.22,
+      "grain": false,
+      "glow": false,
+      "lab": "solid"
+    },
+    "48": {
+      "scale": 1.21,
+      "grain": false,
+      "glow": "compact",
+      "labStripes": 4
+    },
+    "64+": {
+      "scale": 1.2,
+      "grain": "subtle",
+      "glow": "compact",
+      "labStripes": 6
+    }
+  },
+  "assets": [
+    {
+      "path": "svg/e2-lab-cream-optical.svg",
+      "sha256": "778aedfbea3a459ac4183e742b5704e362ffda4776beb1ecc6774c864f4fbf23"
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-16.svg",
+      "sha256": "8a80b402967ac3c780700a475c450891a49059c0b7f45b2c9d8982e4e4bc4ee6",
+      "profile": 16,
+      "pixels": 16
+    },
+    {
+      "path": "png/e2-lab-cream-optical-16.png",
+      "sha256": "6b3ecfb90ea3f0955a7a363c4138868d2d22c11ef2031e3b2d9f37b70e1f9164",
+      "profile": 16,
+      "pixels": 16
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-32.svg",
+      "sha256": "87193c2c59cb6cd1893488c02d3b5e210b8f134cffd883106c37c440489e0579",
+      "profile": 32,
+      "pixels": 32
+    },
+    {
+      "path": "png/e2-lab-cream-optical-32.png",
+      "sha256": "78f815a6c846e10499ddb8b7dbc2ecda7dfedd357894bdc074cf76d0d2106ef7",
+      "profile": 32,
+      "pixels": 32
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-48.svg",
+      "sha256": "e34b50564c1eb6920548098da53baaec740a46a4722a6294be0bab9c98b4879f",
+      "profile": 48,
+      "pixels": 48
+    },
+    {
+      "path": "png/e2-lab-cream-optical-48.png",
+      "sha256": "7920e46023a74b4721fe1be243050056608ed9a0c0bc43c9fe74c28577f83c6c",
+      "profile": 48,
+      "pixels": 48
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-64.svg",
+      "sha256": "82ea6f21a1848ccaf7b2e25ba81c1676450cbe5ffd5465b9d64f77a9fa7f97ca",
+      "profile": 64,
+      "pixels": 64
+    },
+    {
+      "path": "png/e2-lab-cream-optical-64.png",
+      "sha256": "0ac8b61171075173185ee0df2aae45c6f0813871b7cc82810d9d92e66f54479f",
+      "profile": 64,
+      "pixels": 64
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-80.svg",
+      "sha256": "f90af977fa6978955abbcddc6e0bc02c75d37f07e1c7faa648a3d2fe713037de",
+      "profile": 80,
+      "pixels": 80
+    },
+    {
+      "path": "png/e2-lab-cream-optical-80.png",
+      "sha256": "3e78a33b9e5b8e4b13ff7c9dc59a90020c8b0e7350005987ef8021ff228012fb",
+      "profile": 80,
+      "pixels": 80
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-128.svg",
+      "sha256": "1a26734f57dba881c078634496e6c205f157d0f6b98e47b885b80f9a1f4015e4",
+      "profile": 128,
+      "pixels": 128
+    },
+    {
+      "path": "png/e2-lab-cream-optical-128.png",
+      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
+      "profile": 128,
+      "pixels": 128
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-256.svg",
+      "sha256": "50c309df0a2f3be0f71867d8a58bf416f4707c6535e6bcc18a79d48a20fa4603",
+      "profile": 256,
+      "pixels": 256
+    },
+    {
+      "path": "png/e2-lab-cream-optical-256.png",
+      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "profile": 256,
+      "pixels": 256
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-512.svg",
+      "sha256": "79f12849b650193f2e7356735c21a25255a78e30204cac1ad3bed88bce1ee328",
+      "profile": 512,
+      "pixels": 512
+    },
+    {
+      "path": "png/e2-lab-cream-optical-512.png",
+      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "profile": 512,
+      "pixels": 512
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-1024.svg",
+      "sha256": "778aedfbea3a459ac4183e742b5704e362ffda4776beb1ecc6774c864f4fbf23",
+      "profile": 1024,
+      "pixels": 1024
+    },
+    {
+      "path": "png/e2-lab-cream-optical-1024.png",
+      "sha256": "c2f6f62e5a5c7988e346a711e8ce61499813d41e69ba3a98a2d41a9c7aef55be",
+      "profile": 1024,
+      "pixels": 1024
+    },
+    {
+      "path": "svg/optical/e2-lab-cream-optical-2048.svg",
+      "sha256": "a57d2758831c45ac4b6dc8c10404cf0b1fdcdd961df6ccb1be0d5145e841f223",
+      "profile": 2048,
+      "pixels": 2048
+    },
+    {
+      "path": "png/e2-lab-cream-optical-2048.png",
+      "sha256": "514db8ece8bd47c75920c92d56d5bf6fd3e070ccd4dae6f5dbf8cf4f9c320198",
+      "profile": 2048,
+      "pixels": 2048
+    },
+    {
+      "path": "png/e2-lab-cream-optical-16@2x.png",
+      "sha256": "318ac15ada7923c1a9a4246611602c8204924d253c5fc36045f5520f5260e030",
+      "profile": 16,
+      "pixels": 32,
+      "scale": 2
+    },
+    {
+      "path": "png/e2-lab-cream-optical-32@2x.png",
+      "sha256": "6d3358ed85942524d94cb52afd8072a19d63ecbadf13421fba91265159c00b40",
+      "profile": 32,
+      "pixels": 64,
+      "scale": 2
+    },
+    {
+      "path": "png/e2-lab-cream-optical-48@2x.png",
+      "sha256": "2434b516076cca40c04ac2e25394678f5c99c14d5cec3e118efb3d1d0bee069c",
+      "profile": 48,
+      "pixels": 96,
+      "scale": 2
+    },
+    {
+      "path": "png/e2-lab-cream-optical-64@2x.png",
+      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
+      "profile": 64,
+      "pixels": 128,
+      "scale": 2
+    },
+    {
+      "path": "png/e2-lab-cream-optical-128@2x.png",
+      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "profile": 128,
+      "pixels": 256,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.iconset/icon_16x16.png",
+      "sha256": "6b3ecfb90ea3f0955a7a363c4138868d2d22c11ef2031e3b2d9f37b70e1f9164",
+      "profile": 16,
+      "pixels": 16,
+      "scale": 1
+    },
+    {
+      "path": "EquationLab.iconset/icon_16x16@2x.png",
+      "sha256": "318ac15ada7923c1a9a4246611602c8204924d253c5fc36045f5520f5260e030",
+      "profile": 16,
+      "pixels": 32,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.iconset/icon_32x32.png",
+      "sha256": "78f815a6c846e10499ddb8b7dbc2ecda7dfedd357894bdc074cf76d0d2106ef7",
+      "profile": 32,
+      "pixels": 32,
+      "scale": 1
+    },
+    {
+      "path": "EquationLab.iconset/icon_32x32@2x.png",
+      "sha256": "6d3358ed85942524d94cb52afd8072a19d63ecbadf13421fba91265159c00b40",
+      "profile": 32,
+      "pixels": 64,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.iconset/icon_128x128.png",
+      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
+      "profile": 128,
+      "pixels": 128,
+      "scale": 1
+    },
+    {
+      "path": "EquationLab.iconset/icon_128x128@2x.png",
+      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "profile": 128,
+      "pixels": 256,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.iconset/icon_256x256.png",
+      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "profile": 256,
+      "pixels": 256,
+      "scale": 1
+    },
+    {
+      "path": "EquationLab.iconset/icon_256x256@2x.png",
+      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "profile": 256,
+      "pixels": 512,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.iconset/icon_512x512.png",
+      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "profile": 512,
+      "pixels": 512,
+      "scale": 1
+    },
+    {
+      "path": "EquationLab.iconset/icon_512x512@2x.png",
+      "sha256": "c2f6f62e5a5c7988e346a711e8ce61499813d41e69ba3a98a2d41a9c7aef55be",
+      "profile": 512,
+      "pixels": 1024,
+      "scale": 2
+    },
+    {
+      "path": "EquationLab.icns",
+      "sha256": "563b5e856f66869f7cc0f62f1a9ca042a8b91d859114e5d3972bcfbdcb6e12ae"
+    },
+    {
+      "path": "comparison/v5-16.png",
+      "sha256": "f254c832c50b6ca0ad073e3dc4153aa8ab01ce0cb53d079416dbef2420b2b841",
+      "pixels": 16,
+      "reference": "../v5/png/e2-lab-orange-paper-16.png"
+    },
+    {
+      "path": "comparison/v5-16@2x.png",
+      "sha256": "c62151b45f0b24072b1362b0511cba932b3a8082f1dbe1d8e94c8970ffcbdd89",
+      "pixels": 32,
+      "reference": "../v5/png/e2-lab-orange-paper-32.png"
+    },
+    {
+      "path": "comparison/v5-32.png",
+      "sha256": "c62151b45f0b24072b1362b0511cba932b3a8082f1dbe1d8e94c8970ffcbdd89",
+      "pixels": 32,
+      "reference": "../v5/png/e2-lab-orange-paper-32.png"
+    },
+    {
+      "path": "comparison/v5-32@2x.png",
+      "sha256": "530f7a2c722b46e83e4c6c195a36d352f54cc2c5fe781c6dff2768dc2e50a5dd",
+      "pixels": 64,
+      "reference": "../v5/png/e2-lab-orange-paper-64.png"
+    },
+    {
+      "path": "comparison/v5-48.png",
+      "sha256": "add9377ff22cfedc87bb5e44665bbb002c2e12fa41361c528cd49c7dc520a094",
+      "pixels": 48,
+      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
+    },
+    {
+      "path": "comparison/v5-48@2x.png",
+      "sha256": "725100cf94100464397f49d3f9fe913b8a9d43bf78855e45e428eb0d5ccf28d2",
+      "pixels": 96,
+      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
+    },
+    {
+      "path": "comparison/v5-64.png",
+      "sha256": "530f7a2c722b46e83e4c6c195a36d352f54cc2c5fe781c6dff2768dc2e50a5dd",
+      "pixels": 64,
+      "reference": "../v5/png/e2-lab-orange-paper-64.png"
+    },
+    {
+      "path": "comparison/v5-64@2x.png",
+      "sha256": "3b44b21a4ec3070f8f3004d8ec076c753d4416b8bfb2a2edc735814dbffbf333",
+      "pixels": 128,
+      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
+    },
+    {
+      "path": "comparison/v5-128.png",
+      "sha256": "3b44b21a4ec3070f8f3004d8ec076c753d4416b8bfb2a2edc735814dbffbf333",
+      "pixels": 128,
+      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
+    },
+    {
+      "path": "comparison/v5-128@2x.png",
+      "sha256": "9ffb52ac44d3925cab8d42f113454a81a96feebedd9406a7d69fd656e755526d",
+      "pixels": 256,
+      "reference": "../v5/png/e2-lab-orange-paper-256.png"
+    },
+    {
+      "path": "comparison/v5-v6-actual-size-light-dark.png",
+      "sha256": "8ca8a194743d3ad6149f9486c3f448f69ed23fc59af961e1ee081b0728dd6cc5",
+      "pixels": [
+        1120,
+        840
+      ]
+    },
+    {
+      "path": "preview.html",
+      "sha256": "6596896c8d6ef12a278e77ecf42e2f08d97abde16346a92da8f1bc597c667b9a"
+    }
+  ],
+  "actualInstalledIconChanged": false
+}

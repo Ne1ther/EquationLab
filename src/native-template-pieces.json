@@ -1,0 +1,172 @@
+{
+  "schema": "equationlab.open-rendering-pieces.v1",
+  "source": "STIX Two Math operators plus Equation Lab parametric marks; no vendor font outlines",
+  "unitsPerEm": 1000,
+  "licenses": {
+    "operators": "OFL-1.1",
+    "geometry": "MIT"
+  },
+  "font": {
+    "file": "assets/fonts/STIXTwoMath-Regular.otf",
+    "sha256": "3a5f3f26f40d5698b3c62dd085d48d6663696a3f80825aab8b553d5097518e8c",
+    "source": "https://raw.githubusercontent.com/stipub/stixfonts/v2.13b171/fonts/static_otf/STIXTwoMath-Regular.otf",
+    "licenseFile": "assets/fonts/OFL-STIX.txt"
+  },
+  "jointGeometry": {
+    "width": 800,
+    "halfWidth": 400,
+    "bottom": 600,
+    "top": 800,
+    "joinY": 760,
+    "stroke": 40
+  },
+  "jstat": {
+    "60941": {
+      "path": "M0 600L150 800H650L800 600H752L630 760H170L48 600Z",
+      "advance": 800,
+      "bounds": [
+        0,
+        600,
+        800,
+        800
+      ],
+      "source": "Equation Lab angular bracket construction",
+      "license": "MIT"
+    },
+    "60942": {
+      "path": "M0 600L150 800H400V760H170L48 600Z",
+      "advance": 400,
+      "bounds": [
+        0,
+        600,
+        400,
+        800
+      ],
+      "source": "Equation Lab angular bracket construction",
+      "license": "MIT"
+    },
+    "60943": {
+      "path": "M0 800H250L400 600H352L230 760H0Z",
+      "advance": 400,
+      "bounds": [
+        0,
+        600,
+        400,
+        800
+      ],
+      "source": "Equation Lab angular bracket construction",
+      "license": "MIT"
+    }
+  },
+  "integralOverlays": {
+    "60928": {
+      "path": "M20 400A180 180 0 1 1 380 400A180 180 0 1 1 20 400ZM44 400A156 156 0 1 0 356 400A156 156 0 1 0 44 400ZM380 476L318 362L400 362Z",
+      "advance": 400,
+      "bounds": [
+        0,
+        220,
+        400,
+        580
+      ],
+      "axis": 400,
+      "source": "Equation Lab ellipse and tangent-arrow construction",
+      "license": "MIT"
+    },
+    "60929": {
+      "path": "M20 400A180 180 0 1 1 380 400A180 180 0 1 1 20 400ZM44 400A156 156 0 1 0 356 400A156 156 0 1 0 44 400ZM380 324L318 438L400 438Z",
+      "advance": 400,
+      "bounds": [
+        0,
+        220,
+        400,
+        580
+      ],
+      "axis": 400,
+      "source": "Equation Lab ellipse and tangent-arrow construction",
+      "license": "MIT"
+    },
+    "60945": {
+      "path": "M20 400A180 180 0 1 1 380 400A180 180 0 1 1 20 400ZM44 400A156 156 0 1 0 356 400A156 156 0 1 0 44 400Z",
+      "advance": 400,
+      "bounds": [
+        0,
+        220,
+        400,
+        580
+      ],
+      "axis": 400,
+      "source": "Equation Lab ellipse and tangent-arrow construction",
+      "license": "MIT"
+    },
+    "60946": {
+      "path": "M20 400A330 180 0 1 1 680 400A330 180 0 1 1 20 400ZM44 400A306 156 0 1 0 656 400A306 156 0 1 0 44 400Z",
+      "advance": 700,
+      "bounds": [
+        0,
+        220,
+        700,
+        580
+      ],
+      "axis": 400,
+      "source": "Equation Lab ellipse and tangent-arrow construction",
+      "license": "MIT"
+    },
+    "60947": {
+      "path": "M20 400A480 180 0 1 1 980 400A480 180 0 1 1 20 400ZM44 400A456 156 0 1 0 956 400A456 156 0 1 0 44 400Z",
+      "advance": 1000,
+      "bounds": [
+        0,
+        220,
+        1000,
+        580
+      ],
+      "axis": 400,
+      "source": "Equation Lab ellipse and tangent-arrow construction",
+      "license": "MIT"
+    }
+  },
+  "mtExtraOperators": {
+    "8720": {
+      "unicode": 8720,
+      "sourceFont": "STIX Two Math",
+      "postscript": "STIXTwoMath-Regular",
+      "license": "OFL-1.1",
+      "path": "M65.000 -248.000L1070.000 -248.000L1070.000 -210.000C926.000 -210.000 913.000 -180.000 913.000 -57.000L913.000 589.000C913.000 732.000 936.000 744.000 1070.000 744.000L1070.000 782.000L651.000 782.000L651.000 744.000C772.000 744.000 797.000 736.000 797.000 589.000L797.000 -195.000L336.000 -195.000L336.000 591.000C336.000 726.000 352.000 744.000 483.000 744.000L483.000 782.000L65.000 782.000L65.000 744.000C199.000 744.000 219.000 730.000 219.000 595.000L219.000 -60.000C219.000 -184.000 197.000 -210.000 65.000 -210.000Z",
+      "advance": 1135,
+      "bounds": [
+        65,
+        -248,
+        1070,
+        782
+      ]
+    },
+    "8745": {
+      "unicode": 8745,
+      "sourceFont": "STIX Two Math",
+      "postscript": "STIXTwoMath-Regular",
+      "license": "OFL-1.1",
+      "path": "M586.000 -32.000L586.000 276.000C586.000 440.000 470.000 549.000 318.000 549.000C166.000 549.000 50.000 442.000 50.000 279.000L50.000 -32.000L117.000 -32.000L117.000 275.000C117.000 419.000 207.000 486.000 318.000 486.000C427.000 486.000 519.000 420.000 519.000 276.000L519.000 -32.000Z",
+      "advance": 636,
+      "bounds": [
+        50,
+        -32,
+        586,
+        549
+      ]
+    },
+    "8746": {
+      "unicode": 8746,
+      "sourceFont": "STIX Two Math",
+      "postscript": "STIXTwoMath-Regular",
+      "license": "OFL-1.1",
+      "path": "M586.000 549.000L519.000 549.000L519.000 242.000C519.000 98.000 429.000 31.000 318.000 31.000C209.000 31.000 117.000 97.000 117.000 241.000L117.000 549.000L50.000 549.000L50.000 241.000C50.000 77.000 166.000 -32.000 318.000 -32.000C470.000 -32.000 586.000 75.000 586.000 238.000Z",
+      "advance": 636,
+      "bounds": [
+        50,
+        -32,
+        586,
+        549
+      ]
+    }
+  }
+}

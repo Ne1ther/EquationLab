@@ -1,0 +1,25 @@
+{
+  "name": "equationlab",
+  "version": "0.5.5",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "demo": "node src/cli.mjs demo",
+    "start": "node src/server.mjs"
+  },
+  "dependencies": {
+    "@xmldom/xmldom": "0.9.12",
+    "cfb": "1.2.2",
+    "jszip": "3.10.1",
+    "mathjax-full": "3.2.2",
+    "mathlive": "0.111.1"
+  },
+  "overrides": {
+    "@xmldom/xmldom": "0.9.12"
+  },
+  "devDependencies": {
+    "sharp": "0.35.5"
+  },
+  "license": "MIT"
+}

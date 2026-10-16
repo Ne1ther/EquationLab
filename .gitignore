@@ -1,0 +1,32 @@
+# Local dependencies, builds and distribution assets
+node_modules/
+.build/
+dist/
+.DS_Store
+
+# Research, host validation, vendor inputs and machine state stay local.
+.codex/
+.local/
+evidence/
+output/
+research/
+
+# Local Word probes, frozen binaries and host-compiled templates
+native-word-probe/build*/
+native-word-probe/releases/
+native-word-probe/PrivateWordLoader.docm
+native-word-probe/*Loader.bas
+native-word-probe/Office*.bas
+native-word-probe/automatic-loader/*.dotm
+packaging/native-word/MathTypeBridgeProbe.bundle/
+
+# Generated previews and local diagnostic scripts/docs are not source releases.
+design/template-previews/
+
+# Never publish local credentials.
+.env
+.env.*
+*.p12
+*.pfx
+*.key
+*-key.pem

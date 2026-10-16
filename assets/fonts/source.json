@@ -1,0 +1,9 @@
+{
+  "font": "STIX Two Math",
+  "version": "2.13b171",
+  "source": "https://raw.githubusercontent.com/stipub/stixfonts/v2.13b171/fonts/static_otf/STIXTwoMath-Regular.otf",
+  "license": "SIL Open Font License 1.1",
+  "licenseFile": "OFL-STIX.txt",
+  "bytes": 838652,
+  "sha256": "3a5f3f26f40d5698b3c62dd085d48d6663696a3f80825aab8b553d5097518e8c"
+}

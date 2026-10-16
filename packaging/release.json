@@ -1,0 +1,9 @@
+{
+  "version": "0.5.5",
+  "build": "38",
+  "nodeVersion": "v24.21.0",
+  "bundleIdentifier": "app.equationlab.mac",
+  "minimumMacOS": "14.0",
+  "architecture": "arm64",
+  "iconAssetsDirectory": "design/equation-lab-icons/v6"
+}

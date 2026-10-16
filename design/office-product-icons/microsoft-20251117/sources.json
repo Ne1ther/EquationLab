@@ -1,0 +1,127 @@
+{
+  "retrievedAt": "2026-10-15T06:50:10.023Z",
+  "source": "Microsoft Office official CDN",
+  "guidance": [
+    "https://fluent2.microsoft.design/iconography/",
+    "https://learn.microsoft.com/en-us/microsoft-365/cloud-storage-partner-program/online/branding"
+  ],
+  "usage": "Unmodified product identifiers for functional app integration; Microsoft trademark assets, not relicensed as MIT",
+  "files": [
+    {
+      "product": "word",
+      "size": 16,
+      "path": "word_16x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/word_16x1.svg",
+      "bytes": 4025,
+      "sha256": "28e0bcf7243ff6affa00fb19d25217f37230886d1e789ba27e17eddb9d703d68"
+    },
+    {
+      "product": "word",
+      "size": 32,
+      "path": "word_32x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/word_32x1.svg",
+      "bytes": 4232,
+      "sha256": "fa3112c0a8704c6892d325441088a79f92d3712ed033e544191f07dea5a0bd43"
+    },
+    {
+      "product": "word",
+      "size": 48,
+      "path": "word_48x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/word_48x1.svg",
+      "bytes": 4059,
+      "sha256": "32576a28b649b5c6f7f7a06a24ff3c7b5b60a5947554fa6a39912029ec85a862"
+    },
+    {
+      "product": "powerpoint",
+      "size": 16,
+      "path": "powerpoint_16x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/powerpoint_16x1.svg",
+      "bytes": 6941,
+      "sha256": "d7399a7410c9bc1266619b1b5d23f9a1d36601a08e6c51710124b3b38a6e3e06"
+    },
+    {
+      "product": "powerpoint",
+      "size": 32,
+      "path": "powerpoint_32x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/powerpoint_32x1.svg",
+      "bytes": 6713,
+      "sha256": "f39cca565ebb91bf18e590a1edd09f79fbf8efcdb38072027732ab8284cd596b"
+    },
+    {
+      "product": "powerpoint",
+      "size": 48,
+      "path": "powerpoint_48x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/powerpoint_48x1.svg",
+      "bytes": 6674,
+      "sha256": "92c320a7a42a98275a002541ebaf472539c420cc4d054ebdf6586c10fba0c8a9"
+    },
+    {
+      "product": "excel",
+      "size": 16,
+      "path": "excel_16x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/excel_16x1.svg",
+      "bytes": 5208,
+      "sha256": "b2cc3616270b448a5f2abbebb7bf23f048136556da1930c292f6edef659ace58"
+    },
+    {
+      "product": "excel",
+      "size": 32,
+      "path": "excel_32x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/excel_32x1.svg",
+      "bytes": 5132,
+      "sha256": "95aa301045f888d1b9844068dda4046733721238957c6ddeb41a9177c028b9a0"
+    },
+    {
+      "product": "excel",
+      "size": 48,
+      "path": "excel_48x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/excel_48x1.svg",
+      "bytes": 5176,
+      "sha256": "3361926725eb7dff31993f1388c9eb6b791f8c3b5a4abcb0d5aa3b3015e0bb2e"
+    },
+    {
+      "product": "office",
+      "size": 16,
+      "path": "office_16x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/office_16x1.svg",
+      "bytes": 2484,
+      "sha256": "5b8736bd00cfde635624635a3647787ed6d4985bc5a52bcb3ff5e66d753147af"
+    },
+    {
+      "product": "office",
+      "size": 48,
+      "path": "office_48x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/office_48x1.svg",
+      "bytes": 2419,
+      "sha256": "de7f30877534dd6734da6c8899c7a3fc1662a28c76fa3cd2e68b2a3aeea0c3a2"
+    },
+    {
+      "product": "m365",
+      "size": 16,
+      "path": "m365_16x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/m365_16x1.svg",
+      "bytes": 3842,
+      "sha256": "87f67939dc3af78b06c99189ee97c460111f9985e05d98caa7610abf355d91f1"
+    },
+    {
+      "product": "m365",
+      "size": 48,
+      "path": "m365_48x1.svg",
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/m365_48x1.svg",
+      "bytes": 4829,
+      "sha256": "e602157ff7063845d2e6befafc8319121dda9fd22b65844f3bed8024c72fd57c"
+    }
+  ],
+  "unavailableSizes": [
+    {
+      "product": "office",
+      "size": 32,
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/office_32x1.svg"
+    },
+    {
+      "product": "m365",
+      "size": 32,
+      "url": "https://res.cdn.office.net/files/fabric-cdn-prod_20251117.001/assets/brand-icons/product/svg/m365_32x1.svg"
+    }
+  ]
+}
