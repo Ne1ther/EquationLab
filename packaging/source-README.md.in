@@ -1,35 +1,71 @@
-# Equation Lab
+<p align="center">
+  <img src="design/equation-lab-icons/v6/png/e2-lab-cream-optical-1024.png" width="112" height="112" alt="Equation Lab 图标">
+</p>
 
-A native macOS editor for MathType equations in Word, with visual editing, a Word typography preview and editable LaTeX side by side.
+<h1 align="center">Equation Lab</h1>
 
-**Compatibility preview · Apple Silicon · macOS 14+**
+<p align="center">Mac 上的公式编辑器。可视化编辑、LaTeX 输入，以及 Word 中的 MathType 公式编辑。</p>
 
-[Download the full installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.5/Equation-Lab-0.5.5.pkg) · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [安装说明](docs/install.md)
+<p align="center">
+  中文 · <a href="README.en.md">English</a> · <a href="docs/preview/README.md">界面图库</a> · <a href="https://github.com/Ne1ther/EquationLab/issues">反馈问题</a>
+</p>
 
-## Preview
+## [下载 Mac 完整安装包](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.5/Equation-Lab-0.5.5.pkg)
 
-![Equation Lab workbench](docs/preview/workbench.png)
+**[Equation-Lab-0.5.5.pkg · 约 80 MB](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.5/Equation-Lab-0.5.5.pkg)**
 
-An actual workbench window using a demonstration formula. See [more screenshots](docs/preview/README.md), including the rendering resources used in build38.
+支持 **Apple Silicon（M 系列芯片）和 macOS 14+**，当前为 **0.5.5 build38 兼容性预览版**。
 
-## Features
+一个安装包包含 App、公式引擎和 Word 插件，**默认安装 Word 插件**。使用者无需下载源码或配置 Node、Python、Xcode 等开发环境。安装前保存文档并退出 Word，安装后重新打开 Word，使用 **Equation Lab** 顶部功能区。
 
-- Visual formula editing and LaTeX input, with native font and typography settings.
-- Searchable templates, integrals, matrices, symbols and letters; SVG, PDF and PNG export.
-- Native Word equation editing and save-back, numbering and references.
-- Chinese and English interface. [Current feature scope](docs/features.md).
+[安装说明](docs/install.md) · [发布说明与校验文件](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.5) · [所有版本](https://github.com/Ne1ther/EquationLab/releases)
 
-## Install
+当前安装包尚未 Apple 公证，macOS 可能提示或阻止打开，具体见安装说明。Word 集成需要桌面版 Word for Mac；独立公式编辑不需要 Word。
 
-Download **Equation-Lab-0.5.5.pkg** from [v0.5.5 build38](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.5). Save your documents and quit Word before installation, then reopen Word and use the **Equation Lab** ribbon.
+## 编辑公式，同时看排版和源码
 
-The complete PKG includes the App, Node runtime, engine dependencies, font helper, STIX Two Math font and native Word integration. The Word plugin is installed by default. Ordinary users do not need a source checkout, Node, npm, Swift, Xcode or Python.
+![Equation Lab build38 工作台：公式、Word 排版预览与 LaTeX 源码](docs/preview/workbench.png)
 
-Word integration requires desktop Microsoft Word for Mac. Imported documents can require additional fonts. This preview uses ad-hoc app signing and an unsigned, unnotarized installer; first installation on a fresh Mac remains unverified. See [installation](docs/install.md) and [release notes](docs/releases.md).
+在画布里编辑公式，也可以直接修改 LaTeX。下方并排显示 Word 字体排版预览和源码，右侧设置字体、字号与样式。
 
-## Build from source
+- **公式结构**：分式、根号、上下标、括号、积分、求和、矩阵和多行。
+- **字母和符号**：分类浏览，按名称、符号或命令搜索，点选插入。
+- **排版设置**：字体、字号、上下标、矩阵间距、标尺与制表位，支持 EQP 偏好导入导出。
+- **Word 集成**：原生公式编辑与回存、编号和引用；App 内可管理插件。
+- **导出与界面**：SVG、PDF、PNG 导出，中英文界面。
 
-Development requires Apple Silicon, macOS 14+, Xcode Command Line Tools with Swift 6, Node and npm.
+[查看完整功能范围](docs/features.md)
+
+## 模板和字母，不用都靠背命令
+
+![可分类和搜索的公式结构库](docs/preview/template-library.png)
+
+结构库按分式、根式、上下标和括号等分类；字母库提供希腊字母、拉丁字母与字形变体。
+
+![可搜索的字母库](docs/preview/letter-library.png)
+
+## 矩阵与 Word 插件
+
+<table>
+  <tr>
+    <th>自己设置矩阵</th>
+    <th>在 App 里管理插件</th>
+  </tr>
+  <tr>
+    <td><img src="docs/preview/matrix-builder.png" alt="矩阵行数、列数、括号、对齐和增广矩阵设置" width="460"></td>
+    <td><img src="docs/preview/word-plugin.png" alt="Word 插件的安装、更新、连接检查和移除入口" width="460"></td>
+  </tr>
+  <tr>
+    <td>选择行列数、括号和对齐方式，也可以设置增广矩阵。</td>
+    <td>完整 PKG 默认安装插件；安装后可在这里检查连接、更新或移除。</td>
+  </tr>
+</table>
+
+以上均为实际 App 截图。[打开全部 7 张界面截图](docs/preview/README.md)，包括排版设置和开放渲染资源的源码构建预览。图库中的单个示例不代表所有公式均已通过兼容验证。
+
+## 从源码编译
+
+需要 Apple Silicon、macOS 14+、带 Swift 6 的 Xcode Command Line Tools，以及 Node 和 npm。
 
 ```sh
 npm ci
@@ -38,28 +74,29 @@ npm test
 ./scripts/build_and_run.sh --build-only
 ```
 
-The development App is created at `dist/EquationLab.app`. It uses the developer's Node installation. Distributable installers include their own runtime.
+开发 App 输出到 `dist/EquationLab.app`，使用开发者本机的 Node。供普通用户下载的完整安装包自带运行时和依赖。
 
-Both renderer resources are included. They use the shipped STIX Two Math font, project geometry and MathJax TeX spacing; the generator and licenses are included. To regenerate them, run `node scripts/build/build-rendering-resources.mjs`. Some preview contours and spacing differ from the previous vendor-derived resources.
+两份渲染资源随源码提供，使用随附的 STIX Two Math 字体、项目几何图形和 MathJax TeX 间距规则。生成器和许可证均已包含，可用 `node scripts/build/build-rendering-resources.mjs` 重建。
 
-The export's 129 public tests pass. Ten tests requiring local original-format and Word research fixtures are omitted. Full Word installer builds additionally require a Word-compiled loader and matching host-validated artifacts; bridge and VBA source are included. See [development](docs/development.md) and [packaging](packaging/README.md).
+公开源码的 129 项测试已通过；10 个依赖本地原版资料和 Word 研究样本的测试未纳入公开源码。完整 Word 安装包的构建还需要经 Word 编译及宿主验证的加载器产物，桥接与 VBA 源码已提供。[开发说明](docs/development.md) · [打包说明](packaging/README.md)
 
-## Repository layout
+## 源码目录
 
-| Path | Contents |
+| 路径 | 内容 |
 | --- | --- |
-| `macos/` | SwiftUI/AppKit interface |
-| `desktop/` | Embedded formula editor |
-| `src/` | Formula, document and rendering engine |
-| `native-word-probe/` | Word bridge and loader source |
-| `scripts/`, `packaging/` | Builds, resource generation and installers |
-| `tests/` | Public tests |
-| `docs/preview/` | Selected actual screenshots |
+| `macos/` | SwiftUI / AppKit 原生界面 |
+| `desktop/` | 内嵌公式编辑器 |
+| `src/` | 公式、文档与渲染引擎 |
+| `native-word-probe/` | Word 桥接与加载器源码 |
+| `scripts/`、`packaging/` | 构建、资源生成与安装包 |
+| `tests/` | 公开测试 |
+| `design/equation-lab-icons/` | 应用图标和各尺寸资源 |
+| `docs/preview/` | 实际界面截图 |
 
-Installers are distributed through Releases. REA archives, original vendor materials, private Word samples, machine configuration, automatic checkpoints, installed dependencies and build caches stay outside the source repository.
+源码和精选展示放在仓库，**完整安装包放在同一仓库的 [Releases](https://github.com/Ne1ther/EquationLab/releases)**。REA 档案、原版材料、私人 Word 样本、机器配置、自动检查点、依赖目录和构建缓存保留在本地。
 
-## License and compatibility
+## 兼容范围与许可证
 
-Original project code and artwork use [MIT](LICENSE). Third-party software, fonts and product marks retain their own terms; see [third-party materials and provenance](THIRD_PARTY_NOTICES.md), including the retained blank-equation protocol fixture. Equation Lab is an independent project.
+当前仍是兼容性预览。完整 MathType 功能等价、全部公式的 Windows / Mac 往返和所有 Word 版本尚未验证；Excel、PowerPoint 集成暂未提供。旧文档引用的特殊字体仍需本机可用。全新 Mac 首次安装尚待实机验收。
 
-Full MathType feature equivalence, every formula's Windows/Mac round trip and all Word versions have not been established. Excel and PowerPoint integration are not available.
+原创代码和美术资源使用 [MIT](LICENSE)。第三方软件、字体和产品标识保留各自条款；[第三方材料与来源记录](THIRD_PARTY_NOTICES.md)列出了具体情况及保留的空公式协议样本。Equation Lab 是独立项目。

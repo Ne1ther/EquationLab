@@ -56,6 +56,7 @@ async function collect(rel) {
 for (const rel of roots) await collect(rel);
 const readme = await fs.readFile(path.join(root,'packaging/source-README.md.in'),'utf8');
 files.set('README.md', {bytes:Buffer.from(readme), mode:0o644});
+files.set('README.en.md', {bytes:await fs.readFile(path.join(root,'packaging/source-README.en.md.in')), mode:0o644});
 for (const [rel, file] of files) {
   if (file.bytes.length > 15_000_000) throw Error('Unexpected large source file: ' + rel);
   if (rel.includes('..') || /(?:^|\/)(?:\.git|\.local|\.codex|node_modules|research|evidence|output|dist)(?:\/|$)/.test(rel)) throw Error('Local-only path in source export: ' + rel);
