@@ -76,6 +76,10 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published var installationRunning = false
     @Published var officeServiceStatus = "尚未连接 Word 服务"
     @Published var nativeWordStatus = "尚未安装 Word 插件"
+    @Published var wordApplicationPath = ""
+    @Published var wordApplicationVersion = ""
+    @Published var wordOfficeAccessRequired = false
+    var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
     var wordTicket: String?
     private var editorReady = false

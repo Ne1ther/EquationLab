@@ -6,6 +6,7 @@ import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
 import {createInstaller, FIXED_LIBRARIES, treeInventory, errorResponse, readArtifacts} from './installer.mjs';
+import {installAutomatically} from './automatic-install.mjs';
 const hash = value => createHash('sha256').update(value).digest('hex');
 
 async function fixture() {
@@ -195,4 +196,64 @@ test('modified legacy bundle is not adopted by name or original code identity', 
   await fs.appendFile(path.join(destination, 'Contents/MacOS/MathTypeBridgeProbe'), 'external');
   await makeDynamic(f.source, {legacyOwnedFiles: [{owner: 'Equation Lab', role: 'native-bundle', sha256: oldTree.sha256}]});
   const plan = await f.installer.plan(f.request('user')); assert.equal(plan.conflicts[0].code, 'UNOWNED_CONFLICT');
+}));
+test('a fully removed adjacent installation can move to the new Startup and rollback without touching third-party files', () => scoped(async f => {
+  await makeDynamic(f.source);await f.install('user');
+  await fs.writeFile(path.join(f.startup,'Zotero.dotm'),'keep old add-in');
+  const next=path.join(f.home,'New Word Startup');await fs.mkdir(next);
+  await fs.writeFile(path.join(next,'ThirdParty.dotm'),'keep new add-in');
+  const request={...f.request('user'),startupDirectory:next};
+  await assert.rejects(f.installer.plan(request),{code:'INSTALLATION_PATH_CHANGED'});
+  await f.installer.uninstall(f.request('user'));
+  const removed=await fs.readFile(path.join(f.home,'Library/Application Support/Equation Lab/word-native/current.json'));
+  const plan=await f.installer.plan(request);assert.deepEqual(plan.conflicts,[]);
+  await f.installer.install({...request,approvedPlanDigest:plan.planDigest});
+  assert.equal((await f.installer.verify(request)).phase,'awaiting-word-restart');
+  await f.installer.rollback(request);
+  assert.deepEqual(await fs.readFile(path.join(f.home,'Library/Application Support/Equation Lab/word-native/current.json')),removed);
+  await assert.rejects(fs.access(path.join(next,'EquationLabStartup.dotm')));
+  assert.equal(await fs.readFile(path.join(f.startup,'Zotero.dotm'),'utf8'),'keep old add-in');
+  assert.equal(await fs.readFile(path.join(next,'ThirdParty.dotm'),'utf8'),'keep new add-in');
+}));
+async function customStartup(f) {
+  const startup=path.join(f.home,'Actual Word Startup'),base=path.join(f.home,'Library/Group Containers/UBF8T346G9.Office');
+  await fs.mkdir(startup,{recursive:true});await fs.mkdir(base,{recursive:true});
+  execFileSync('/usr/bin/sqlite3',[path.join(base,'MicrosoftRegistrationDB.reg')],{input:`CREATE TABLE HKEY_CURRENT_USER(node_id INTEGER,parent_id INTEGER,name TEXT); CREATE TABLE HKEY_CURRENT_USER_values(node_id INTEGER,name TEXT,type INTEGER,value BLOB); INSERT INTO HKEY_CURRENT_USER VALUES(1,0,'Software'),(2,1,'Microsoft'),(3,2,'Office'),(4,3,'16.0'),(5,4,'Word'),(6,5,'Options'); INSERT INTO HKEY_CURRENT_USER_values VALUES(6,'STARTUP-PATH',2,'${startup.replaceAll("'","''")}');`});
+  return startup;
+}
+const automaticRequest=f=>({artifacts:f.source,user:{home:f.home,username:'fixture',uid:process.getuid(),gid:process.getgid()},installer:f.installer,wordRunning:()=>false,service:async()=>{}});
+test('automatic relocation preflight is read-only and refuses an occupied destination before removing the old plugin', {skip:process.platform!=='darwin'},()=>scoped(async f=>{
+  await makeDynamic(f.source);await f.install('user');const startup=await customStartup(f);
+  const record=path.join(f.home,'Library/Application Support/Equation Lab/word-native/current.json'),before=await fs.readFile(record);
+  const result=await installAutomatically({...automaticRequest(f),checkOnly:true});assert.equal(result.migrateFrom,f.startup);assert.equal(result.startup,startup);
+  assert.deepEqual(await fs.readFile(record),before);assert.deepEqual(await fs.readdir(startup),[]);
+  await fs.writeFile(path.join(startup,'EquationLabStartup.dotm'),'unowned template');
+  await assert.rejects(installAutomatically(automaticRequest(f)),/同名组件/);
+  assert.deepEqual(await fs.readFile(record),before);assert.equal(await fs.readFile(path.join(startup,'EquationLabStartup.dotm'),'utf8'),'unowned template');
+  await fs.access(path.join(f.startup,'EquationLabStartup.dotm'));
+}));
+test('automatic update relocates owned components to the real Word Startup and preserves add-ins in both directories', {skip:process.platform!=='darwin'},()=>scoped(async f=>{
+  await makeDynamic(f.source);await f.install('user');const startup=await customStartup(f);
+  await fs.writeFile(path.join(f.startup,'Zotero.dotm'),'old add-in');await fs.writeFile(path.join(startup,'ThirdParty.dotm'),'new add-in');
+  const result=await installAutomatically(automaticRequest(f));assert.equal(result.migratedFrom,f.startup);
+  assert.equal(result.startup,startup);assert.equal(result.installedFiles.length,3);
+  await assert.rejects(fs.access(path.join(f.startup,'EquationLabStartup.dotm')));
+  await fs.access(path.join(startup,'EquationLabStartup.dotm'));
+  assert.equal(await fs.readFile(path.join(f.startup,'Zotero.dotm'),'utf8'),'old add-in');assert.equal(await fs.readFile(path.join(startup,'ThirdParty.dotm'),'utf8'),'new add-in');
+}));
+test('a service failure after relocation restores the exact old installation and removes new owned components', {skip:process.platform!=='darwin'},()=>scoped(async f=>{
+  await makeDynamic(f.source);await f.install('user');const startup=await customStartup(f);
+  const record=path.join(f.home,'Library/Application Support/Equation Lab/word-native/current.json'),before=await fs.readFile(record);
+  const template=await fs.readFile(path.join(f.startup,'EquationLabStartup.dotm'));
+  await assert.rejects(installAutomatically({...automaticRequest(f),service:async()=>{throw Error('service failed after relocation');}}),/service failed after relocation/);
+  assert.deepEqual(await fs.readFile(record),before);assert.deepEqual(await fs.readFile(path.join(f.startup,'EquationLabStartup.dotm')),template);
+  await assert.rejects(fs.access(path.join(startup,'EquationLabStartup.dotm')));
+}));
+test('a file-placement failure during relocation restores the original installation', {skip:process.platform!=='darwin'},()=>scoped(async f=>{
+  await makeDynamic(f.source);await f.install('user');const startup=await customStartup(f);
+  const record=path.join(f.home,'Library/Application Support/Equation Lab/word-native/current.json'),before=await fs.readFile(record);
+  const api=createInstaller({...f.common,fault:async(phase,journal)=>{if(phase==='target-committed'&&journal.startupDirectory===startup)throw Error('destination write failed');}});
+  await assert.rejects(installAutomatically({...automaticRequest(f),installer:api}),/destination write failed/);
+  assert.deepEqual(await fs.readFile(record),before);await fs.access(path.join(f.startup,'EquationLabStartup.dotm'));
+  await assert.rejects(fs.access(path.join(startup,'EquationLabStartup.dotm')));
 }));

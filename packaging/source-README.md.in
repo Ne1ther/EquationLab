@@ -12,13 +12,13 @@
 
 ## 下载
 
-**[下载 Equation-Lab-0.5.5.pkg（约 80 MB）](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.5/Equation-Lab-0.5.5.pkg)**
+**[下载 Equation-Lab-0.5.6.pkg（约 80 MB）](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.6/Equation-Lab-0.5.6.pkg)**
 
 目前支持 **M 系列芯片的 Mac，macOS 14 及以上**。安装包里带了 App 和 Word 插件，插件默认安装，不用另外装 Node、Python 或其他开发工具。要在 Word 里用，需要电脑上已有桌面版 Word for Mac。
 
-安装前保存文档，退出 Word。装好后重新打开 Word，就能从顶部的 **Equation Lab** 功能区使用。
+安装前保存文档，退出 Word。装好后重新打开 Word，新建或打开一篇文档，就能从顶部的 **Equation Lab** 功能区使用。[没有显示插件？](docs/install.md#word-里没有显示-equation-lab)
 
-这个包还没有做 Apple 开发者签名和公证，macOS 可能会拦截。[安装说明](docs/install.md)里写了具体情况，[Release 页面](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.5)里有版本说明和校验文件。
+这个包还没有做 Apple 开发者签名和公证，macOS 可能会拦截。[安装说明](docs/install.md)里写了具体情况，[Release 页面](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.6)里有版本说明和校验文件。
 
 ## 现在能做什么
 

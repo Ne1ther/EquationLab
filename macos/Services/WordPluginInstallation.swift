@@ -10,6 +10,11 @@ extension DesktopBridge {
     }
 
     func installWordPlugin() {
+        restoreWordOfficeAccess()
+        guard refreshWordApplication() else {
+            installationMessage = "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。"
+            return
+        }
         let record = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/Equation Lab/word-native/current.json")
         if let bytes = try? Data(contentsOf: record),
@@ -49,11 +54,17 @@ extension DesktopBridge {
                 message = succeeded ? "Word 插件已更新。重新打开 Word 即可使用固定顶栏。"
                     : String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Word 插件自动更新未完成。"
             } catch { message = error.localizedDescription }
-            let completedMessage = message, completedSuccess = succeeded
+            let accessDenied = !succeeded && (message.contains("operation not permitted") || message.contains("permission denied"))
+            let completedMessage = accessDenied
+                ? "macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。" : message
+            let completedSuccess = succeeded
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.installationRunning = false
-                self.nativeWordStatus = completedSuccess ? completedMessage : "Word 插件自动更新未完成。"
+                if accessDenied {
+                    self.wordOfficeAccessRequired = true
+                }
+                self.nativeWordStatus = completedSuccess || accessDenied ? completedMessage : "Word 插件自动更新未完成。"
                 self.installationMessage = completedMessage
             }
         }
@@ -117,6 +128,10 @@ extension DesktopBridge {
 
     func installWordPluginManually() {
         guard !installationRunning else { return }
+        guard refreshWordApplication() else {
+            installationMessage = "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。"
+            return
+        }
         guard let artifacts = nativeArtifactURL,
               FileManager.default.fileExists(atPath: artifacts.appendingPathComponent("artifact-manifest.json").path) else {
             installationMessage = "此构建未包含已验收的 Word 自动启动组件。请使用完整安装包。"
@@ -157,6 +172,12 @@ extension DesktopBridge {
 
     func verifyWordPlugin(showResult: Bool = false) {
         guard !installationRunning else { return }
+        restoreWordOfficeAccess()
+        guard refreshWordApplication() else {
+            nativeWordStatus = "没有找到桌面版 Microsoft Word。请安装 Word，或选择它的实际位置。"
+            if showResult { installationMessage = nativeWordStatus }
+            return
+        }
         performNativeInstallation([
             "schema": "equationlab.word-plugin-request.v1", "action": "verify", "installationScope": "user"
         ], showResult: showResult)
@@ -205,6 +226,8 @@ extension DesktopBridge {
                 self.installationRunning = false
                 let success = completed["ok"] as? Bool == true
                 let phase = completed["phase"] as? String ?? "failed"
+                let errorCode = (completed["error"] as? [String: Any])?["code"] as? String
+                self.wordOfficeAccessRequired = ["WORD_SETTINGS_ACCESS_DENIED", "WORD_STARTUP_ACCESS_DENIED"].contains(errorCode ?? "")
                 let expectedVersion = self.nativeArtifactURL?
                     .appendingPathComponent("artifact-manifest.json")
                 let expected = expectedVersion.flatMap { try? Data(contentsOf: $0) }
@@ -212,13 +235,16 @@ extension DesktopBridge {
                 let installedVersion = (completed["installedFiles"] as? [[String: Any]])?.first?["version"] as? String
                 let message: String
                 if !success {
-                    message = (completed["error"] as? [String: Any])?["message"] as? String
+                    message = self.wordOfficeAccessRequired
+                        ? "macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。"
+                        : (completed["error"] as? [String: Any])?["message"] as? String
                         ?? completed["error"] as? String ?? "Word 插件操作未完成。"
                 } else if let expected, let installedVersion, expected != installedVersion {
                     message = "当前 Word 插件需要更新。点击“安装 / 更新 Word 插件”即可自动完成。"
                 } else {
                     switch phase {
                     case "native-registered": message = "Word 插件已连接，可双击公式继续编辑。"
+                    case "startup-path-mismatch": message = "Word 的启动目录已更改。请完全退出 Word，再点击“安装 / 更新 Word 插件”，会自动修复安装位置。"
                     case "awaiting-word-restart": message = "插件已安装。重新打开 Word 后会自动连接。"
                     case "removed": message = "Word 插件已移除。"
                     case "rolled-back": message = "已恢复安装前的 Word 组件。"
@@ -226,7 +252,7 @@ extension DesktopBridge {
                     default: message = "Word 插件操作已完成。"
                     }
                 }
-                self.nativeWordStatus = success ? message : "未能确认 Word 插件连接。"
+                self.nativeWordStatus = success || self.wordOfficeAccessRequired ? message : "未能确认 Word 插件连接。"
                 if showResult { self.installationMessage = message }
             }
         }

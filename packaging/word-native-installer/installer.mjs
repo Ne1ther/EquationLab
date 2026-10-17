@@ -15,6 +15,56 @@ const CLSIDS = ['0002CE03-0000-0000-C000-000000000046', '0002CE03-0000-0000-C000
 const digest = b => createHash('sha256').update(b).digest('hex');
 const exists = p => fs.lstat(p).then(() => true, e => { if (e.code === 'ENOENT') return false; throw e; });
 function fail(code, message, details) { const error = Error(message); error.code = code; error.details = details; throw error; }
+export async function detectWordStartup(home) {
+  const base = path.join(home, 'Library/Group Containers/UBF8T346G9.Office');
+  const database = path.join(base, 'MicrosoftRegistrationDB.reg');
+  const configurationAvailable = await exists(database);
+  let configured;
+  if (configurationAvailable) {
+    // Office itself uses a symlink to a versioned database inside its group
+    // container. Following that read-only link is normal; writes stay forbidden.
+    const resolvedDatabase = await fs.realpath(database), resolvedBase = await fs.realpath(base);
+    if (!resolvedDatabase.startsWith(resolvedBase + path.sep) || !(await fs.stat(resolvedDatabase)).isFile())
+      fail('WORD_STARTUP_LOOKUP_FAILED', 'Word 设置数据库不在 Office 用户目录内，未读取。');
+    // Word for Mac stores Preferences > File Locations > Startup here. Read
+    // only this value, through SQLite's read-only mode; never edit Office data.
+    const query = `SELECT CAST(v.value AS TEXT) AS directory FROM HKEY_CURRENT_USER_values v
+      JOIN HKEY_CURRENT_USER o ON o.node_id=v.node_id
+      JOIN HKEY_CURRENT_USER w ON w.node_id=o.parent_id
+      JOIN HKEY_CURRENT_USER n ON n.node_id=w.parent_id
+      JOIN HKEY_CURRENT_USER f ON f.node_id=n.parent_id
+      JOIN HKEY_CURRENT_USER m ON m.node_id=f.parent_id
+      JOIN HKEY_CURRENT_USER s ON s.node_id=m.parent_id
+      WHERE s.name='Software' COLLATE NOCASE AND m.name='Microsoft' COLLATE NOCASE
+      AND f.name='Office' COLLATE NOCASE AND n.name='16.0'
+      AND w.name='Word' COLLATE NOCASE AND o.name='Options' COLLATE NOCASE
+      AND v.name='STARTUP-PATH' COLLATE NOCASE;`;
+    let rows;
+    try {
+      // A terminal can have access that the GUI app does not. Check through
+      // the same process first so the app can offer a scoped file picker.
+      const handle = await fs.open(resolvedDatabase, 'r');
+      await handle.close();
+      rows = JSON.parse(execFileSync('/usr/bin/sqlite3', ['-readonly', '-json', resolvedDatabase, query],
+        {encoding: 'utf8', timeout: 5000, maxBuffer: 32768, stdio: ['ignore', 'pipe', 'pipe']}) || '[]');
+    } catch (error) {
+      if (['EACCES', 'EPERM'].includes(error.code) || /authorization denied|permission denied/i.test(String(error.stderr ?? '')))
+        fail('WORD_SETTINGS_ACCESS_DENIED', 'macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。');
+      fail('WORD_STARTUP_LOOKUP_FAILED', '无法读取 Word 的启动目录设置。请在 Word“偏好设置 → 文件位置 → 启动”确认位置后重试。');
+    }
+    if (rows.length > 1) fail('WORD_STARTUP_LOOKUP_FAILED', 'Word 的启动目录设置存在冲突，请先在 Word 偏好设置中确认。');
+    configured = rows[0]?.directory || null;
+    if (configured && (typeof configured !== 'string' || !path.isAbsolute(configured) || /[\x00-\x1f]/.test(configured)))
+      fail('WORD_STARTUP_LOOKUP_FAILED', 'Word 的启动目录不是有效的绝对路径，请先在 Word 偏好设置中确认。');
+  }
+  if (configured) return {directory: path.resolve(configured), configurationAvailable, custom: true};
+  const layouts = ['User Content.localized/Startup.localized/Word', 'User Content.localized/Startup/Word', 'User Content/Startup.localized/Word', 'User Content/Startup/Word'];
+  for (const suffix of layouts) {
+    const directory = path.join(base, suffix);
+    if (await exists(directory)) return {directory, configurationAvailable, custom: false};
+  }
+  return {directory: path.join(base, layouts[0]), configurationAvailable, custom: false};
+}
 async function noSymlinkAncestors(file) {
   let current = path.resolve(file);
   while (current !== path.dirname(current)) {
@@ -125,8 +175,9 @@ export function createInstaller({sandboxRoot, homeDirectory = homedir(), wordPro
     if (startup) await noSymlinkAncestors(startup);
     const state = await exists(statePath) ? await readJson(statePath) : null;
     if (state && (state.schema !== 'equationlab.word-native-installation.v1' || state.scope !== scope)) fail('INVALID_INSTALLATION_STATE', '已有安装记录不属于此安装器，未修改。');
-    if (state?.fixedBundlePath && state.fixedBundlePath !== systemBundle) fail('INSTALLATION_PATH_CHANGED', '升级不能静默切换已验收的原生库路径。请先完成旧组件卸载。');
-    if (state?.startupDirectory && state.startupDirectory !== startup) fail('STARTUP_PATH_CHANGED', '现有启动模板在另一目录，请先卸载旧位置，再选择新目录。');
+    const removedUserInstallation = scope === 'user' && state?.installed === false && Array.isArray(state.installedFiles) && state.installedFiles.length === 0;
+    if (!removedUserInstallation && state?.fixedBundlePath && state.fixedBundlePath !== systemBundle) fail('INSTALLATION_PATH_CHANGED', '升级不能静默切换已验收的原生库路径。请先完成旧组件卸载。');
+    if (!removedUserInstallation && state?.startupDirectory && state.startupDirectory !== startup) fail('STARTUP_PATH_CHANGED', '现有启动模板在另一目录，请先卸载旧位置，再选择新目录。');
     const allowed = scope === 'system-fixed' ? [mapped(systemBundle)] : [path.join(startup, 'EquationLabStartup.dotm'), path.join(startup, 'EquationLabInstallContext.json'), ...(binding === 'startup-adjacent' ? [systemBundle] : [])];
     if (state?.installedFiles?.some(file => !allowed.includes(file.path))) fail('INVALID_INSTALLATION_STATE', '安装记录包含不属于本产品的目标，未修改。');
     if (state?.binding && state.binding !== binding) fail('INSTALLATION_PATH_CHANGED', '升级不能静默改变原生库加载方式，请先卸载旧组件。');
@@ -214,7 +265,8 @@ export function createInstaller({sandboxRoot, homeDirectory = homedir(), wordPro
         journal.phase = 'committing'; await atomicJson(path.join(transactionDirectory, 'journal.json'), journal);
         await fault('target-committed', journal);
       }
-      const baselineFiles = before?.baselineFiles ?? journal.targets.filter(t => t.beforeSha256 && !before?.installedFiles?.some(f => f.path === t.path)).map(t => ({path: t.path, sha256: t.beforeSha256, backup: t.backup, role: t.role, owner: 'Equation Lab legacy'}));
+      const sameLocation = before?.startupDirectory === c.startup && before?.fixedBundlePath === c.systemBundle;
+      const baselineFiles = (sameLocation ? before?.baselineFiles : null) ?? journal.targets.filter(t => t.beforeSha256 && !before?.installedFiles?.some(f => f.path === t.path)).map(t => ({path: t.path, sha256: t.beforeSha256, backup: t.backup, role: t.role, owner: 'Equation Lab legacy'}));
       const next = {schema: 'equationlab.word-native-installation.v1', scope: c.scope, binding: c.binding, installed: operation === 'install', installId: id, installedAt, nativeVersion: c.artifacts?.manifest.nativeVersion ?? before.nativeVersion, nativeBinarySha256: c.artifacts?.manifest.bundle.binarySha256 ?? before.nativeBinarySha256, artifactManifestSha256: c.artifacts?.manifestSha256 ?? before.artifactManifestSha256, templateBuildId: c.artifacts?.manifest.template.buildId ?? before.templateBuildId, fixedBundlePath: c.systemBundle, startupDirectory: c.startup, installedFiles: operation === 'install' ? targets.map(({source, ...x}) => ({...x, owner: 'Equation Lab', version: c.artifacts.manifest.nativeVersion})) : [], baselineFiles, lastTransaction: id};
       await atomicJson(c.statePath, next); await fault('state-committed', journal);
       journal.phase = 'committed'; await atomicJson(path.join(transactionDirectory, 'journal.json'), journal); committed = true;
@@ -254,6 +306,12 @@ export function createInstaller({sandboxRoot, homeDirectory = homedir(), wordPro
     if (!state?.installed) return {ok: true, phase: 'not-installed', restartWordRequired: false, nativeRegistrationVerified: false};
     for (const file of state.installedFiles) if (await objectHash(file.path) !== file.sha256) fail('INSTALLED_FILE_CHANGED', '已安装文件与记录不一致，尚不能确认 Word 接入。', {path: file.path});
     if (c.scope === 'system-fixed') return {ok: true, phase: 'system-artifacts-installed', installedFiles: state.installedFiles, nativeRegistrationVerified: false, restartWordRequired: true};
+    if (!sandboxRoot) {
+      const actual = await detectWordStartup(homeDirectory);
+      if (actual.configurationAvailable && actual.directory !== c.startup)
+        return {ok: true, phase: 'startup-path-mismatch', installedFiles: state.installedFiles, installedStartupDirectory: c.startup,
+          wordStartupDirectory: actual.directory, nativeRegistrationVerified: false, restartWordRequired: false};
+    }
     const receiptPath = path.join(c.startup, '.EquationLab/native-startup-receipt.json');
     if (!await exists(receiptPath)) return {ok: true, phase: 'awaiting-word-restart', installedFiles: state.installedFiles, nativeRegistrationVerified: false, restartWordRequired: true};
     const receipt = await readJson(receiptPath), running = await wordProcesses();

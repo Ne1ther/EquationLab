@@ -227,6 +227,19 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         "编辑公式":"Edit equation", "缩放":"Zoom", "数学键盘":"Math keyboard", "Word 排版预览":"Word preview", "LaTeX 源码":"LaTeX source", "正在载入公式引擎…":"Loading equation engine…", "正在检查原生数据…":"Checking native data…", "原生 MathType 数据检查通过":"Native MathType data verified", "公式为空":"Equation is empty", "此结构暂不能写入原生 MathType":"This structure cannot be saved as native MathType yet", "正在处理…":"Working…",
         "文件":"File", "格式":"Format", "预置":"Presets", "大小":"Size", "保留原结构，替换字符":"Preserve structure, replace characters", "重新编辑公式结构":"Edit equation structure", "定义标准与额外字号…":"Define type sizes…", "安装 / 管理 Office 插件…":"Manage Office add-in…", "位置与编号…":"Placement and numbering…", "安装 / 更新 Word 插件…":"Install or update Word add-in…", "检查 Word 连接":"Check Word connection", "移除 Word 插件":"Remove Word add-in", "取消当前 Word 编辑":"Cancel Word edit", "Equation Lab 兼容性说明":"Equation Lab compatibility", "保留结构 · 替换字符":"Preserve structure · Replace characters", "编辑公式结构":"Edit equation structure", "命令":"Commands", "符号与模板":"Symbols and templates", "字体、样式与字号":"Fonts, styles and sizes", "定义 30 项原生间距":"Define native spacing", "安装 / 管理 Office 插件":"Manage Office add-in", "安装 / 更新 Word 插件":"Install or update Word add-in", "兼容性说明":"Compatibility notes", "另存 Word 副本 / 保存并返回 Word":"Save a Word copy / Save to Word",
         "全部字母":"All letters", "全部字母…":"All letters…", "拉丁字母":"Latin", "字形变体":"Variants", "字母分类":"Letter family", "大小写":"Letter case", "全部":"All", "小写":"Lowercase", "大写":"Uppercase", "变体":"Variant", "关闭":"Close", "个字母":"letters", "搜索字母名称、符号或 Unicode":"Search name, symbol or Unicode", "没有匹配的字母":"No matching letters", "点选字母插入到当前公式，面板可连续使用。":"Click a letter to insert it. The panel stays open.", "常用希腊字母，上排小写，下排大写":"Common Greek letters: lowercase above, uppercase below",
-        "文本":"Text", "函数":"Function", "变量":"Variable", "小写希腊":"Lowercase Greek", "大写希腊":"Uppercase Greek", "向量矩阵":"Vector / matrix", "数字":"Number", "用户1":"User 1", "用户2":"User 2", "东亚文本":"East Asian text", "完整":"Full", "上下标":"Subscript / superscript", "次级上下标":"Sub-subscript", "次级符号":"Sub-symbol"
+        "文本":"Text", "函数":"Function", "变量":"Variable", "小写希腊":"Lowercase Greek", "大写希腊":"Uppercase Greek", "向量矩阵":"Vector / matrix", "数字":"Number", "用户1":"User 1", "用户2":"User 2", "东亚文本":"East Asian text", "完整":"Full", "上下标":"Subscript / superscript", "次级上下标":"Sub-subscript", "次级符号":"Sub-symbol",
+        "选择 Word 应用…":"Choose Word…",
+        "选择 Microsoft Word":"Choose Microsoft Word",
+        "请选择桌面版 Microsoft Word 应用。":"Choose the desktop Microsoft Word application.",
+        "选择 Word":"Choose Word",
+        "所选应用不是可用的桌面版 Microsoft Word。":"The selected application is not a usable desktop copy of Microsoft Word.",
+        "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。":"Desktop Microsoft Word was not found. Install it or choose the Word application in the plugin window.",
+        "没有找到桌面版 Microsoft Word。请安装 Word，或选择它的实际位置。":"Desktop Microsoft Word was not found. Install Word or choose its location.",
+        "Word 的启动目录已更改。请完全退出 Word，再点击“安装 / 更新 Word 插件”，会自动修复安装位置。":"Word uses a different Startup folder. Quit Word, then click Install / Update Word Plugin to repair its location.",
+        "允许访问 Word 文件夹…":"Allow access to the Word folder…",
+        "允许访问 Word 文件夹":"Allow access to the Word folder",
+        "允许访问此文件夹":"Allow access to this folder",
+        "请选择已定位的 UBF8T346G9.Office 文件夹，用于读取启动位置和管理 Equation Lab 插件。不会修改 Word 设置或其他插件。":"Select the UBF8T346G9.Office folder shown here to read the Startup location and manage the Equation Lab add-in. Word settings and other add-ins are not changed.",
+        "macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。":"macOS has not allowed access to the Word folder. Click Allow access to the Word folder, confirm the Office folder in the system file dialog, and try again."
     ]
 }

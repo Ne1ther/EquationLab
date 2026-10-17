@@ -16,6 +16,14 @@ struct OfficePluginSheet: View {
             GroupBox {
                 VStack(alignment: .leading, spacing: 12) {
                     OfficeProductLabel(bridge: bridge, wordOnly: true).font(.headline)
+                    if bridge.wordApplicationPath.isEmpty {
+                        Text(bridge.t("没有找到桌面版 Microsoft Word。请安装 Word，或选择它的实际位置。"))
+                            .foregroundStyle(.secondary)
+                    } else {
+                        Text("Microsoft Word \(bridge.wordApplicationVersion)")
+                        Text(bridge.wordApplicationPath).font(.caption).foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
                     Text(bridge.t("固定顶栏、公式插入与双击编辑、编号和引用。系统安装器会自动放置所有组件，无需选择文件夹。"))
                     Text(bridge.t(bridge.nativeWordStatus)).font(.callout).foregroundStyle(.secondary)
                     HStack {
@@ -23,6 +31,11 @@ struct OfficePluginSheet: View {
                             .buttonStyle(.borderedProminent)
                         Button(bridge.t("检查连接")) { bridge.verifyWordPlugin(showResult: true) }
                         Button(bridge.t("移除…")) { bridge.uninstallWordPlugin() }
+                    }
+                    Button(bridge.t("选择 Word 应用…")) { bridge.chooseWordApplication() }
+                        .controlSize(.small)
+                    if bridge.wordOfficeAccessRequired {
+                        Button(bridge.t("允许访问 Word 文件夹…")) { bridge.chooseWordOfficeDirectory() }
                     }
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
             }
