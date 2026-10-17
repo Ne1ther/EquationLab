@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
 import JSZip from '../../node_modules/jszip/lib/index.js';
 import CFB from '../../node_modules/cfb/cfb.js';
-import {FIXED_LIBRARIES, treeInventory} from './installer.mjs';
+import {FIXED_LIBRARIES, treeInventory,isMainModule} from './installer.mjs';
 const sha = b => createHash('sha256').update(b).digest('hex');
 
 export async function inspectCompiledTemplate(file) {
@@ -45,7 +45,7 @@ export async function prepareArtifacts({template, bundle, source, acceptance, ou
   await fs.writeFile(path.join(outputPath, 'artifact-manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
   return {manifest, output: outputPath};
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   let text = ''; for await (const chunk of process.stdin) text += chunk;
   process.stdout.write(JSON.stringify(await prepareArtifacts(JSON.parse(text))) + '\n');
 }

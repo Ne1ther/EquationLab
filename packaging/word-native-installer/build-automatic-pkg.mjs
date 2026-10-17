@@ -3,7 +3,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readArtifacts} from './installer.mjs';
+import {readArtifacts,isMainModule} from './installer.mjs';
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const xml=text=>String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -63,7 +63,7 @@ export async function buildAutomaticPackage({app,artifacts,output,version,kind='
 
 // The bundled app creates a Word-only installer when requested instead of
 // embedding two compressed copies of its own Node runtime in every app.
-if(process.argv[1] && path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(isMainModule(import.meta.url)){
  try{
   let input='';for await(const chunk of process.stdin){input+=chunk;if(input.length>20000)throw Error('Package request too large.');}
   const request=JSON.parse(input);

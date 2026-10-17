@@ -12,13 +12,13 @@
 
 ## 下载
 
-**[下载 Equation-Lab-0.5.6.pkg（约 80 MB）](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.6/Equation-Lab-0.5.6.pkg)**
+**[下载 Equation-Lab-0.5.7.pkg（约 80 MB）](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.7/Equation-Lab-0.5.7.pkg)**
 
 目前支持 **M 系列芯片的 Mac，macOS 14 及以上**。安装包里带了 App 和 Word 插件，插件默认安装，不用另外装 Node、Python 或其他开发工具。要在 Word 里用，需要电脑上已有桌面版 Word for Mac。
 
 安装前保存文档，退出 Word。装好后重新打开 Word，新建或打开一篇文档，就能从顶部的 **Equation Lab** 功能区使用。[没有显示插件？](docs/install.md#word-里没有显示-equation-lab)
 
-这个包还没有做 Apple 开发者签名和公证，macOS 可能会拦截。[安装说明](docs/install.md)里写了具体情况，[Release 页面](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.6)里有版本说明和校验文件。
+这个包还没有做 Apple 开发者签名和公证，macOS 可能会拦截。[安装说明](docs/install.md)里写了具体情况，[Release 页面](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.7)里有版本说明和校验文件。
 
 ## 现在能做什么
 
@@ -72,7 +72,7 @@ App 会生成在 `dist/EquationLab.app`。开发版使用本机的 Node，下载
 
 目前只接了 Word for Mac，还没有 Excel 和 PowerPoint 集成。MathType 的功能和跨平台兼容还在补，不能保证所有公式、所有 Word 版本都正常。旧文档用到的特殊字体，也需要电脑上有。
 
-完整安装包还没在全新 Mac 上走完首次安装测试。遇到问题请先保留原文档，方便复现和排查。
+这次在本机完整重装了安装包，Word 插件能自动装上，公式保存后也能重开编辑。还没在全新 Mac 上测过。遇到问题请先保留原文档，方便排查。
 
 ## 许可证
 

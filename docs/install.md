@@ -2,6 +2,10 @@
 
 当前支持 Apple Silicon Mac、macOS 14 及以上，以及桌面版 Microsoft Word for Mac。
 
+请使用 **0.5.7 或更新版本**。0.5.5、0.5.6 的完整安装脚本存在路径判断问题，可能显示安装成功却没有安装 Word 插件。已经遇到这个问题时，退出 Word 后重新安装新版完整 PKG。
+
+Use **0.5.7 or later**. Earlier packages could report success while skipping the Word add-in installation script. Quit Word and reinstall the newer complete PKG if the ribbon is missing.
+
 ## 第一次安装
 
 1. 在项目的 GitHub **Releases** 页面下载完整的 `Equation-Lab-版本号.pkg`。
@@ -55,4 +59,6 @@ Word仍会遵守自己的宏和外部库策略；受组织策略限制的机器�
 
 当前已核对完整PKG的默认插件安装脚本，并将包解到临时目录，用包内Node和依赖完成公式引擎运行检查。该检查不替代全新Mac的首次安装验收。完整的首次使用确认仍需在没有开发环境、没有既有Equation Lab配置的Mac上，从下载PKG开始完成安装、Word冷启动、公式编辑、保存和重开。
 
-当前安装包为 0.5.6 build39，包含 Word 自动检测、启动目录自动修复，以及安装前关闭 Word 的系统提示。开放渲染资源和完整模板集合均保留。详情见[版本说明](releases.md)和[当前功能](features.md)。完整 PKG 在全新机器上的首次安装仍待实机验收。
+0.5.7 已在本机移除旧 Word 插件、安装记录和后台服务后，通过系统安装器完成安装，再确认插件自动加载和公式保存重开。此项验证覆盖本机的完整 PKG 流程；没有旧开发环境的全新 Mac 仍待测试。
+
+当前安装包为 0.5.7 build40，修复了系统临时目录导致插件安装脚本被跳过的问题，保留 Word 自动检测、启动目录自动修复，以及安装前关闭 Word 的系统提示。开放渲染资源和完整模板集合均保留。详情见[版本说明](releases.md)和[当前功能](features.md)。完整 PKG 在全新机器上的首次安装仍待实机验收。

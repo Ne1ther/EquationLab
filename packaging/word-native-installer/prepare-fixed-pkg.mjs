@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readArtifacts} from './installer.mjs';
+import {readArtifacts,isMainModule} from './installer.mjs';
 const xml = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
 export async function prepareFixedPackage({artifactDirectory, nodeRuntime, nodeLicense, output}) {
@@ -31,7 +31,7 @@ export async function prepareFixedPackage({artifactDirectory, nodeRuntime, nodeL
   await fs.writeFile(path.join(target, 'build-plan.json'), JSON.stringify(plan, null, 2) + '\n');
   return plan;
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   let text = ''; for await (const chunk of process.stdin) text += chunk;
   process.stdout.write(JSON.stringify(await prepareFixedPackage(JSON.parse(text))) + '\n');
 }

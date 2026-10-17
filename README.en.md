@@ -12,13 +12,13 @@ It's still a preview, and there's more to do. If you try it and something breaks
 
 ## Download
 
-**[Download Equation-Lab-0.5.6.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.6/Equation-Lab-0.5.6.pkg)**
+**[Download Equation-Lab-0.5.7.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.7/Equation-Lab-0.5.7.pkg)**
 
 You'll need an **Apple Silicon Mac running macOS 14 or later**. The installer includes the app and installs the Word plugin by default. You don't need Node, Python or developer tools. Word integration needs a desktop copy of Word for Mac.
 
 Save your documents and quit Word before installing. Reopen Word and create or open a document to use the **Equation Lab** ribbon. [Ribbon missing?](docs/install.md#word-里没有显示-equation-lab)
 
-The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.6).
+The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.7).
 
 ## What works so far
 
@@ -72,7 +72,7 @@ See the [development notes](docs/development.md) for source and dependency detai
 
 Only Word for Mac is connected so far. There is no Excel or PowerPoint integration. MathType features and cross-platform compatibility are still being worked on; not every formula or Word version has been verified. Older documents may need fonts installed separately.
 
-The complete installer hasn't yet been tested from start to finish on a fresh Mac. If you hit a problem, keep the original document so it can be reproduced.
+I reinstalled the complete package on my Mac after removing the old Word add-in. It installed the add-in automatically, and saved equations could be reopened and edited. A fresh Mac is still untested. If you hit a problem, keep the original document so it can be reproduced.
 
 ## License
 

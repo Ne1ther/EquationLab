@@ -15,6 +15,12 @@ const CLSIDS = ['0002CE03-0000-0000-C000-000000000046', '0002CE03-0000-0000-C000
 const digest = b => createHash('sha256').update(b).digest('hex');
 const exists = p => fs.lstat(p).then(() => true, e => { if (e.code === 'ENOENT') return false; throw e; });
 function fail(code, message, details) { const error = Error(message); error.code = code; error.details = details; throw error; }
+export function isMainModule(metaUrl, script = process.argv[1]) {
+  // Installer invokes scripts through /tmp, while Node resolves import.meta.url
+  // to /private/tmp. Compare file identities, not the two path spellings.
+  try { return !!script && realpathSync(script) === fileURLToPath(metaUrl); }
+  catch { return false; }
+}
 export async function detectWordStartup(home) {
   const base = path.join(home, 'Library/Group Containers/UBF8T346G9.Office');
   const database = path.join(base, 'MicrosoftRegistrationDB.reg');
@@ -389,7 +395,7 @@ export function errorResponse(error, scope) {
   const denied = ['EACCES', 'EPERM'].includes(error.code);
   return {ok: false, phase: 'failed', error: {code: denied ? scope === 'user' ? 'WORD_STARTUP_ACCESS_DENIED' : 'SYSTEM_COMPONENT_ACCESS_DENIED' : error.code ?? 'INSTALL_FAILED', message: denied ? scope === 'user' ? 'macOS 尚未允许访问所选 Word Startup 文件夹。请在系统提示中允许访问，或重新选择 Word 实际使用的文件夹后重试。现有组件已按事务记录保留或恢复。' : '固定系统组件需要标准 macOS 安装器授权，未修改系统安全设置。' : error.message, ...(error.details ? {details: error.details} : {})}, restartWordRequired: false};
 }
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (isMainModule(import.meta.url)) {
   let request;
   try {
     let text = ''; for await (const chunk of process.stdin) { text += chunk; if (text.length > 1_048_576) fail('REQUEST_TOO_LARGE', '安装请求过大。'); }

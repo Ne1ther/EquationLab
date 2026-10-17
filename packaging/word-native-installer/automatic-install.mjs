@@ -6,7 +6,7 @@ import {execFileSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {homedir,userInfo} from 'node:os';
-import {createInstaller,detectWordStartup} from './installer.mjs';
+import {createInstaller,detectWordStartup,isMainModule} from './installer.mjs';
 import {manageWordService} from '../word-service.mjs';
 
 const hash=b=>createHash('sha256').update(b).digest('hex');
@@ -118,7 +118,7 @@ export async function installAutomatically({action='install',app='/Applications/
  if(service)await service({action:'remove',user,app});else await manageWordService({action:'remove',home:user.home,uid:user.uid});
  return {ok:true,removed:true,user:user.username,appRetained:true};
 }
-if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
+if(isMainModule(import.meta.url)){
  const args=process.argv.slice(2),value=(name,fallback)=>{const i=args.indexOf(name);return i<0?fallback:args[i+1];};
  try{
   let result;
