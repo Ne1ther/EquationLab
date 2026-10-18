@@ -1,6 +1,8 @@
 # 应用更新
 
-0.5.8 起，应用菜单里的「检查更新…」可以检查 GitHub 上的最新正式发布。默认每天检查一次；「自动下载安装包」默认关闭，可以自行开启。后台检查不会弹出窗口打断输入，有新版时工具栏会出现入口。
+0.5.9 起，更新检查直接读取 GitHub Release 中的签名文件，不依赖匿名 API 配额，也不需要用户登录或填写令牌。
+
+应用菜单里的「检查更新…」可以检查 GitHub 上的最新正式发布。默认每天检查一次；「自动下载安装包」默认关闭，可以自行开启。后台检查不会弹出窗口打断输入，有新版时工具栏会出现入口。
 
 只请求公开版本信息和安装包，不上传公式、Word 文档或使用记录。网络不可用时可以继续编辑，稍后重试。
 
@@ -26,4 +28,4 @@ EQUATIONLAB_LIVE_UPDATE_TEST=1 swift test --filter testLiveGitHubDownloadAndRedi
 
 该测试使用实际 GitHub URL 下载 0.5.7 的约 80 MB 安装包，并核对已发布的 SHA-256，不执行安装。
 
-参考：[GitHub Releases API](https://docs.github.com/en/rest/releases/releases#get-the-latest-release)、[Apple CryptoKit 签名验证](https://developer.apple.com/documentation/cryptokit/curve25519/signing/publickey/isvalidsignature(_:for:))。
+参考：[GitHub 最新附件链接](https://docs.github.com/en/repositories/releasing-projects-on-github/linking-to-releases)、[Apple CryptoKit 签名验证](https://developer.apple.com/documentation/cryptokit/curve25519/signing/publickey/isvalidsignature(_:for:))。

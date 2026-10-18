@@ -12,13 +12,13 @@ It's still a preview, and there's more to do. If you try it and something breaks
 
 ## Download
 
-**[Download Equation-Lab-0.5.8.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.8/Equation-Lab-0.5.8.pkg)**
+**[Download Equation-Lab-0.5.9.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.9/Equation-Lab-0.5.9.pkg)**
 
 You'll need an **Apple Silicon Mac running macOS 14 or later**. The installer includes the app and installs the Word plugin by default. You don't need Node, Python or developer tools. Word integration needs a desktop copy of Word for Mac.
 
 Save your documents and quit Word before installing. Reopen Word and create or open a document to use the **Equation Lab** ribbon. [Ribbon missing?](docs/install.md#word-里没有显示-equation-lab)
 
-The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.8).
+The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.9).
 
 ## What works so far
 
@@ -29,7 +29,7 @@ The preview has no Developer ID signing or Apple notarization, so macOS may bloc
 
 The interface supports Chinese and English. There's a [longer feature list](docs/features.md).
 
-From 0.5.8, choose **Equation Lab → Check for updates…** to check manually or change daily checks and automatic downloads. You choose when to install; macOS Installer may ask for administrator authentication. Older versions need one manual update to get this feature.
+From 0.5.9, choose **Equation Lab → Check for updates…** to check manually or change daily checks and automatic downloads. You choose when to install; macOS Installer may ask for administrator authentication. Older versions need one manual update to get this feature.
 
 ## Screenshots
 

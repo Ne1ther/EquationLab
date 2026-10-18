@@ -108,18 +108,12 @@ final class AppUpdater: ObservableObject {
         phase = .checking; errorMessage = ""
         operation = Task {
             do {
-                let file = try await fetcher(URL(string: "https://api.github.com/repos/Ne1ther/EquationLab/releases/latest")!, 512 * 1024, { _ in })
-                defer { try? FileManager.default.removeItem(at: file) }
-                let release = try JSONDecoder().decode(GitHubRelease.self, from: Data(contentsOf: file))
-                guard let url = try release.manifestURL() else {
-                    if try ReleaseVersion(String(release.tag_name.dropFirst())) > ReleaseVersion(currentVersion) { throw UpdateError.invalidManifest }
-                    manifest = nil; packageURL = nil; defaults.removeObject(forKey: "updates.signedManifest"); phase = .current; recordSuccess(); return
-                }
-                let signedFile = try await fetcher(url, 128 * 1024, { _ in })
+                // GitHub's documented latest-asset URL avoids shared-IP REST
+                // quotas. Trust comes from the pinned signature, not API data.
+                let signedFile = try await fetcher(URL(string: "https://github.com/Ne1ther/EquationLab/releases/latest/download/EquationLab-update.json")!, 128 * 1024, { _ in })
                 defer { try? FileManager.default.removeItem(at: signedFile) }
                 let signedData = try Data(contentsOf: signedFile)
                 let update = try UpdateManifest.verified(signedData, publicKey: verificationKey)
-                guard release.tag_name == "v" + update.version else { throw UpdateError.invalidManifest }
                 try Task.checkCancellation()
                 guard try update.isNewer(than: currentVersion, build: currentBuild) else {
                     manifest = nil; packageURL = nil; defaults.removeObject(forKey: "updates.signedManifest"); phase = .current; recordSuccess(); return
@@ -174,7 +168,7 @@ final class AppUpdater: ObservableObject {
         case UpdateError.downloadTooLarge: errorMessage = "下载文件超出发布记录的大小，请重新检查更新。"
         case UpdateError.incompatibleSystem: errorMessage = "新版需要更高版本的 macOS，请查看发布说明。"
         case UpdateError.http(403), UpdateError.http(429): errorMessage = "GitHub 暂时限制了请求，请稍后再试。"
-        case UpdateError.invalidManifest, UpdateError.invalidVersion: errorMessage = "发布信息不完整，请到 GitHub 查看更新。"
+        case UpdateError.invalidManifest, UpdateError.invalidVersion, UpdateError.http(404): errorMessage = "发布信息不完整，请到 GitHub 查看更新。"
         default: errorMessage = "无法完成更新检查或下载，请检查网络后重试。"
         }
     }
@@ -230,7 +224,6 @@ final class AppUpdater: ObservableObject {
         defer { session.invalidateAndCancel() }
         var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData)
         request.setValue("EquationLab-Updater", forHTTPHeaderField: "User-Agent")
-        if url.host == "api.github.com" { request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept") }
         let file: URL, response: URLResponse
         do { (file, response) = try await session.download(for: request, delegate: delegate) }
         catch { if delegate.exceededLimit { throw UpdateError.downloadTooLarge }; throw error }

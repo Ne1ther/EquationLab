@@ -1,5 +1,5 @@
 {
-  "version": "0.5.8",
-  "zh": "• 增加检查更新、每日自动检查和可选的自动下载安装包。下载后验证发布签名与文件校验码，安装仍交给 macOS 安装器。\n• 左侧文档公式和收藏可以按公式内容、LaTeX 或序号搜索，右键即可复制 LaTeX。\n• 修正编辑中仍可通过右键菜单切换公式的问题，以及兼容性说明里的旧版本号。\n• 开发构建改为复制依赖，避免链接到受 macOS 保护的项目目录时启动卡住。",
-  "en": "• Check for updates, check automatically each day, and optionally download new installers. Release signatures and package checksums are verified before opening macOS Installer.\n• Search document equations and favorites by content, LaTeX, or number. Copy LaTeX directly from the context menu.\n• Prevent context-menu selection changes during an active operation and show the actual app version in compatibility notes.\n• Copy development dependencies into the app bundle to avoid privacy checks blocking linked project files."
+  "version": "0.5.9",
+  "zh": "• 检查更新改为直接读取 GitHub Release 的签名文件，避免共享 IP 的 API 限流。无需登录 GitHub 或配置令牌。\n• 增加检查更新、每日自动检查和可选的自动下载安装包。下载后验证发布签名与文件校验码，安装仍交给 macOS 安装器。\n• 左侧文档公式和收藏可以按公式内容、LaTeX 或序号搜索，右键即可复制 LaTeX。\n• 修正编辑中仍可通过右键菜单切换公式的问题，以及兼容性说明里的旧版本号。\n• 开发构建改为复制依赖，避免链接到受 macOS 保护的项目目录时启动卡住。",
+  "en": "• Read signed update metadata directly from GitHub Releases, avoiding shared-IP API quotas. No GitHub login or token is needed.\n• Check for updates, check automatically each day, and optionally download new installers. Release signatures and package checksums are verified before opening macOS Installer.\n• Search document equations and favorites by content, LaTeX, or number. Copy LaTeX directly from the context menu.\n• Prevent context-menu selection changes during an active operation and show the actual app version in compatibility notes.\n• Copy development dependencies into the app bundle to avoid privacy checks blocking linked project files."
 }

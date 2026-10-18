@@ -65,20 +65,8 @@ final class UpdateManifestTests: XCTestCase {
         try FileManager.default.createSymbolicLink(at:link,withDestinationURL:file)
         XCTAssertThrowsError(try update.verifyPackage(at:link))
     }
-    func testReleaseSelectionRejectsForeignAssetsAndPreviewChannels() throws {
-        func release(_ change:[String:Any] = [:]) throws -> GitHubRelease {
-            var value:[String:Any] = ["tag_name":"v0.5.8","draft":false,"prerelease":false,"assets":[["name":"EquationLab-update.json","size":800,"browser_download_url":"https://github.com/Ne1ther/EquationLab/releases/download/v0.5.8/EquationLab-update.json"]]]
-            change.forEach { value[$0.key] = $0.value }
-            return try JSONDecoder().decode(GitHubRelease.self,from:JSONSerialization.data(withJSONObject:value))
-        }
-        XCTAssertNotNil(try release().manifestURL())
-        XCTAssertNil(try release(["assets":[]]).manifestURL())
-        XCTAssertThrowsError(try release(["draft":true]).manifestURL())
-        XCTAssertThrowsError(try release(["prerelease":true]).manifestURL())
-        XCTAssertThrowsError(try release(["assets":[["name":"EquationLab-update.json","size":800,"browser_download_url":"https://example.com/update.json"]]]).manifestURL())
-    }
     func testRedirectPolicyAndDailySchedule() {
-        for url in ["https://api.github.com/repos/Ne1ther/EquationLab/releases/latest", "https://release-assets.githubusercontent.com/file?token=abc"] { XCTAssertTrue(UpdateNetworkPolicy.allows(URL(string:url)!)) }
+        for url in ["https://github.com/Ne1ther/EquationLab/releases/latest/download/EquationLab-update.json", "https://release-assets.githubusercontent.com/file?token=abc"] { XCTAssertTrue(UpdateNetworkPolicy.allows(URL(string:url)!)) }
         for url in ["http://github.com/file", "https://github.com.evil.com/file", "file:///tmp/app.pkg", "https://user:pass@github.com/file", "https://github.com:8443/file"] { XCTAssertFalse(UpdateNetworkPolicy.allows(URL(string:url)!)) }
         let now=Date()
         XCTAssertTrue(UpdateNetworkPolicy.shouldCheck(lastAttempt:nil,now:now))

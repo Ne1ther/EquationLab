@@ -79,32 +79,10 @@ public struct UpdateManifest: Codable, Equatable, Sendable {
     }
 }
 
-public struct GitHubRelease: Decodable, Sendable {
-    public struct Asset: Decodable, Sendable {
-        public let name: String
-        public let size: Int64
-        public let browser_download_url: URL
-    }
-    public let tag_name: String
-    public let draft: Bool
-    public let prerelease: Bool
-    public let assets: [Asset]
-    public func manifestURL() throws -> URL? {
-        guard !draft, !prerelease, tag_name.hasPrefix("v") else { throw UpdateError.invalidManifest }
-        _ = try ReleaseVersion(String(tag_name.dropFirst()))
-        let matches = assets.filter { $0.name == "EquationLab-update.json" }
-        guard matches.count <= 1 else { throw UpdateError.invalidManifest }
-        guard let asset = matches.first else { return nil }
-        guard asset.size > 0, asset.size <= 128 * 1024,
-              asset.browser_download_url.absoluteString == "https://github.com/Ne1ther/EquationLab/releases/download/\(tag_name)/EquationLab-update.json" else { throw UpdateError.invalidManifest }
-        return asset.browser_download_url
-    }
-}
-
 public enum UpdateNetworkPolicy {
     public static func allows(_ url: URL) -> Bool {
         url.scheme == "https" && url.user == nil && url.password == nil && (url.port == nil || url.port == 443) &&
-        ["api.github.com", "github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].contains(url.host?.lowercased() ?? "")
+        ["github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com"].contains(url.host?.lowercased() ?? "")
     }
     public static func shouldCheck(lastAttempt: Date?, now: Date = Date()) -> Bool {
         guard let lastAttempt else { return true }
