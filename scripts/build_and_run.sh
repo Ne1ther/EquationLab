@@ -31,9 +31,12 @@ mkdir -p "$APP_BUNDLE/Contents/Resources/engine/bin"
 cp "$BUILD_DIR/EquationFontMetrics" "$APP_BUNDLE/Contents/Resources/engine/bin/"
 node scripts/build/build-template-previews.mjs "$APP_BUNDLE/Contents/Resources/template-previews"
 cp package.json "$APP_BUNDLE/Contents/Resources/engine/"
-if [[ ! -e "$APP_BUNDLE/Contents/Resources/engine/node_modules" ]]; then
-  ln -s "$ROOT_DIR/node_modules" "$APP_BUNDLE/Contents/Resources/engine/node_modules"
+# Keep module reads inside the bundle. A symlink back into Documents can make
+# a GUI-launched Node worker wait on macOS privacy checks during bootstrap.
+if [[ -L "$APP_BUNDLE/Contents/Resources/engine/node_modules" ]]; then
+  unlink "$APP_BUNDLE/Contents/Resources/engine/node_modules"
 fi
+rsync -a --delete "$ROOT_DIR/node_modules/" "$APP_BUNDLE/Contents/Resources/engine/node_modules/"
 NODE_BINARY="$(command -v node)"
 RELEASE_VERSION="$(node --input-type=module -e 'import fs from "node:fs";process.stdout.write(JSON.parse(fs.readFileSync("packaging/release.json","utf8")).version)')"
 RELEASE_BUILD="$(node --input-type=module -e 'import fs from "node:fs";process.stdout.write(JSON.parse(fs.readFileSync("packaging/release.json","utf8")).build)')"

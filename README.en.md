@@ -12,13 +12,13 @@ It's still a preview, and there's more to do. If you try it and something breaks
 
 ## Download
 
-**[Download Equation-Lab-0.5.7.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.7/Equation-Lab-0.5.7.pkg)**
+**[Download Equation-Lab-0.5.8.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.8/Equation-Lab-0.5.8.pkg)**
 
 You'll need an **Apple Silicon Mac running macOS 14 or later**. The installer includes the app and installs the Word plugin by default. You don't need Node, Python or developer tools. Word integration needs a desktop copy of Word for Mac.
 
 Save your documents and quit Word before installing. Reopen Word and create or open a document to use the **Equation Lab** ribbon. [Ribbon missing?](docs/install.md#word-里没有显示-equation-lab)
 
-The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.7).
+The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.8).
 
 ## What works so far
 
@@ -28,6 +28,8 @@ The preview has no Developer ID signing or Apple notarization, so macOS may bloc
 - Edit and save MathType equations in Word, with numbering and references.
 
 The interface supports Chinese and English. There's a [longer feature list](docs/features.md).
+
+From 0.5.8, choose **Equation Lab → Check for updates…** to check manually or change daily checks and automatic downloads. You choose when to install; macOS Installer may ask for administrator authentication. Older versions need one manual update to get this feature.
 
 ## Screenshots
 
@@ -61,6 +63,7 @@ You'll need Apple Silicon, macOS 14+, the Swift 6 command-line tools, Node and n
 npm ci
 swift build
 npm test
+swift test
 ./scripts/build_and_run.sh --build-only
 ```
 
@@ -72,7 +75,7 @@ See the [development notes](docs/development.md) for source and dependency detai
 
 Only Word for Mac is connected so far. There is no Excel or PowerPoint integration. MathType features and cross-platform compatibility are still being worked on; not every formula or Word version has been verified. Older documents may need fonts installed separately.
 
-I reinstalled the complete package on my Mac after removing the old Word add-in. It installed the add-in automatically, and saved equations could be reopened and edited. A fresh Mac is still untested. If you hit a problem, keep the original document so it can be reproduced.
+Version 0.5.7 was reinstalled on my Mac after removing the old Word add-in; the add-in loaded automatically and saved equations could be reopened and edited. This round checks updates, source builds and the bundled engine; the complete system-installer/Word flow has not been rerun. A fresh Mac is also untested. If you hit a problem, keep the original document so it can be reproduced.
 
 ## License
 

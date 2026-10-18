@@ -11,23 +11,24 @@ struct EquationLabApp: App {
     }
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var bridge = DesktopBridge()
+    @StateObject private var updater = AppUpdater()
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
         Window("Equation Lab", id: "main") {
-            WorkbenchView(bridge: bridge)
+            WorkbenchView(bridge: bridge, updater: updater)
                 .environmentObject(bridge)
                 .environment(\.locale, bridge.language.locale)
-                .onAppear { delegate.bridge = bridge; bridge.ensureNativeService(); bridge.verifyWordPlugin() }
+                .onAppear { delegate.bridge = bridge; bridge.ensureNativeService(); bridge.verifyWordPlugin(); updater.start() }
                 .onOpenURL { bridge.openWordURL($0) }
                 .onChange(of: scenePhase) { _, phase in
-                    if phase == .active { bridge.verifyWordPlugin() }
+                    if phase == .active { bridge.verifyWordPlugin(); updater.checkAutomaticallyIfDue() }
                 }
         }
         .defaultSize(width: 1380, height: 900)
         .windowStyle(.titleBar)
         .windowToolbarStyle(.unified)
-        .commands { WorkbenchCommands(bridge: bridge) }
+        .commands { WorkbenchCommands(bridge: bridge, updater: updater) }
     }
 }
 

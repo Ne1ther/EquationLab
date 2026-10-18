@@ -5,6 +5,7 @@
 - Put app screenshots in `docs/preview/`. Publish installers through GitHub Releases; keep only the current installer locally under `dist/`.
 - Local `research/`, `.local/`, `evidence/` and `output/` contain REA material, original inputs and Word validation records. Keep them local. Never force-add ignored research files or machine configuration to Git.
 - Preserve existing original materials and host-compiled Word release inputs. Build caches, installed dependencies and superseded app bundles are replaceable.
+- Preserve `.local/update-signing/`: it holds the private release-update signing key. Only the public key in `updater/UpdateTrust.swift` belongs in Git. Complete releases must include the signed `EquationLab-update.json` asset.
 - The local Git database can also contain active editor checkpoint refs. Do not delete, prune or replace those refs or objects, and never mirror-push the local repository.
 - Use `npm ci` and the existing `scripts/` entry points when rebuilding. Run checks that match the change; ordinary README edits do not need an app rebuild.
 - Keep compatibility claims tied to what was actually verified. A working preview does not establish full MathType equivalence or every Word/Windows round trip.

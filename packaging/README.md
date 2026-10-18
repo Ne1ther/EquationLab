@@ -1,17 +1,20 @@
 # Equation Lab release packaging
 
-The distribution channel is GitHub Releases. `scripts/package_release.sh` creates a self-contained Apple Silicon application, a complete App + Word `.pkg`, ZIP and optional read-only DMG. The complete PKG is the primary download for ordinary users. Recipients need no Node, npm, Swift, Xcode, Python, source checkout, local compilation, macro import or plugin-folder selection. The current candidate is 0.5.7 build40 under `dist/0.5.7-build40/`, with Word discovery and Startup relocation fixes. The replacement rendering resources are retained. Keep only the current installer locally after validation. This workflow does not submit the app to the Mac App Store.
+The distribution channel is GitHub Releases. `scripts/package_release.sh` creates a self-contained Apple Silicon application, a complete App + Word `.pkg`, ZIP and optional read-only DMG. The complete PKG is the primary download for ordinary users. Recipients need no Node, npm, Swift, Xcode, Python, source checkout, local compilation, macro import or plugin-folder selection. The current candidate is 0.5.8 build45 under `dist/0.5.8-build45/`, with signed update manifests and the existing Word discovery and Startup relocation fixes. The replacement rendering resources are retained. Keep only the current installer locally after validation. This workflow does not submit the app to the Mac App Store.
 
 The builder uses v6 optical icon assets, release Swift executables and official Node24.21.0 verified against the vendor SHA256 manifest. It installs locked production dependencies into a private staging tree, applies `prune-dependencies.mjs`, verifies production entries and internal symlinks, preserves licenses, and strips only Node local symbols before nested signing. Native dependencies outside system libraries are rejected. No private key, developer certificate, vendor installer or REA binary is shipped.
 
 ```sh
 EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.11" \
+EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
   ./scripts/package_release.sh --output "$PWD/dist/NEW_EMPTY_RELEASE_DIRECTORY"
 ```
 
 For repeat local builds, `EQUATIONLAB_NODE_RUNTIME_CACHE` can reuse a trusted, previously verified runtime. The cache contains `bin/node`, `LICENSE`, and `runtime-cache.json` with schema `equationlab.node-runtime-cache.v1`, the exact Node `version`, `source`, optional `archiveSha256`, and SHA-256 values in `files` for both files. The builder checks the version and digests, uses the local npm build tool, and records that provenance. The default still downloads and verifies the official Node archive. Cache files stay outside the source export.
 
 A release requires a frozen real Word-compiled template and host-accepted signed helper. `--purpose qa` can omit these and clearly disables native installation. Freezing uses `word-native-installer/artifacts.mjs` with matching source/template/helper hashes and real cold AutoExec acceptance. ZIP extraction and DMG read-only engine execution receive fresh signature checks.
+
+Starting with 0.5.8, complete releases also require the local Ed25519 update-signing key. The builder verifies that it matches `updater/UpdateTrust.swift` and emits `EquationLab-update.json` plus `SHA256SUMS.txt`. Upload both with the PKG. Update notes in `packaging/update-notes.json` must match the release version. The private key stays outside Git and the app bundle; preserve and securely back it up. See [application updates](../docs/updates.md) for the client behavior and trust boundary. Source builds and QA builds do not need the release key.
 
 `Contents/Resources/runtime/bin/node` is the runtime; `engine/` holds the renderer and production dependencies, and `engine/bin/EquationFontMetrics` is the CoreText helper. All runtime paths are bundle-relative. Node exported symbols are compared before and after stripping; native Word artifacts keep their exact host-accepted signatures.
 

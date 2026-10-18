@@ -2,6 +2,7 @@ import SwiftUI
 
 struct WorkbenchView: View {
     @ObservedObject var bridge: DesktopBridge
+    @ObservedObject var updater: AppUpdater
     @State private var columns: NavigationSplitViewVisibility = .all
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -32,6 +33,11 @@ struct WorkbenchView: View {
         .toolbar {
             ToolbarItem(placement: .navigation) { WorkbenchIdentity() }
             ToolbarItemGroup(placement: .primaryAction) {
+                if updater.hasUpdate {
+                    Button { updater.showPanel = true } label: {
+                        Label(bridge.t("有可用更新"), systemImage: "arrow.down.circle.fill").foregroundStyle(.blue)
+                    }.help(bridge.t("查看更新与下载进度"))
+                }
                 Button { bridge.showCommands = true } label: {
                     Image(systemName: "magnifyingglass").font(.system(size: 15, weight: .medium)).foregroundStyle(.purple)
                         .frame(width: 28, height: 26)
@@ -76,6 +82,7 @@ struct WorkbenchView: View {
             if bridge.matrixBuilderPending { bridge.matrixBuilderPending = false; bridge.showMatrixBuilder = true }
         }) { CommandSearch(bridge: bridge) }
         .sheet(isPresented: $bridge.showCompatibility) { CompatibilitySheet(bridge: bridge) }
+        .sheet(isPresented: $updater.showPanel) { AppUpdateSheet(updater: updater, bridge: bridge) }
         .sheet(isPresented: $bridge.showOfficePlugins) { OfficePluginSheet(bridge: bridge) }
         .sheet(isPresented: $bridge.showMatrixBuilder) { MatrixBuilder(bridge: bridge) }
         .alert(bridge.t("Word 插件安装"), isPresented: Binding(get: { !bridge.showOfficePlugins && !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {

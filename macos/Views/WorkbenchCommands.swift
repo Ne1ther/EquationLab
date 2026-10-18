@@ -2,7 +2,11 @@ import SwiftUI
 
 struct WorkbenchCommands: Commands {
     @ObservedObject var bridge: DesktopBridge
+    @ObservedObject var updater: AppUpdater
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            Button(bridge.t("检查更新…")) { updater.check() }
+        }
         CommandGroup(replacing: .newItem) {
             Button(bridge.t("新建公式")) { bridge.invoke("nativeNew") }.keyboardShortcut("n").disabled(bridge.wordSessionActive || bridge.state.busy)
             Button(bridge.t("打开 Word 文档…")) { bridge.invoke("nativeOpen") }.keyboardShortcut("o").disabled(bridge.wordSessionActive || bridge.state.busy)
@@ -248,7 +252,8 @@ struct CompatibilitySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             Label("Equation Lab", systemImage: "function").font(.title2.bold())
-            Text(bridge.t("MathType 兼容预览版 0.4")).font(.headline)
+            Text(bridge.t("MathType 兼容预览版") + " " + (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? ""))
+                .font(.headline)
             Text(bridge.t("可读取原生 MathType 对象、保留结构替换字符，或重新编辑已支持的公式结构，并另存 Word 副本。字体、字号及已识别的原生间距可保存。"))
             Text(bridge.t("尚未达到原版全部功能：部分模板、精细排版及所有跨平台组合仍需验证；不支持的结构会明确阻止导出。重新编辑结构可能改变局部样式。"))
                 .foregroundStyle(.secondary)

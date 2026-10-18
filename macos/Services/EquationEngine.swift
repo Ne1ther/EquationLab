@@ -24,6 +24,7 @@ final class EquationEngine: @unchecked Sendable {
                 pending[id] = (completion, timeout, DispatchTime.now().uptimeNanoseconds, action)
                 queue.asyncAfter(deadline: .now() + 60, execute: timeout)
                 try input?.write(contentsOf: bytes)
+                logger.info("request sent action=\(action, privacy: .public) bytes=\(bytes.count)")
             } catch {
                 let registered = pending[id] != nil
                 failAll(error.localizedDescription)
@@ -77,6 +78,7 @@ final class EquationEngine: @unchecked Sendable {
 
     private func failure(_ text: String) -> NSError { NSError(domain: "EquationEngine", code: 1, userInfo: [NSLocalizedDescriptionKey: text]) }
     private func failAll(_ message: String) {
+        logger.error("worker reset: \(message, privacy: .private)")
         generation = UUID()
         let child = process; process = nil
         try? input?.close(); input = nil

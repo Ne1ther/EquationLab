@@ -3,7 +3,13 @@ import SwiftUI
 struct FormulaSidebar: View {
     @ObservedObject var bridge: DesktopBridge
     @State private var showingFavorites = false
-    private var items: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
+    @State private var query = ""
+    private var allItems: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
+    private var items: [SidebarFormula] {
+        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return search.isEmpty ? allItems : allItems.filter { "\($0.id + 1) \($0.latex) \($0.label) \($0.detail)".localizedCaseInsensitiveContains(search) }
+    }
+    private var selectionUnavailable: Bool { bridge.state.busy || showingFavorites && bridge.wordSessionActive }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -14,13 +20,25 @@ struct FormulaSidebar: View {
             HStack {
                 Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式")).font(.headline)
                 Spacer()
-                Text("\(items.count)").font(.caption).foregroundStyle(.secondary)
+                Text(query.isEmpty ? "\(allItems.count)" : "\(items.count) / \(allItems.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
             }.padding(.horizontal, 18).padding(.vertical, 8)
+            if !allItems.isEmpty || !query.isEmpty {
+                HStack(spacing: 6) {
+                    Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary)
+                    TextField(bridge.t("搜索公式或 LaTeX"), text: $query).textFieldStyle(.plain)
+                    if !query.isEmpty {
+                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                            .buttonStyle(.plain).accessibilityLabel(bridge.t("清除搜索"))
+                    }
+                }.font(.callout).padding(8)
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
+                    .padding(.horizontal, 14).padding(.bottom, 8)
+            }
             if items.isEmpty {
                 ContentUnavailableView {
-                    Label(bridge.t(showingFavorites ? "暂无收藏" : "打开 Word 文档"), systemImage: showingFavorites ? "star" : "doc.text")
+                    Label(bridge.t(!query.isEmpty ? "没有匹配的公式" : showingFavorites ? "暂无收藏" : "打开 Word 文档"), systemImage: !query.isEmpty ? "magnifyingglass" : showingFavorites ? "star" : "doc.text")
                 } description: {
-                    Text(bridge.t(showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
+                    Text(bridge.t(!query.isEmpty ? "试试公式中的字母、LaTeX 命令或序号。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
                 }
                 .font(.callout)
                 Spacer(minLength: 0)
@@ -49,14 +67,17 @@ struct FormulaSidebar: View {
                             }.frame(minHeight: 70).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
-                        .disabled(bridge.state.busy || showingFavorites && bridge.wordSessionActive)
+                        .disabled(selectionUnavailable)
                         .listRowBackground(!showingFavorites && bridge.state.selected == item.id ? Color.accentColor.opacity(0.16) : Color.clear)
                         .contextMenu {
                             Button(bridge.t(showingFavorites ? "使用此收藏" : "编辑公式")) {
                                 bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
-                            }
+                            }.disabled(selectionUnavailable)
+                            Button(bridge.t("复制 LaTeX")) {
+                                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.latex, forType: .string)
+                            }.disabled(item.latex.isEmpty)
                             if !showingFavorites {
-                                Button(bridge.t("查看原生设置")) { bridge.invoke("nativeSelectObject", argument: item.id); bridge.inspectorTab = .style; bridge.showInspector = true }
+                                Button(bridge.t("查看原生设置")) { bridge.invoke("nativeSelectObject", argument: item.id); bridge.inspectorTab = .style; bridge.showInspector = true }.disabled(selectionUnavailable)
                             }
                         }
                         .help(bridge.t(item.detail))

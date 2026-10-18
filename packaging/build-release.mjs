@@ -10,6 +10,7 @@ import {buildIconAssets} from './icon-assets.mjs';
 import {buildWorkbenchAssets} from './workbench-assets.mjs';
 import {pruneDependencies} from './prune-dependencies.mjs';
 import {buildAutomaticPackage} from './word-native-installer/build-automatic-pkg.mjs';
+import {writeUpdateManifest} from './update-manifest.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = JSON.parse(await readFile(join(root,'packaging','release.json'),'utf8'));
@@ -42,6 +43,7 @@ async function isMachO(file){const handle=await open(file,'r');try{const header=
 const xml = s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;');
 const nativeArtifactsDirectory = process.env.EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR;
 if(purpose==='release'&&!nativeArtifactsDirectory)throw Error('A release requires EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR with real Word cold-start acceptance. Use --purpose qa for an explicitly unavailable installation candidate.');
+if(purpose==='release'&&!process.env.EQUATIONLAB_UPDATE_PRIVATE_KEY)throw Error('A release requires EQUATIONLAB_UPDATE_PRIVATE_KEY to sign its update manifest.');
 const preparedNativeArtifacts = nativeArtifactsDirectory ? await readArtifacts(resolve(nativeArtifactsDirectory)) : null;
 if(await exists(output)&&(await readdir(output)).length)throw Error(`Use a new empty output directory; frozen applications and packages are never replaced: ${output}`);
 await mkdir(output,{recursive:true});
@@ -265,6 +267,10 @@ try {
     progress('Building the complete App and Word installer');
     report.automaticInstaller=await buildAutomaticPackage({app:finalApp,artifacts:join(finalApp,'Contents/Resources/native-word-artifacts'),output,version,kind:'full'});
     report.artifacts.pkg=report.automaticInstaller.file;
+    if(purpose==='release') {
+      report.updateManifest=await writeUpdateManifest({root,output,packageFile:report.artifacts.pkg,version,build,minimumMacOS:config.minimumMacOS,privateKeyFile:process.env.EQUATIONLAB_UPDATE_PRIVATE_KEY});
+      report.artifacts.updateManifest=report.updateManifest.file;
+    }
   }
   if(!appOnly){
     progress('Creating and verifying an installable ZIP archive');
