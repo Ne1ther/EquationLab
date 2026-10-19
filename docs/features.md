@@ -6,7 +6,7 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 ## 编号
 
-在右侧 **文档 → Word 编排** 选择排版和编号格式。可以选常用格式，也能自行输入；下方显示格式预览，以及该公式在文档里的章、节和序号。编号和交叉引用使用 Word 域，插入或删除后从功能区更新编号。
+Word 里的编号在功能区设置，插入或删除后点“更新编号”。编辑器右侧 **文档 → Word 编排** 可试用常用格式或自定义格式，下方显示预览和该公式实际的章、节、序号、引用数。双击编辑后保存，会保留 Word 中原来的编号。
 
 ## 公式与上下文的间距
 
@@ -18,4 +18,4 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 ---
 
-Use the Word ribbon to insert, edit, number, and reference equations. Double-click a MathType equation to edit it; browse and search document equations on the left. Number formats support presets, custom input, live previews, and document details. For space around a displayed equation, change Before/After spacing in Word's Paragraph settings or the Equation Lab paragraph style. Internal equation spacing is in the editor's Layout inspector.
+Use the Word ribbon to insert, edit, number, and reference equations. Double-click to edit, and browse document equations on the left. The inspector previews number formats and shows the actual document number; saving an edit preserves the existing Word number. For space around an equation, change Before/After spacing in Word's Paragraph settings. Internal spacing is in the editor's Layout inspector.

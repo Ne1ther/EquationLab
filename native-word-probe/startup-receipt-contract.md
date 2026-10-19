@@ -1,44 +1,30 @@
-# Native startup receipt, helper0.0.5
+# Word 启动记录
 
-The exported zero-argument C function `int32_t MathTypeBridgeWriteStartupReceipt()` is compatible with the existing dynamic AutoExec loader's optional libffi call. It does not register classes or launch an app. It only reports a registration that already exists in the real Word process.
+原生组件 0.0.12 导出 `int32_t MathTypeBridgeWriteStartupReceipt()`。Word 加载模板并完成原生类注册后调用它，安装器据此检查插件是否在新的 Word 进程中加载。
 
-Production guards require the actual Word executable, Word's main thread, and `MathTypeBridgeMathTypeRegistrationState()==1`. The function uses `dladdr` on its own export to locate the helper image, resolves its real path, and derives the parent of `MathTypeBridgeProbe.bundle/Contents/MacOS/MathTypeBridgeProbe` as the actual adjacent Startup directory. It never guesses a username, default Startup folder, app location or current working directory.
+实现位于 `src/startup_receipt.mm`，要求真实 Word 进程、主线程和注册状态 `1`。组件从自身路径定位相邻的 Startup 目录，读取 `EquationLabInstallContext.json`，核对安装 ID、模板构建号、安装时间、组件版本和模板哈希。
 
-It reads only the adjacent `EquationLabInstallContext.json`, with schema `equationlab.word-native-install-context.v1`, and requires a valid UUID installId, nonempty templateBuildId, installedAt no later than the receipt time, helperVersion and a valid templateSha256. It checks helperVersion against both this compiled helper's0.0.5 constant and the actual bundle Info.plist, and checks the installed `EquationLabStartup.dotm` bytes against templateSha256. The declared context receiptPath is ignored; it cannot redirect output.
+记录写入 `Startup/.EquationLab/native-startup-receipt.json`，包含：
 
-The only output is `Startup/.EquationLab/native-startup-receipt.json`. The directory is opened without following symlinks and is private to the current user. A new0600 temporary file is fully written and synced, then atomically renamed. Failure before rename leaves any prior receipt unchanged. Symlink files/directories are rejected. No document, formula, ticket, editor URL, security preference or native registry file is read or written.
+- schema `equationlab.word-native-startup-receipt.v1` 和入口 `AutoExec`；
+- 安装 ID、模板构建号、组件版本与模板/可执行文件 SHA-256；
+- Word PID、版本、注册结果、类 ID、组件路径和时间。
 
-Receipt fields match `packaging/word-native-installer`:
+目录权限为 `0700`，文件为 `0600`，写入采用临时文件加原子替换，拒绝符号链接。写入失败会保留已有记录。
 
-- schema `equationlab.word-native-startup-receipt.v1`, entryPoint `AutoExec`;
-- installId, templateBuildId, compiled/Info-checked helperVersion;
-- actual Word PID/version, successful registration result0/state1, both original MathType CLSIDs;
-- UTC ISO timestamp, actual helper path, current helper executable-file SHA256, and verified template SHA256.
+## 返回值
 
-The hash records the current executable file, not an attestation of every mapped process page. Installation therefore still requires Word to exit before replacing native files, and verification must bind a new Word PID and current artifact hashes. The `AutoExec` entry-point field describes the agreed loader/export contract; it is not independent proof of which VBA procedure called the export. Real cold-start template execution remains a separate developer host acceptance.
-
-Return codes:
-
-| Code | Meaning |
+| 值 | 含义 |
 | --- | --- |
-| 0 | Receipt was committed |
-| -1 | Not the real Word executable |
-| -4 | Not Word's main thread |
-| -6 | Original classes are not registered |
-| -7 | Missing, malformed or unbound install context |
-| -8 | Helper identity/version or installed template/hash mismatch |
-| -9 | Receipt directory/file write failed or was a symlink |
-| -10 | Invalid loaded image, Word metadata or Startup directory |
+| `0` | 写入成功 |
+| `-1` | 不是 Word 进程 |
+| `-4` | 不是主线程 |
+| `-6` | 原生类尚未注册 |
+| `-7` | 安装上下文缺失或无效 |
+| `-8` | 组件身份、版本或模板哈希不匹配 |
+| `-9` | 写入失败或遇到符号链接 |
+| `-10` | 组件路径或 Word 信息无效 |
 
-Missing receipt export in0.0.4 produced the loader's sentinel-1001;0.0.5 provides it without changing the VBA source or its zero-argument int32 ABI. The fixed-system package fallback needs a separately accepted context-location contract; this adjacent export does not silently read a default user Startup for a globally loaded bundle.
+安装或更新前须退出 Word。验证时同时核对新 PID、当前安装 ID 和组件哈希；已有旧记录不能证明新版本已加载。
 
-Reproduction:
-
-```sh
-node native-word-probe/script/run_startup_receipt_tests.mjs
-native-word-probe/script/build_and_run.sh
-node native-word-probe/automatic-loader/run_dynamic_ffi_probe.mjs
-node native-word-probe/script/run_transport_tests.mjs
-```
-
-The receipt unit executable includes the actual private implementation and injects host/thread/registration metadata only inside a temporary filesystem. It verifies context/version/hash binding,0600 atomic replacement, previous receipt preservation on failure, Unicode Startup, ignored output redirection and rejected symlinks. The public export is also checked to reject the real CLI process. Those injected success cases are not Word/AutoExec evidence. The dynamic ffi probe calls the real public0.0.5 export and receives-1 outside Word. Frozen0.0.4 artifacts are not modified by the build.
+测试：`node native-word-probe/script/run_startup_receipt_tests.mjs`。真实 Word 冷启动验收另行记录，不以测试注入的环境代替。
