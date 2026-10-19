@@ -8,6 +8,9 @@
 #include <cerrno>
 #include <algorithm>
 
+NSDictionary* EquationLabCapturedDocumentContext();
+void EquationLabSetNavigationTarget(std::int32_t index);
+
 namespace {
 constexpr NSUInteger MaxBlob=16*1024*1024;
 constexpr NSUInteger MaxResponse=46*1024*1024;
@@ -20,7 +23,7 @@ void launchEquationLabURL(NSWorkspace* workspace,NSURL* url,void(^completion)(NS
     // handler may still point at an older development app with a different ID.
     NSURL* applicationURL=[workspace URLForApplicationWithBundleIdentifier:@"app.equationlab.mac"];
     if(!applicationURL){completion([NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]);return;}
-    NSWorkspaceOpenConfiguration* config=[NSWorkspaceOpenConfiguration configuration];config.activates=YES;
+    NSWorkspaceOpenConfiguration* config=[NSWorkspaceOpenConfiguration configuration];config.activates=NO;
     [workspace openURLs:@[url] withApplicationAtURL:applicationURL configuration:config completionHandler:^(NSRunningApplication* app,NSError* error){
         completion(error||!app?[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]:nil);
     }];
@@ -100,6 +103,8 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic) NSUInteger failures;
 @property(nonatomic) BOOL terminal;
 @property(nonatomic,strong) NSData* openNative;
+@property(nonatomic,strong) NSDictionary* documentContext;
+@property(nonatomic) BOOL awaitingDocument;
 @property(nonatomic,strong) NSDate* wakeDeadline;
 @property(nonatomic) BOOL wakeAttempted;
 @property(nonatomic) BOOL wakePending;
@@ -122,7 +127,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @end
 static ProbeEditorTransport* transport=nil;
 @implementation ProbeEditorTransport
-- (instancetype)init {if((self=[super init])){_edits=[NSMutableDictionary dictionary];_baseURL=@"http://127.0.0.1:37952";_interval=1000;}return self;}
+- (instancetype)init {if((self=[super init])){_edits=[NSMutableDictionary dictionary];_baseURL=@"http://127.0.0.1:37952";_interval=150;}return self;}
 - (BOOL)active:(ProbeEditState*)state {return !state.terminal&&self.edits[@(state.sessionId)]==state;}
 - (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
     return [[ProbeJsonRequest alloc] initWithURL:[NSURL URLWithString:[self.baseURL stringByAppendingString:path]] body:body completion:reply];
@@ -130,7 +135,7 @@ static ProbeEditorTransport* transport=nil;
 - (void)cleanup:(std::uint64_t)sessionId {
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
     ProbeEditState* state=self.edits[@(sessionId)];if(!state)return;
-    state.terminal=YES;state.openNative=nil;[state.request cancel];state.request=nil;[self.edits removeObjectForKey:@(sessionId)];
+    state.terminal=YES;state.openNative=nil;state.documentContext=nil;[state.request cancel];state.request=nil;[self.edits removeObjectForKey:@(sessionId)];
     if(state.ticket){
         // Best-effort immediate erasure; a missing endpoint leaves server TTL cleanup.
         __block ProbeJsonRequest* cancelRequest=nil;
@@ -151,7 +156,15 @@ static ProbeEditorTransport* transport=nil;
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
     if(self.edits[@(sessionId)])return;
     ProbeEditState* state=[ProbeEditState new];state.sessionId=sessionId;state.openNative=native;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
-    [self openState:state];
+    // On macOS the OLE verb can arrive before Word's selection event. Allow
+    // that event to capture the live document before freezing the source binding.
+    state.awaitingDocument=YES;
+    __weak ProbeEditState* weak=state;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        ProbeEditState* current=weak;if(!current||![self active:current])return;
+        current.documentContext=EquationLabCapturedDocumentContext();current.awaitingDocument=NO;
+        [self openState:current];
+    });
 }
 - (void)retryOpen:(ProbeEditState*)state {
     if(![self active:state])return;
@@ -173,14 +186,16 @@ static ProbeEditorTransport* transport=nil;
 - (void)openState:(ProbeEditState*)state {
     if(![self active:state])return;
     __weak ProbeEditState* weak=state;
-    state.request=[self request:@"/api/native-open" body:@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} reply:^(NSDictionary* json,NSError* error){
+    NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
+    if(state.documentContext)body[@"document"]=state.documentContext;
+    state.request=[self request:@"/api/native-open" body:body reply:^(NSDictionary* json,NSError* error){
         ProbeEditState* current=weak;if(!current||![self active:current])return;current.request=nil;
         if(error){if(connectionRefused(error)){if(!current.wakeAttempted)[self wake:current];else[self retryOpen:current];}else[self fail:current code:NetworkFailure];return;}
         id ticket=json[@"ticket"],url=json[@"editorUrl"];
         NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
         if(![ticket isKindOfClass:NSString.class]||[ticket length]!=64||[ticket rangeOfCharacterFromSet:invalid].location!=NSNotFound||![url isKindOfClass:NSString.class]||![url isEqualToString:[@"equationlab://word-edit/" stringByAppendingString:ticket]]){[self fail:current code:InvalidReply];return;}
         for(ProbeEditState* other in self.edits.allValues)if(other!=current&&[other.ticket isEqualToString:ticket]){[self fail:current code:InvalidReply];return;}
-        current.ticket=ticket;current.openNative=nil;
+        current.ticket=ticket;current.openNative=nil;current.documentContext=nil;
         if(self.launch){if(!self.launch([url UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
         else {
             launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=weak;if(!active||![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
@@ -195,6 +210,7 @@ static ProbeEditorTransport* transport=nil;
         if(error){if(++current.failures<=3)[self schedule:current];else[self fail:current code:NetworkFailure];return;}current.failures=0;
         id status=json[@"state"];
         if([status isEqual:@"editing"]){[self schedule:current];return;}
+        if([status isEqual:@"navigate"]){id index=json[@"index"];if(![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]){[self fail:current code:InvalidReply];return;}EquationLabSetNavigationTarget([index intValue]);[self fail:current code:0];return;}
         if([status isEqual:@"cancelled"]){[self fail:current code:0];return;}
         if(![status isEqual:@"complete"]){[self fail:current code:InvalidReply];return;}
         id source=json[@"native"],preview=json[@"pdf"],width=json[@"width"],height=json[@"height"];
@@ -249,5 +265,11 @@ extern "C" __attribute__((visibility("default")))
 bridge_probe::HResult MathTypeBridgeInstallTransportForTesting(std::uint16_t port,bridge_probe::LaunchEditorUrl launch,void* context,std::uint32_t interval){return bridge_probe::installEditorTransportForTesting(port,launch,context,interval);}
 extern "C" __attribute__((visibility("default")))
 std::uint32_t MathTypeBridgeTransportActive(){return bridge_probe::editorTransportActive();}
+extern "C" __attribute__((visibility("default")))
+std::uint32_t MathTypeBridgeDocumentCaptureAllowed(){
+    if(!NSThread.isMainThread)return 0;
+    if(transport.edits.count!=1)return 0;
+    return ((ProbeEditState*)transport.edits.allValues.firstObject).awaitingDocument?1:0;
+}
 extern "C" __attribute__((visibility("default")))
 std::uint32_t MathTypeBridgeTransportLastError(){return bridge_probe::editorTransportLastError();}

@@ -59,7 +59,7 @@ export function localServer({port=37951,tls}={}) {
    if(req.method==='POST') {
     if(req.headers.origin&&req.headers.origin!==origin){res.writeHead(403);return res.end('Origin rejected');}
     if(!req.headers['content-type']?.startsWith('application/json'))throw Error('JSON required');
-    const nativeRequest=/^\/api\/native-(open|read|poll|complete|cancel|ack|status)$/.test(req.url);
+    const nativeRequest=/^\/api\/native-(open|read|poll|complete|cancel|ack|status|navigate)$/.test(req.url);
     if(nativeRequest&&(tls||currentPort!==37952))throw Error('原生编辑服务只在本机 37952 端口提供');
     const limit=nativeRequest?48_000_000:30_000_000;
     let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>limit)throw Error('请求过大');chunks.push(c);}

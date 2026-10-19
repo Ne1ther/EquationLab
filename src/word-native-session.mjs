@@ -2,8 +2,9 @@ import {randomBytes} from 'node:crypto';
 import {mkdtemp,chmod,writeFile,rm,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {parseNative,wrapNative} from './native.mjs';
-import {createDocx} from './document.mjs';
+import JSZip from 'jszip';
+import {parseNative,wrapNative,inspectOle} from './native.mjs';
+import {fromFlatOpc,inspectDocx} from './document.mjs';
 
 const MAX_BLOB=16*1024*1024,MAX_ENCODED=4*Math.ceil(MAX_BLOB/3);
 const MAX_SESSIONS=16,TTL=20*60*1000,MAX_UINT64=18446744073709551615n;
@@ -11,7 +12,7 @@ const sessions=new Map();
 // Small terminal receipts contain no formula, PDF or private file path.
 const receipts=new Map();
 let sequence=Promise.resolve(),queued=0;
-const operations=new Set(['native-open','native-poll','native-read','native-complete','native-cancel','native-ack','native-status']);
+const operations=new Set(['native-open','native-poll','native-read','native-complete','native-cancel','native-ack','native-status','native-navigate']);
 
 // Serialization also covers async staging/deletion. A cancel cannot overtake a
 // read and leave a newly-created file behind after the cancellation cleanup.
@@ -29,7 +30,7 @@ function request(operation,body){
  if(!operations.has(operation))throw Error('Unknown native session operation');
  if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid native session request');
  body={...body};
- const allowed=operation==='native-open'?['session','native','acknowledgement']:operation==='native-complete'?['ticket','session','native','pdf','width','height']:operation==='native-ack'?['ticket','session','ok']:['ticket','session'];
+ const allowed=operation==='native-open'?['session','native','acknowledgement','document']:operation==='native-complete'?['ticket','session','native','pdf','width','height']:operation==='native-ack'?['ticket','session','ok']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
  if(operation==='native-open')uint64(body.session);
  else{
@@ -64,6 +65,7 @@ async function removeStage(entry){
  entry.directory=null;entry.path=null;
 }
 function wipe(entry){
+ entry.document?.bytes.fill(0);entry.document=null;
  entry.native?.fill(0);entry.result?.native.fill(0);entry.result?.pdf.fill(0);
  entry.native=null;entry.result=null;
 }
@@ -98,21 +100,41 @@ function current(body){
  return entry;
 }
 function editing(entry){if(entry.state!=='editing')throw Error('Native session is no longer editing');}
+async function sessionSource(native){
+ // This private edit source is never exported to Word. A placeholder lets the
+ // normal save path replace the preview without rendering once just to stage it.
+ const zip=new JSZip(),r='http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+ zip.file('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>');
+ zip.file('_rels/.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rDocument" Type="${r}/officeDocument" Target="word/document.xml"/></Relationships>`);
+ zip.file('word/document.xml',`<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="${r}" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:v="urn:schemas-microsoft-com:vml"><w:body><w:p><w:r><w:object><v:shape style="width:1pt;height:1pt"><v:imagedata r:id="rPreview"/></v:shape><o:OLEObject ProgID="Equation.DSMT4" r:id="rNative"/></w:object></w:r></w:p></w:body></w:document>`);
+ zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rNative" Type="${r}/oleObject" Target="embeddings/equation.bin"/><Relationship Id="rPreview" Type="${r}/image" Target="media/placeholder.png"/></Relationships>`);
+ zip.file('word/embeddings/equation.bin',wrapNative(native));
+ zip.file('word/media/placeholder.png',Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=','base64'));
+ return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
+}
 async function stage(entry){
  if(entry.path){
   const [directory,file]=await Promise.all([lstat(entry.directory),lstat(entry.path)]).catch(()=>{throw Error('Native session staging file is unavailable');});
   if(!directory.isDirectory()||directory.isSymbolicLink()||(directory.mode&0o777)!==0o700||!file.isFile()||file.isSymbolicLink()||(file.mode&0o777)!==0o600)throw Error('Native session staging file is unsafe');
   return entry.path;
  }
- const document=await createDocx([{ole:wrapNative(entry.native)}]);
+ const document=await sessionSource(entry.native);
  try{
   entry.directory=await mkdtemp(join(tmpdir(),'equationlab-word-native-'));
   await chmod(entry.directory,0o700);
   entry.path=join(entry.directory,'equation.docx');
   await writeFile(entry.path,document,{mode:0o600,flag:'wx'});
+  if(entry.document){entry.document.path=join(entry.directory,'document.docx');await writeFile(entry.document.path,entry.document.bytes,{mode:0o600,flag:'wx'});entry.document.bytes.fill(0);}
   return entry.path;
  }catch{await removeStage(entry);throw Error('Native session staging failed');}
  finally{document.fill(0);}
+}
+
+async function documentContext(value,native){
+ if(value===undefined)return null;
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['ooxml','index','name'].includes(k))||typeof value.ooxml!=='string'||value.ooxml.length>30_000_000||!Number.isInteger(value.index)||value.index<0||value.index>10000||typeof value.name!=='string'||value.name.length>512)throw Error('Invalid Word document context');
+ const bytes=await fromFlatOpc(value.ooxml);
+ try{const {objects}=await inspectDocx(bytes),selected=objects[value.index];if(!selected||selected.part!=='word/document.xml'||selected.parseError||!inspectOle(selected.ole).native.equals(native))throw Error('Word document context does not match the activated equation');return {bytes,index:value.index,name:value.name,count:objects.filter(o=>o.part==='word/document.xml').length,path:null};}catch(error){bytes.fill(0);throw error;}
 }
 
 /** In-memory, local native editing sessions. No networking or logging occurs.
@@ -144,23 +166,27 @@ export async function nativeSessionOperation(path,body){
    if([...sessions.values()].some(entry=>entry.session===body.session))throw Error('Native session already exists');
    if(body.acknowledgement!==undefined&&body.acknowledgement!==true)throw Error('Invalid native acknowledgement capability');
    if(body.acknowledgement&&receipts.size>=64)throw Error('Too many native receipts');
-   const native=nativeBlob(body.native);let ticket;
+   const native=nativeBlob(body.native);let document;try{document=await documentContext(body.document,native);}catch(error){native.fill(0);throw error;}let ticket;
    do{ticket=randomBytes(32).toString('hex');}while(sessions.has(ticket));
-   const entry={ticket,session:body.session,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
+   const entry={ticket,session:body.session,document,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
    sessions.set(ticket,entry);arm(entry);
    return {ticket,editorUrl:'equationlab://word-edit/'+ticket};
   }
   const entry=current(body);
   if(operation==='native-poll'){
    if(entry.state==='editing')return {state:'editing'};
-   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height}:{state:'cancelled'};
+   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
    await discard(entry);if(receipts.has(body.ticket))receipts.get(body.ticket).state='delivered';return result;
   }
   editing(entry);
   if(operation==='native-read'){
    const path=await stage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name}}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+  }
+  if(operation==='native-navigate'){
+   if(!entry.document||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');
+   entry.navigateIndex=body.index;await removeStage(entry);wipe(entry);entry.state='navigate';return {ok:true};
   }
   if(operation==='native-cancel'){
    await removeStage(entry);entry.native.fill(0);entry.native=null;entry.state='cancelled';

@@ -13,13 +13,13 @@ import {CommandMap} from 'mathjax-full/js/input/tex/SymbolMap.js';
 import {Configuration} from 'mathjax-full/js/input/tex/Configuration.js';
 import {inspectOle,oleRenderLatex,makeOle} from './native.mjs';
 import {readTypography} from './typography-native.mjs';
-import {vectorPdfRequest} from './vector-pdf.mjs';
+import {vectorPdfRequest,vectorInkBounds} from './vector-pdf.mjs';
 import {nativeDimension32} from './native-dimensions.mjs';
 import {createNativeLayout} from './native-layout.mjs';
 
 const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);
 const {mtExtraOperators={}}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
-new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elmeta:'Metadata',elruler:'Ruler',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
+new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
  const variant=parser.GetArgument(name),size=Number(parser.GetArgument(name)),code=Number.parseInt(parser.GetArgument(name),16),color=parser.GetArgument(name);
  if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>65535||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
  const ch=String.fromCharCode(code),kind=/[A-Za-z\u0370-\u03ff]/.test(ch)?'mi':/[0-9]/.test(ch)?'mn':'mo';
@@ -27,12 +27,15 @@ new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elmeta:'Metadata',elrul
  // replaces a custom CoreText variant with its -smallop/-largeop font, which
  // can silently emit an unembedded browser <text> for contour integrals.
  const token=parser.create('token',kind,{mathvariant:variant,stretchy:false,largeop:false,mathcolor:color},ch);token.setProperty('equationNativeSize',size);parser.Push(token);
+},Root(parser,name){
+ const ratio=Number(parser.GetArgument(name)),node=parser.ParseArg(name);if(!Number.isFinite(ratio)||ratio<=0||ratio>100)throw Error('Invalid native root size');
+ let root;node.walkTree(n=>{if(!root&&['msqrt','mroot'].includes(n.kind))root=n;});if(!root)throw Error('Missing native root');root.setProperty('elNativeBoxRatio',ratio);parser.Push(node);
 },Metadata(parser,name){
  const kind=Number(parser.GetArgument(name)),flags=Number(parser.GetArgument(name)),node=parser.ParseArg(name);
  if(!Number.isInteger(kind)||!Number.isInteger(flags)||flags<0||flags>65535)throw Error('Invalid native layout metadata');
  const targetKind=kind===100||kind===101?'mtable':kind===11?'mfrac':null;let target;
- node.walkTree(n=>{if(!target&&(n.kind===targetKind||kind>=24&&kind<=34&&['mover','munder'].includes(n.kind)))target=n;});
- if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));}if(kind===101)target.setProperty('elPile',true);if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);}
+ node.walkTree(n=>{if(!target&&(n.kind===targetKind||(kind>=24&&kind<=34||kind===200)&&['mover','munder'].includes(n.kind)))target=n;});
+ if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));}if(kind===101)target.setProperty('elPile',true);if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);if(kind===200)target.attributes.set(target.kind==='munder'?'accentunder':'accent',true);}
  parser.Push(node);
 },Bar(parser,name){const under=Number(parser.GetArgument(name)),count=Number(parser.GetArgument(name));if(![0,1].includes(under)||![1,2].includes(count))throw Error('Invalid native bar');const node=parser.create('node','mrow',[parser.create('node','TeXAtom',[parser.ParseArg(name)])]);node.setProperty('elNativeBar',{under,count});parser.Push(node);
 },StretchIntegral(parser,name){const flags=Number(parser.GetArgument(name)),ratio=Number(parser.GetArgument(name)),operatorRatio=Number(parser.GetArgument(name));if(!Number.isInteger(flags)||flags<1||flags>0x17f||!(flags&3)||!Number.isFinite(ratio)||ratio<=0||!Number.isFinite(operatorRatio)||operatorRatio<=0)throw Error('Invalid integral layout');const children=Array.from({length:3},()=>parser.create('node','TeXAtom',[parser.ParseArg(name)]));for(let i=0;i<(flags&3);i++)children.push(parser.create('node','TeXAtom',[flags&256?parser.create('token','mo',{stretchy:true,largeop:false,mathsize:operatorRatio+'em'},'\u222b'):parser.ParseArg(name)]));const node=parser.create('node','mrow',children);node.setProperty('elStretchIntegral',flags);node.setProperty('elNativeBoxRatio',ratio);node.setProperty('elOperatorRatio',operatorRatio);parser.Push(node);
@@ -159,13 +162,17 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  const glyphToken=(n,plain)=>{
   if(/\s/.test(String.fromCharCode(n.code)))return plain;
   const state=states.get(n.start);if(!state)throw Error('Missing native glyph state');
+  // Old Equation Lab objects used ASCII '-' in the Symbol face. Render the
+  // mathematical minus without modifying their stored MTEF or text hyphens.
+  const code=n.code===0x2d&&state.font.toLowerCase()==='symbol'?0x2212:n.code;
   const key=state.font+'\0'+state.style;let index=faceIds.get(key);
   if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:state.font,style:state.style,characters:[]});}
-  if(!faces[index].characters.includes(n.code))faces[index].characters.push(n.code);
-  return `\\elglyph{el${index}}{${state.size/full}}{${n.code.toString(16)}}{${state.color}}`;
+  if(!faces[index].characters.includes(code))faces[index].characters.push(code);
+  return `\\elglyph{el${index}}{${state.size/full}}{${code.toString(16)}}{${state.color}}`;
  };
  const latex=oleRenderLatex(ole,glyphToken,{
-  template:(n,latex)=>{if([12,13].includes(n.selector)){for(let i=0;i<1+n.variation;i++)latex=latex.replace(/^\\(?:overline|underline)\{([\s\S]*)\}$/,'$1');return `\\elbar{${n.selector===12?1:0}}{${1+n.variation}}{${latex}}`;}if(n.selector>=31&&n.selector<=34)return `\\elmeta{${n.selector}}{${n.variation}}{${latex}}`;if(n.selector===15&&latex.startsWith('\\elStretchIntegral')){const glyphs=n.children.filter(c=>c.type===2&&c.code===0x222b),operatorRatio=layoutSizes.get(glyphs[0]?.start)??layoutSizes.get(n.start)??1;return latex.replace(/^(\\elStretchIntegral\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}{${operatorRatio}}`)+(n.variation&256?'':glyphs.map(g=>`{${glyphToken(g,'')}}`).join(''));}if(n.selector===14&&latex.startsWith('\\elDoubleArrow'))return latex.replace(/^(\\elDoubleArrow\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}`);if(n.selector===8)return `\\elwhite{${n.variation}}{${latex.replace(/^\\left(?:⟦|\.)/,'').replace(/\\right(?:⟧|\.)$/,'')}}`;if(n.selector!==11)return latex;if(n.variation&2){const gap=prefs?.spaces[14];if(gap&&!gap.unsupported)latex=latex.replaceAll('\\!',`\\kern{${nativeDimension32(gap,Math.trunc(full*32))/(32*full)}em}`);}return `\\elmeta{11}{${n.variation}}{${latex}}`;},
+  embellishment:(n,latex)=>[14,15,19,20,25,26,27,28,30,31,32,36,37].includes(n.embellishment)?`\\elmeta{200}{${n.embellishment}}{${latex}}`:latex,
+  template:(n,latex)=>{if(n.selector===10)return `\\elroot{${layoutSizes.get(n.start)??1}}{${latex}}`;if([12,13].includes(n.selector)){for(let i=0;i<1+n.variation;i++)latex=latex.replace(/^\\(?:overline|underline)\{([\s\S]*)\}$/,'$1');return `\\elbar{${n.selector===12?1:0}}{${1+n.variation}}{${latex}}`;}if(n.selector>=31&&n.selector<=34)return `\\elmeta{${n.selector}}{${n.variation}}{${latex}}`;if(n.selector===15&&latex.startsWith('\\elStretchIntegral')){const glyphs=n.children.filter(c=>c.type===2&&c.code===0x222b),operatorRatio=layoutSizes.get(glyphs[0]?.start)??layoutSizes.get(n.start)??1;return latex.replace(/^(\\elStretchIntegral\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}{${operatorRatio}}`)+(n.variation&256?'':glyphs.map(g=>`{${glyphToken(g,'')}}`).join(''));}if(n.selector===14&&latex.startsWith('\\elDoubleArrow'))return latex.replace(/^(\\elDoubleArrow\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}`);if(n.selector===8)return `\\elwhite{${n.variation}}{${latex.replace(/^\\left(?:⟦|\.)/,'').replace(/\\right(?:⟧|\.)$/,'')}}`;if(n.selector!==11)return latex;if(n.variation&2){const gap=prefs?.spaces[14];if(gap&&!gap.unsupported)latex=latex.replaceAll('\\!',`\\kern{${nativeDimension32(gap,Math.trunc(full*32))/(32*full)}em}`);}return `\\elmeta{11}{${n.variation}}{${latex}}`;},
   matrix:(n,latex)=>`\\elmeta{100}{${(n.hjust&128?1:0)|(n.vjust&128?2:0)}}{${latex}}`,
   pile:(_n,latex)=>`\\elmeta{101}{0}{${latex}}`,
   line:(n,latex,ctx)=>{const parts=latex.split('\\elTab{}');if(parts.length===1)return latex;const tabs=ctx.currentRuler?.tabs??[];return `\\elruler{${tabs.map(t=>t.position??t.offset).join(',')}}{${tabs.map(t=>t.type).join(',')}}{${parts.length}}${parts.map(p=>`{${p}}`).join('')}`;}
@@ -191,8 +198,16 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  svg=svg.slice(svg.indexOf('<svg'),svg.lastIndexOf('</svg>')+6);
  const [,view]=/viewBox="([^"]+)"/.exec(svg),[x,y,w,h]=view.split(/\s+/).map(Number);
  const left=Math.max(0,...nativeFaces.slice(0,usedFaceCount).flatMap(f=>Object.values(f.glyphs).map(g=>-g.left))),right=20;
- const width=Math.max(2,(w+left+right)*full/1000),height=Math.max(2,h*full/1000),depth=Math.max(0,(y+h)*full/1000);
- svg=svg.replace(/viewBox="[^"]+"/,`viewBox="${x-left} ${y} ${w+left+right} ${h}"`);
+ // A tight ink box cuts off antialiasing at glyph extrema (notably italic s
+ // and the radical bar). Reserve a small physical margin on every edge and
+ // include the bottom margin in the baseline used by Word.
+ // Layout advances do not include every overhanging accent or the final
+ // transformed integral contour. Union the actual vector ink before adding
+ // padding, so PNG, editor SVG and Word PDF share one complete physical box.
+ const ink=vectorInkBounds(vectorPdfRequest(svg,1,1)),padding=.5,pad=padding*1000/full;
+ const minX=Math.min(x-left,ink?.[0]??x),minY=Math.min(y,ink?.[1]??y),maxX=Math.max(x+w+right,ink?.[2]??x+w),maxY=Math.max(y+h,ink?.[3]??y+h);
+ const width=Math.max(2,(maxX-minX)*full/1000)+2*padding,height=Math.max(2,(maxY-minY)*full/1000)+2*padding,depth=Math.max(0,maxY*full/1000)+padding;
+ svg=svg.replace(/viewBox="[^"]+"/,`viewBox="${minX-pad} ${minY-pad} ${maxX-minX+2*pad} ${maxY-minY+2*pad}"`);
  svg=svg.replace(/width="[^"]+"/,`width="${width}pt"`).replace(/height="[^"]+"/,`height="${height}pt"`);
  if(width*height*16>32_000_000)throw Error('公式预览超过像素限制，请减小字号或拆分公式');
  // Editor validation displays SVG directly. Rasterize only for an actual PNG
@@ -203,10 +218,12 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
 
 /** CoreGraphics PNG from the same vector vocabulary used by Word PDF.
  * maxWidth/maxHeight are pixel bounds; point geometry is kept unchanged. */
-export async function rasterizeNativeSvg(svg,width,height,{maxWidth,maxHeight,scale=4}={}){
+export async function rasterizeNativeSvg(svg,width,height,{maxWidth,maxHeight,scale=8}={}){
  if(!Number.isFinite(scale)||scale<=0||scale>8)throw Error('Invalid raster scale');
  for(const value of [maxWidth,maxHeight])if(value!==undefined&&(!Number.isFinite(value)||value<1||value>32000000))throw Error('Invalid raster pixel bound');
  scale=Math.min(scale,maxWidth===undefined?scale:maxWidth/width,maxHeight===undefined?scale:maxHeight/height);
+ // Keep the decoded bitmap bounded even for a large valid equation.
+ if(Math.ceil(width*scale)*Math.ceil(height*scale)>32000000)scale=Math.min(scale,Math.sqrt(31000000/(width*height)));
  return Buffer.from((await helperRequest({...vectorPdfRequest(svg,width,height),format:'png',scale})).png,'base64');
 }
 

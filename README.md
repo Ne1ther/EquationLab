@@ -1,82 +1,65 @@
-<p align="center">
-  <img src="design/equation-lab-icons/v6/png/e2-lab-cream-optical-1024.png" width="112" height="112" alt="Equation Lab">
-</p>
-
+<p align="center"><img src="design/equation-lab-icons/v6/png/e2-lab-cream-optical-1024.png" width="112" height="112" alt="Equation Lab"></p>
 <h1 align="center">Equation Lab</h1>
 
-做这个项目，主要是想在 Mac 的 Word 里继续编辑 MathType 公式。编辑器也能单独用，可以点模板输入，也可以直接写 LaTeX。
-
-还在慢慢做，目前是预览版。有需要可以试试，哪里不好用，欢迎[提个 issue](https://github.com/Ne1ther/EquationLab/issues)。如果能附上公式和复现步骤，会更方便我排查。
+做这个项目，是想在 Mac 的 Word 里继续编辑 MathType 公式。也可以单独打开编辑器，用模板输入，或者直接写 LaTeX。
 
 [English](README.en.md)
 
-## 下载
+**[下载 0.6.0 安装包](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.0/Equation-Lab-0.6.0.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
-**[下载 Equation-Lab-0.5.9.pkg（约 80 MB）](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.9/Equation-Lab-0.5.9.pkg)**
+适用于 M 系列 Mac、macOS 14 及以上。安装包包含 App、Word 插件和运行所需组件，不用另外装 Node、Python 或 MathType。在 Word 里使用时，需要已有桌面版 Word for Mac。
 
-目前支持 **M 系列芯片的 Mac，macOS 14 及以上**。安装包里带了 App 和 Word 插件，插件默认安装，不用另外装 Node、Python 或其他开发工具。要在 Word 里用，需要电脑上已有桌面版 Word for Mac。
+保存文档，退出 Word 和 Equation Lab，再双击安装包。装好后重新打开 Word，从顶部的 **Equation Lab** 功能区开始使用。双击公式可以继续编辑，保存后回到原来的位置。
 
-安装前保存文档，退出 Word。装好后重新打开 Word，新建或打开一篇文档，就能从顶部的 **Equation Lab** 功能区使用。[没有显示插件？](docs/install.md#word-里没有显示-equation-lab)
+## 平时怎么用
 
-这个包还没有做 Apple 开发者签名和公证，macOS 可能会拦截。[安装说明](docs/install.md)里写了具体情况，[Release 页面](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.9)里有版本说明和校验文件。
+- 打开 Word 文档，左边查看、搜索文档里的 MathType 公式。
+- 用模板或 LaTeX 编辑，调整字体、字号、符号和间距。
+- 选行内、居中或带编号的排版；编号有常用格式，也能自己输入，并实时预览。
+- 用 Word 的编号和交叉引用，导出公式的 PDF、SVG、PNG，或复制 LaTeX。
+- 在 **Equation Lab → 检查更新…** 里检查新版，也可以开启每日检查和自动下载。
 
-## 现在能做什么
+![Equation Lab 工作台](docs/preview/workbench-0.6.0.png)
 
-- 在画布里编辑公式，或者直接改 LaTeX，同时看 Word 字体排版的预览。
-- 插入分式、根号、积分、求和、矩阵、字母和符号，也能搜索模板。
-- 调整字体、字号和间距，导出 SVG、PDF、PNG。
-- 在 Word 中编辑、回存 MathType 公式，添加编号和引用。
+## 试一份文档
 
-界面可以切换中文和英文。更详细的功能放在[这里](docs/features.md)。
+[下载 30 公式 Word 演示](docs/examples/equation-lab-30-formulas.docx) · [查看 PDF](docs/examples/equation-lab-30-formulas.pdf)
 
-从 0.5.9 开始，可以在 **Equation Lab → 检查更新…** 里检查新版，设置每日检查和自动下载。下载后由你决定何时安装，系统安装器可能需要管理员验证。旧版需要先手动安装一次，才有这个功能。
+三节，每节十个公式，正文宋体小四。包括根式、求和、积分、矩阵、编号和交叉引用，可以直接打开、双击编辑。
 
-## 界面
+![30 公式演示](docs/preview/word-30-formulas.png)
 
-这是实际运行的工作台，下面同时显示排版预览和 LaTeX。
+[更多实际截图](docs/preview/README.md) · [字体和间距](docs/features.md)
 
-![Equation Lab 工作台](docs/preview/workbench.png)
+## 目录怎么放
 
-模板和字母可以按分类找，也可以搜索。
+| 目录 | 内容 |
+| --- | --- |
+| [macos/](macos/) | Mac 原生窗口、侧栏、检查器和系统菜单 |
+| [desktop/](desktop/) | 公式编辑画布和前端交互 |
+| [src/](src/) | 公式数据、渲染、Word 文档读写和本地通信 |
+| [native-word-probe/](native-word-probe/) | Word 功能区、文档事件和原生公式组件 |
+| [font-metrics/](font-metrics/) | 字体轮廓、图片及 PDF 渲染工具 |
+| [updater/](updater/) | 自动更新与下载校验 |
+| [assets/](assets/) · [design/](design/) | 字体、资源许可、图标和模板预览 |
+| [packaging/](packaging/) · [scripts/](scripts/) | 编译、安装器和发布脚本 |
+| [tests/](tests/) | 公式、文档、界面交互和安装器测试 |
+| [docs/](docs/) | 使用说明、实际截图和公开演示 |
 
-![模板库](docs/preview/template-library.png)
-
-![字母库](docs/preview/letter-library.png)
-
-矩阵和 Word 插件的设置窗口：
-
-<table>
-  <tr><th>矩阵</th><th>Word 插件</th></tr>
-  <tr>
-    <td><img src="docs/preview/matrix-builder.png" width="460" alt="自定义矩阵"></td>
-    <td><img src="docs/preview/word-plugin.png" width="460" alt="Word 插件管理"></td>
-  </tr>
-</table>
-
-[全部 7 张截图在这里](docs/preview/README.md)，也放了排版设置和渲染示例。
+[主要文件逐项说明](docs/file-guide.md)。安装包放在 [Releases](https://github.com/Ne1ther/EquationLab/releases)，不放进源码目录。
 
 ## 自己编译
 
-需要 M 系列 Mac、macOS 14+、Swift 6 的命令行工具，以及 Node 和 npm。
+需要 Node.js 24 和 Swift 6.2 / Xcode 命令行工具。
 
 ```sh
 npm ci
 swift build
-npm test
-swift test
-./scripts/build_and_run.sh --build-only
+./scripts/build_and_run.sh
 ```
 
-App 会生成在 `dist/EquationLab.app`。开发版使用本机的 Node，下载的完整安装包则自带运行时。
+[开发说明](docs/development.md) · [打包说明](packaging/README.md)
 
-[开发说明](docs/development.md)里有源码和依赖的介绍。如果要自己制作带 Word 插件的完整安装包，还需要 Word 编译过的加载器，具体看[打包说明](packaging/README.md)。
+遇到问题欢迎[提 issue](https://github.com/Ne1ther/EquationLab/issues)，带上版本、公式和复现步骤，我会更容易找到问题。
 
-## 还有哪些限制
-
-目前只接了 Word for Mac，还没有 Excel 和 PowerPoint 集成。MathType 的功能和跨平台兼容还在补，不能保证所有公式、所有 Word 版本都正常。旧文档用到的特殊字体，也需要电脑上有。
-
-0.5.7 已在本机完整重装过，Word 插件能自动装上，公式保存后也能重开编辑。本轮主要验证更新功能、源码构建和包内引擎，尚未重跑系统安装器的完整 Word 流程。全新 Mac 也还没测过。遇到问题请先保留原文档，方便排查。
-
-## 许可证
-
-原创代码和图标使用 [MIT](LICENSE)。第三方软件、字体、产品标识和空公式协议样本的来源见[第三方声明](THIRD_PARTY_NOTICES.md)。这是独立项目，与 Microsoft、MathType 官方无关。
+源码使用 [MIT 许可](LICENSE)，所用资源见 [第三方说明](THIRD_PARTY_NOTICES.md)。

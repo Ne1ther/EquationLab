@@ -63,6 +63,20 @@ struct FormulaTemplate: Identifiable, Decodable {
     let latex: String
 }
 
+struct DocumentNumbering: Decodable {
+    var hasDocumentContext: Bool
+    var actualNumber: String?
+    var chapter: Int?
+    var section: Int?
+    var equation: Int?
+    var bookmark: String?
+    var referenceCount: Int?
+    var position: Int
+    var total: Int
+    var format: String?
+    var mode: String
+}
+
 struct WorkbenchState: Decodable {
     var documentName = "新建公式"
     var documentPath = ""
@@ -78,6 +92,7 @@ struct WorkbenchState: Decodable {
     var extraSizes: [EditorField] = []
     var spaces: [EditorField] = []
     var layout: [EditorField] = []
+    var numbering: DocumentNumbering? = nil
     var statusTitle = "正在载入公式引擎…"
     var statusDetail = ""
     var statusError = false
@@ -117,6 +132,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("extraSizes", [EditorField].self) { extraSizes = v }
         if let v = try value("spaces", [EditorField].self) { spaces = v }
         if let v = try value("layout", [EditorField].self) { layout = v }
+        if payload["numbering"] is NSNull { numbering = nil } else if let v = try value("numbering", DocumentNumbering.self) { numbering = v }
         if let v = try value("statusTitle", String.self) { statusTitle = v }
         if let v = try value("statusDetail", String.self) { statusDetail = v }
         if let v = try value("statusError", Bool.self) { statusError = v }

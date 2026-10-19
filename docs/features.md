@@ -1,15 +1,21 @@
-# 当前功能
+# 使用
 
-Equation Lab是面向Apple Silicon Mac的公式编辑预览版，支持macOS 14及以上。Word集成面向桌面版Microsoft Word for Mac。
+Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。双击已有 MathType 公式会打开独立编辑窗口；左侧显示当前文档的公式，可以搜索和切换。
 
-- 原生三栏工作台：文档公式、可视化编辑区和字体/字号检查器。
-- 可视化公式编辑与LaTeX输入，Word字体排版预览与源码并排显示。
-- 结构、积分、矩阵、字母、符号、标记与函数的完整集合、搜索和插入。
-- 字体和字号设置、矩阵与多行、标尺及制表位、EQP偏好导入导出。
-- Word原生公式编辑与回存、公式位置、编号和引用。
-- SVG、PDF、PNG导出及中英文界面。
-- 完整PKG包含App、Word插件和本地后台服务；插件可从App中检查、更新和移除。
+编辑器支持模板与 LaTeX 输入、字体字号、分式、根式、求和、积分、矩阵、收藏，以及 PDF、SVG、PNG 导出。界面可切换中文和英文。
 
-当前仍是兼容性预览：完整Windows MathType功能、全部公式类型的跨平台往返与所有Word版本尚未验证。Excel和PowerPoint集成尚未提供。旧文档引用的特殊字体需要本机可用。
+## 编号
 
-截图见[工作台预览](preview/README.md)，安装步骤见[安装说明](install.md)，源码交付现状见[开发说明](development.md)。
+在右侧 **文档 → Word 编排** 选择排版和编号格式。可以选常用格式，也能自行输入；下方显示格式预览，以及该公式在文档里的章、节和序号。编号和交叉引用使用 Word 域，插入或删除后从功能区更新编号。
+
+## 公式与上下文的间距
+
+独立公式上下留白在 **Word 的“段落”设置 → 段前、段后** 调整。可修改“Equation Lab”段落样式，一次应用到整篇文档。行内公式随正文的行距排版，正文建议用自动或最小值行距。
+
+公式内部的上下标、分子分母、积分上下限等距离，在编辑器右侧 **排版 → 间距** 调整。
+
+[30 公式演示](examples/equation-lab-30-formulas.docx) · [PDF](examples/equation-lab-30-formulas.pdf)
+
+---
+
+Use the Word ribbon to insert, edit, number, and reference equations. Double-click a MathType equation to edit it; browse and search document equations on the left. Number formats support presets, custom input, live previews, and document details. For space around a displayed equation, change Before/After spacing in Word's Paragraph settings or the Equation Lab paragraph style. Internal equation spacing is in the editor's Layout inspector.

@@ -351,9 +351,11 @@ export function latexAst(input) {
 const uintRecord=n=>n<255?Buffer.from([n]):cat([255],u16(n));
 const signedRecord=n=>n>=-128&&n<127?Buffer.from([n+128]):cat([255],u16(n+32768));
 function charRecord(value,{typeface,options=0,embellishments=[]}={}){
-  const code=value.codePointAt(0);if([...value].length!==1||code>65535||code===0)throw Error('Unsupported native character');
+  let code=value.codePointAt(0);if([...value].length!==1||code>65535||code===0)throw Error('Unsupported native character');
   if(code===9)return cat([2,4],signedRecord(23),u16(9),[9]);
   if(typeface===undefined)typeface=/^[0-9]$/.test(value)?8:/^[A-Za-z]$/.test(value)?3:(code>=0x3b1&&code<=0x3d6)||[0x3f0,0x3f1,0x3f5].includes(code)?4:code>=0x391&&code<=0x3a9?5:reverseSpaces[value]?1:6;
+  // A math-mode keyboard '-' denotes minus. Text-style hyphens stay U+002D.
+  if(code===0x2d&&typeface===6)code=0x2212;
   return cat([2,options|(embellishments.length?1:0)],signedRecord(typeface),u16(code),...(embellishments.length?[...embellishments.map(e=>Buffer.from([6,0,e])),Buffer.from([0])]:[]));
 }
 const inheritedSize=ctx=>10+(ctx.logicalSize??0);
@@ -682,6 +684,7 @@ function renderChar(n,ctx){
     else if(e.embellishment===30)text=`\\underset{\\sim}{${text}}`;
     else if(command)text=`\\${command}{${text}}`;
     else previewError(`Unknown embellishment ${e.embellishment}`);
+    if(ctx.embellishment)text=ctx.embellishment(e,text,ctx);
   }}
   return text;
 }

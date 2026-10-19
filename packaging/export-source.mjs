@@ -23,9 +23,9 @@ const roots = [
   'native-word-probe/script', 'native-word-probe/automatic-loader',
   'native-word-probe/transport-contract.md', 'native-word-probe/startup-receipt-contract.md',
   'scripts/build/build-template-previews.mjs', 'scripts/build/build-ribbon-icons.mjs',
-  'scripts/build/build-rendering-resources.mjs',
+  'scripts/build/build-rendering-resources.mjs', 'scripts/build/build-word-demo.mjs',
   'scripts/build/check-catalog-library.mjs', 'scripts/build/check-catalog-library.swift',
-  'docs/install.md', 'docs/features.md', 'docs/development.md', 'docs/releases.md', 'docs/updates.md', 'docs/ocr.md', 'docs/preview',
+  'docs/install.md', 'docs/features.md', 'docs/development.md', 'docs/releases.md', 'docs/updates.md', 'docs/ocr.md', 'docs/file-guide.md', 'docs/examples', 'docs/preview',
   'design/office-product-icons',
   'design/workbench-concepts/assets/equationlab-header-mark.svg',
   'design/equation-lab-icons/v5/svg/e2-lab-orange-paper.svg',
@@ -38,8 +38,9 @@ const localTests = new Set([
   'typography-native', 'mtef-extended', 'font-renderer', 'native', 'desktop',
   'nine-formula-local', 'full-roundtrip-audit', 'native-feature-parity', 'new-formula', 'eqp'
 ].map(name => 'tests/' + name + '.test.mjs'));
+const publicDemo = 'docs/examples/equation-lab-30-formulas.docx';
 const skip = rel => withheld.some(item => item.path === rel) || localTests.has(rel) ||
-  /(?:^|\/)\.DS_Store$/.test(rel) || /\.(?:dotm|docm|docx|pkg|dmg|app|key|pem|p12|pfx)$/.test(rel) ||
+  /(?:^|\/)\.DS_Store$/.test(rel) || (rel !== publicDemo && /\.(?:dotm|docm|docx|pkg|dmg|app|key|pem|p12|pfx)$/.test(rel)) ||
   rel.startsWith('packaging/native-word/') ||
   /^packaging\/verify-(?:release|slim-bundle|candidate-engine)\.mjs$/.test(rel) ||
   /^native-word-probe\/automatic-loader\/(?:dynamic_|run_dynamic_)/.test(rel) ||

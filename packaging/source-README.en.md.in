@@ -1,82 +1,65 @@
-<p align="center">
-  <img src="design/equation-lab-icons/v6/png/e2-lab-cream-optical-1024.png" width="112" height="112" alt="Equation Lab">
-</p>
-
+<p align="center"><img src="design/equation-lab-icons/v6/png/e2-lab-cream-optical-1024.png" width="112" height="112" alt="Equation Lab"></p>
 <h1 align="center">Equation Lab</h1>
 
-I'm building this so I can keep editing MathType equations in Word on a Mac. The editor also works on its own, with clickable templates and LaTeX input.
-
-It's still a preview, and there's more to do. If you try it and something breaks, please [open an issue](https://github.com/Ne1ther/EquationLab/issues). A sample formula and steps to reproduce it would help.
+I started this project to keep editing MathType equations in Word on a Mac. The editor also works on its own, with templates or LaTeX input.
 
 [中文](README.md)
 
-## Download
+**[Download the 0.6.0 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.0/Equation-Lab-0.6.0.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
-**[Download Equation-Lab-0.5.9.pkg (about 80 MB)](https://github.com/Ne1ther/EquationLab/releases/download/v0.5.9/Equation-Lab-0.5.9.pkg)**
+For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime components. You do not need to install Node, Python, or MathType. Word integration requires desktop Word for Mac.
 
-You'll need an **Apple Silicon Mac running macOS 14 or later**. The installer includes the app and installs the Word plugin by default. You don't need Node, Python or developer tools. Word integration needs a desktop copy of Word for Mac.
+Save your documents and quit Word and Equation Lab before opening the installer. Reopen Word and use the **Equation Lab** ribbon. Double-click an equation to edit it, then save it back to the same place.
 
-Save your documents and quit Word before installing. Reopen Word and create or open a document to use the **Equation Lab** ribbon. [Ribbon missing?](docs/install.md#word-里没有显示-equation-lab)
+## Everyday use
 
-The preview has no Developer ID signing or Apple notarization, so macOS may block it. See the [installation guide](docs/install.md) and [release notes and checksums](https://github.com/Ne1ther/EquationLab/releases/tag/v0.5.9).
+- Open a Word document and browse or search its MathType equations on the left.
+- Edit with templates or LaTeX, and adjust fonts, sizes, symbols, and spacing.
+- Choose inline, centered, or numbered layout. Use a numbering preset or enter your own format and see a live preview.
+- Use Word numbering and cross-references; export PDF, SVG, or PNG, or copy LaTeX.
+- Choose **Equation Lab → Check for updates…**, with optional daily checks and automatic downloads.
 
-## What works so far
+![Equation Lab workbench](docs/preview/workbench-0.6.0.png)
 
-- Edit equations visually or change the LaTeX, with a separate preview using Word font settings.
-- Insert fractions, roots, integrals, sums, matrices, letters and symbols. Templates are searchable.
-- Change fonts, sizes and spacing, and export SVG, PDF and PNG.
-- Edit and save MathType equations in Word, with numbering and references.
+## Try a document
 
-The interface supports Chinese and English. There's a [longer feature list](docs/features.md).
+[Download the 30-equation Word demo](docs/examples/equation-lab-30-formulas.docx) · [View the PDF](docs/examples/equation-lab-30-formulas.pdf)
 
-From 0.5.9, choose **Equation Lab → Check for updates…** to check manually or change daily checks and automatic downloads. You choose when to install; macOS Installer may ask for administrator authentication. Older versions need one manual update to get this feature.
+Three sections with ten equations each, using 12 pt SimSun for Chinese text. Includes radicals, sums, integrals, matrices, numbering, and cross-references. Open it and double-click an equation to try editing.
 
-## Screenshots
+![30-equation demo](docs/preview/word-30-formulas.png)
 
-The actual workbench, with the typography preview and LaTeX below the editor:
+[More screenshots](docs/preview/README.md) · [Fonts and spacing](docs/features.md)
 
-![Equation Lab workbench](docs/preview/workbench.png)
+## Project layout
 
-Templates and letters can be browsed by category or searched.
+| Directory | Contents |
+| --- | --- |
+| [macos/](macos/) | Native Mac windows, sidebar, inspectors, and menus |
+| [desktop/](desktop/) | Equation canvas and frontend interaction |
+| [src/](src/) | Equation data, rendering, Word documents, and local communication |
+| [native-word-probe/](native-word-probe/) | Word ribbon, document events, and native equation component |
+| [font-metrics/](font-metrics/) | Font outlines and image/PDF rendering helper |
+| [updater/](updater/) | Update downloads and verification |
+| [assets/](assets/) · [design/](design/) | Fonts, resource licenses, icons, and template previews |
+| [packaging/](packaging/) · [scripts/](scripts/) | Build, installer, and release scripts |
+| [tests/](tests/) | Equation, document, interaction, and installer tests |
+| [docs/](docs/) | Guides, actual screenshots, and public examples |
 
-![Template library](docs/preview/template-library.png)
-
-![Letter library](docs/preview/letter-library.png)
-
-The matrix and Word plugin settings:
-
-<table>
-  <tr><th>Matrices</th><th>Word plugin</th></tr>
-  <tr>
-    <td><img src="docs/preview/matrix-builder.png" width="460" alt="Custom matrix settings"></td>
-    <td><img src="docs/preview/word-plugin.png" width="460" alt="Word plugin management"></td>
-  </tr>
-</table>
-
-[All seven screenshots](docs/preview/README.md), including spacing settings and rendering examples.
+[Key files explained](docs/file-guide.md). Installers are in [Releases](https://github.com/Ne1ther/EquationLab/releases), separate from source.
 
 ## Build it yourself
 
-You'll need Apple Silicon, macOS 14+, the Swift 6 command-line tools, Node and npm.
+Install Node.js 24 and Swift 6.2 / Xcode command-line tools.
 
 ```sh
 npm ci
 swift build
-npm test
-swift test
-./scripts/build_and_run.sh --build-only
+./scripts/build_and_run.sh
 ```
 
-The app is created at `dist/EquationLab.app`. Development builds use your local Node installation; the downloadable installer includes its own runtime.
+[Development](docs/development.md) · [Packaging](packaging/README.md)
 
-See the [development notes](docs/development.md) for source and dependency details. Building a complete installer with Word integration also needs a Word-compiled loader; the [packaging notes](packaging/README.md) explain that part.
+If something goes wrong, please [open an issue](https://github.com/Ne1ther/EquationLab/issues) with the version, equation, and steps to reproduce it.
 
-## Known limits
-
-Only Word for Mac is connected so far. There is no Excel or PowerPoint integration. MathType features and cross-platform compatibility are still being worked on; not every formula or Word version has been verified. Older documents may need fonts installed separately.
-
-Version 0.5.7 was reinstalled on my Mac after removing the old Word add-in; the add-in loaded automatically and saved equations could be reopened and edited. This round checks updates, source builds and the bundled engine; the complete system-installer/Word flow has not been rerun. A fresh Mac is also untested. If you hit a problem, keep the original document so it can be reproduced.
-
-## License
-
-Original code and artwork use [MIT](LICENSE). See the [third-party notices](THIRD_PARTY_NOTICES.md) for software, fonts, product marks and the blank-equation protocol fixture. This is an independent project, unaffiliated with Microsoft or MathType.
+Source is under [MIT](LICENSE). See [third-party notices](THIRD_PARTY_NOTICES.md) for bundled resources.

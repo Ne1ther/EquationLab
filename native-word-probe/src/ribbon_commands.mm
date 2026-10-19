@@ -9,6 +9,11 @@
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
+namespace { NSDictionary* pendingDocument; std::int32_t navigationTarget=0; }
+// Word owns this snapshot while the object remains selected. Selection/document
+// events invalidate it; repeated OLE activation must not consume it once.
+NSDictionary* EquationLabCapturedDocumentContext(){return pendingDocument;}
+void EquationLabSetNavigationTarget(std::int32_t index){navigationTarget=index+1;}
 namespace {
 NSURL* startupDirectory(){
     Dl_info info{};
@@ -67,6 +72,21 @@ std::int32_t prepare(NSString* layout,NSString* operation=@"ribbon-create"){
     if(docx.length<4||memcmp(docx.bytes,"PK\x03\x04",4)||!outputFile(directory,@"ribbon-insert.docx",docx)||!outputFile(directory,@"ribbon-insert.xml",xml))return -4;
     return 0;
 }
+std::int32_t captureDocument(){
+    if(!validHost())return -1;pendingDocument=nil;
+    NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
+    NSData* data=inputFile(directory,@"document-context.txt");
+    if(!data)return -2;
+    unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
+    NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSRange first=[text rangeOfString:@"\n"];if(!text||first.location==NSNotFound)return -3;
+    NSRange second=[text rangeOfString:@"\n" options:0 range:NSMakeRange(NSMaxRange(first),text.length-NSMaxRange(first))];if(second.location==NSNotFound)return -3;
+    NSString* index=[text substringToIndex:first.location];NSScanner* scanner=[NSScanner scannerWithString:index];NSInteger number=-1;
+    if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return -3;
+    pendingDocument=@{@"index":@(number),@"name":[text substringWithRange:NSMakeRange(NSMaxRange(first),second.location-NSMaxRange(first))],@"ooxml":[text substringFromIndex:NSMaxRange(second)]};
+    return 0;
+}
+std::int32_t clearDocument(){if(!validHost())return -1;pendingDocument=nil;return 0;}
 }
 #define RIBBON_EXPORT(name,expression) extern "C" __attribute__((visibility("default"))) std::int32_t name(){@autoreleasepool{return expression;}}
 RIBBON_EXPORT(MathTypeBridgeRibbonOpen,openTool(@"editor"))
@@ -81,3 +101,6 @@ RIBBON_EXPORT(MathTypeBridgeRibbonRight,prepare(@"numbered-right"))
 RIBBON_EXPORT(MathTypeBridgeRibbonLeft,prepare(@"numbered-left"))
 RIBBON_EXPORT(MathTypeBridgeRibbonNumber,prepare(@"inline",@"ribbon-number"))
 RIBBON_EXPORT(MathTypeBridgeRibbonChapter,prepare(@"inline",@"ribbon-chapter"))
+RIBBON_EXPORT(MathTypeBridgeCaptureDocument,captureDocument())
+RIBBON_EXPORT(MathTypeBridgeClearDocumentContext,clearDocument())
+RIBBON_EXPORT(MathTypeBridgeTakeNavigation,([](){auto target=navigationTarget;navigationTarget=0;return target;})())

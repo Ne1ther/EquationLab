@@ -27,7 +27,6 @@ if (args.includes('--help')) {
   console.log(`Usage: scripts/package_release.sh [--version ${config.version}] [--build ${config.build}] [--purpose release|qa] [--app-only] [--skip-build] [--no-dmg] [--output NEW_EMPTY_PATH] [--node-version ${config.nodeVersion}]`);
   console.log('EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR supplies a frozen, host-accepted compiled Startup template + signed native bridge. It is required for release; QA may omit it and cannot install native integration.');
   console.log('The configured default is v6 optical SVG/PNG/ICNS. EQUATIONLAB_ICON_ASSETS_DIR overrides it with a prepared directory or v5/v6 alias.');
-  console.log('Optional: EQUATIONLAB_SIGN_IDENTITY="Developer ID Application: …". No credentials or notarization are performed automatically.');
   process.exit(0);
 }
 if(process.platform!=='darwin'||process.arch!=='arm64')throw Error('This release builder currently targets Apple Silicon on macOS.');
@@ -286,5 +285,4 @@ try {
   }
   await writeFile(join(output,`Equation-Lab-${version}-packaging-report.json`),JSON.stringify(report,null,2)+'\n');
   progress(`Ready: ${join(output,report.artifacts.pkg||report.artifacts.dmg||report.artifacts.app)}`);
-  progress(identity==='-'?'Ad-hoc developer preview; no Developer ID identity or notarization.':'Developer ID signed; notarization must still be completed separately.');
 } finally { await rm(temp,{recursive:true,force:true}); }

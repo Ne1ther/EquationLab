@@ -7,6 +7,7 @@ import {operation} from '../src/server.mjs';
 test('Numbered DOCX integrates live chapter fields, stable references and package settings',async()=>{
  const bytes=await createDocx([{latex:'x^{2}',layout:{mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:3}},{latex:'y^{2}',layout:{mode:'numbered-left',numberFormat:'(#C1.#E1)',chapter:3}}],{fragment:true,references:[{target:0,prefix:'见式 '}]}),r=await inspectDocx(bytes);
  assert.deepEqual(r.objects.map(o=>o.layout.numberText),['(3.1)','(3.2)']);assert.deepEqual(r.objects.map(o=>o.layout.mode),['numbered-right','numbered-left']);
+ assert.deepEqual(r.objects.map(o=>[o.layout.numberFormat,o.layout.chapter,o.layout.section]),[['(#C1.#E1)',3,1],['(#C1.#E1)',3,1]]);
  const xml=await r.zip.file('word/document.xml').async('string');assert.equal((xml.match(/SEQ ELChapter \\r 3/g)||[]).length,1);assert.ok(xml.includes('REF '+r.objects[0].layout.bookmarkName));
  assert.match(await r.zip.file('word/settings.xml').async('string'),/updateFields/);
  const opc=await flatOpc(bytes);assert.match(opc,/wordprocessingml.settings\+xml/);
@@ -40,6 +41,7 @@ test('Complex fields produced by Word remain recognizable with only cached numbe
  const bytes=await createDocx([{latex:'x^{2}',layout:{mode:'numbered-right'}}]),zip=await JSZip.loadAsync(bytes);let xml=await zip.file('word/document.xml').async('string');
  xml=xml.replace(/<w:fldSimple w:instr="(SEQ EquationLab[^"]*)" w:dirty="true">([\s\S]*?)<\/w:fldSimple>/g,(_,code,result)=>`<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>${code}</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r>${result}<w:r><w:fldChar w:fldCharType="end"/></w:r>`);zip.file('word/document.xml',xml);
  const input=await zip.generateAsync({type:'nodebuffer'}),r=await inspectDocx(input);assert.equal(r.objects[0].layout.mode,'numbered-right');assert.equal(r.objects[0].layout.numberText,'(1)');
+ assert.equal(r.objects[0].layout.numberFormat,'(#E1)');
  const changed=await arrangeDocx(input,{layout:{mode:'numbered-left'}});assert.equal((await inspectDocx(changed)).objects[0].layout.bookmarkName,r.objects[0].layout.bookmarkName);
 });
 

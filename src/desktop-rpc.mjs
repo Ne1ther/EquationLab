@@ -9,6 +9,7 @@ import {patchTypography,TYPOGRAPHY_SPACES,TYPOGRAPHY_EXTRA_SIZES} from './typogr
 import {renderNative,nativePdf,warmNativeRenderer} from './font-renderer.mjs';
 import {readEqp,writeEqp} from './eqp.mjs';
 import {readTypography} from './typography-native.mjs';
+import {previewNumberFormat} from './layout.mjs';
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
 
@@ -19,6 +20,7 @@ async function wordSession(path,payload){
 
 export async function desktopRequest(request) {
  const {action,payload={}}=request;
+ if(action==='numberingPreview')return {text:previewNumberFormat(payload.pattern,payload.values)};
  if(action==='typography-default')return {profile:factoryTypography(),spaces:TYPOGRAPHY_SPACES,extraSizes:TYPOGRAPHY_EXTRA_SIZES,factorySource:MATHTYPE_FACTORY_SOURCE};
  if(action==='preferencesImport'){
   const text=await readFile(payload.path,'utf8'),parsed=readEqp(text);
@@ -39,7 +41,14 @@ export async function desktopRequest(request) {
   else throw Error('未知图像格式');
   await writeFile(payload.output,bytes);return {path:payload.output,bytes:bytes.length};
  }
- if(action==='wordSessionRead'){const session=await wordSession('native-read',{ticket:payload.ticket});const result=await desktopRequest({action:'inspect',payload:{path:session.path}});return {...result,wordTicket:payload.ticket};}
+ if(action==='wordSessionRead'){const session=await wordSession('native-read',{ticket:payload.ticket});const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}});return {...result,activePath:session.path,activeIndex:session.document?.index??0,documentName:session.document?.name??null,hasDocumentContext:!!session.document,wordTicket:payload.ticket};}
+ if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
+ if(action==='wordSessionThumbnails'){
+  if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
+  const session=await wordSession('native-read',{ticket:payload.ticket});
+  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices}});
+  return {images:result.objects.filter(o=>payload.indices.includes(o.index)).map(o=>({index:o.index,image:o.image}))};
+ }
  if(action==='wordSessionCancel')return wordSession('native-cancel',{ticket:payload.ticket});
  if(action==='wordSessionStatus')return wordSession('native-status',{ticket:payload.ticket});
  if(action==='wordSessionSave'){
@@ -72,7 +81,7 @@ export async function desktopRequest(request) {
   const thumbnail=o=>{
    if(thumbnails.has(o.nativeSha256))return thumbnails.get(o.nativeSha256);
    const pending=thumbnailQueue.then(async()=>{
-    const rendered=await renderNative(o.ole,{maxWidth:320,maxHeight:120});
+    const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
     const png=rendered.png;
     return 'data:image/png;base64,'+png.toString('base64');
    });
@@ -81,7 +90,12 @@ export async function desktopRequest(request) {
   const entries=await Promise.all(objects.map(async o=>{
    let image=null;
    if(o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath)&&zip.file(o.imagePath))image=`data:image/${o.imagePath.toLowerCase().endsWith('.png')?'png':o.imagePath.toLowerCase().endsWith('.gif')?'gif':'jpeg'};base64,${await zip.file(o.imagePath).async('base64')}`;
-   if(!image&&!o.parseError&&!o.previewError&&o.nativeSha256){try{image=await thumbnail(o);}catch{/* Unsupported native structures remain explicitly read-only. */}}
+   // Word's cached OLE image can be tiny or retain an old layout. Supported
+   // formulas get a fresh native thumbnail; defer that work on session open.
+   if(!o.parseError&&!o.previewError&&o.nativeSha256){
+    if(payload.thumbnails===false)image=null;
+    else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);}catch{/* Preserve the stored preview if the native renderer cannot display it. */}}
+   }
    return {index:o.index,part:o.part,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
   }));
   return {path:payload.path,objects:entries};

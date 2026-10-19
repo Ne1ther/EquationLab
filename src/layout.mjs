@@ -73,6 +73,12 @@ function formatNumber(n,format){
  for(const [value,symbol]of [[1000,'M'],[900,'CM'],[500,'D'],[400,'CD'],[100,'C'],[90,'XC'],[50,'L'],[40,'XL'],[10,'X'],[9,'IX'],[5,'V'],[4,'IV'],[1,'I']])while(left>=value){result+=symbol;left-=value;}
  return format==='I'?result:result.toLowerCase();
 }
+
+/** The inspector and Word export use exactly the same numbering grammar. */
+export function previewNumberFormat(pattern,{chapter=1,section=1,equation=1}={}){
+ const values={C:int(chapter,'chapter'),S:int(section,'section'),E:int(equation,'equation')};
+ return numberFormat(pattern).map(token=>token.literal??formatNumber(values[token.counter],token.format)).join('');
+}
 function numberRuns(tokens,values,{resetEquation=false}={}){
  const runs=[],text=[];
  for(const token of tokens){

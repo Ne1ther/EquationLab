@@ -3,7 +3,16 @@ import assert from 'node:assert/strict';
 import {nativePdf,renderNative} from '../src/font-renderer.mjs';
 import {makeNewOle} from '../src/new-formula.mjs';
 import {inspectOle,replaceOleLatex,oleLatex} from '../src/native.mjs';
-import {outlineCommands,vectorPdfRequest} from '../src/vector-pdf.mjs';
+import {outlineCommands,vectorPdfRequest,vectorInkBounds} from '../src/vector-pdf.mjs';
+
+test('Ink bounds measure transformed Bezier extrema and intersect nested viewports',()=>{
+ const svg='<svg viewBox="0 0 10 10"><g transform="translate(-5 2) scale(2)"><path d="M0 0Q10 20 20 0"/></g></svg>';
+ assert.deepEqual(vectorInkBounds(vectorPdfRequest(svg,1,1)),[-5,2,35,22]);
+ const cubic='<svg viewBox="0 0 10 10"><path d="M0 0C0 20 20 20 20 0"/></svg>';
+ assert.deepEqual(vectorInkBounds(vectorPdfRequest(cubic,1,1)),[0,0,20,15]);
+ const clipped='<svg viewBox="0 0 100 100"><svg x="10" y="20" width="30" height="40" viewBox="0 0 30 40"><path d="M0 -100L30 100"/></svg></svg>';
+ assert.deepEqual(vectorInkBounds(vectorPdfRequest(clipped,1,1)),[10,20,40,60]);
+});
 
 test('Native outlines become PDF vector paths without bitmap XObjects',async()=>{
  for(const latex of ['x+1','\\frac{a+b}{\\sqrt{x^2+y^2}}','\\int_0^1 x^2','\\iint_D f(x,y)','\\begin{bmatrix}a&b\\\\c&d\\end{bmatrix}','\\begin{vmatrix}a&b\\\\c&d\\end{vmatrix}','\\hat{x}+\\sin{x}']){

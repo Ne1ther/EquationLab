@@ -84,6 +84,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     var wordTicket: String?
     private var editorReady = false
     private var wordSessionDelivered = false
+    private var wordOpenStarted: CFAbsoluteTime?
     private var nativeService: Process?
     private var serviceOutput = Data()
     func bundledNodeURL() -> URL? {
@@ -193,24 +194,39 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             }
             ensureNativeService(); showEditorWindow(); return
         }
-        if url.scheme == "equationlab", url.host == "wake", url.path.isEmpty, url.query == nil, url.fragment == nil { ensureNativeService(); showEditorWindow(); return }
+        if url.scheme == "equationlab", url.host == "wake", url.path.isEmpty, url.query == nil, url.fragment == nil { ensureNativeService(); return }
         guard url.scheme == "equationlab", url.host == "word-edit", url.query == nil, url.fragment == nil else { return }
         let ticket = String(url.path.dropFirst())
         guard ticket.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return }
         guard wordTicket == nil || wordTicket == ticket else { return }
-        if wordTicket == ticket && wordSessionDelivered { showEditorWindow(); return }
+        if wordTicket == ticket { return }
+        wordOpenStarted = CFAbsoluteTimeGetCurrent()
         wordTicket = ticket; wordSessionActive = true; wordSessionDelivered = false
         if editorReady { deliverWordSession() }
-        showEditorWindow()
     }
     private func showEditorWindow() { editorWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     private func deliverWordSession() {
         guard !wordSessionDelivered, let ticket = wordTicket, let web = webView else { return }
         wordSessionDelivered = true
-        web.callAsyncJavaScript("await window.nativeOpenWordSession(ticket)", arguments: ["ticket": ticket], in: nil, in: .page) { [weak self] result in
-            if case .failure = result { self?.wordSessionDelivered = false }
-            else { self?.showEditorWindow() }
+        web.callAsyncJavaScript("return await window.nativeOpenWordSession(ticket)", arguments: ["ticket": ticket], in: nil, in: .page) { [weak self] result in
+            guard let self else { return }
+            if case .success(let ready) = result, ready as? Bool == true {
+                if let started = self.wordOpenStarted {
+                    let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1000
+                    EditorLifecycleLog.logger.info("word_editor_ready ms=\(elapsed, format: .fixed(precision: 1))")
+                }
+            } else { self.wordSessionDelivered = false }
+            self.showEditorWindow()
         }
+    }
+    func returnToWord(hideEditor: Bool = true) {
+        if hideEditor { editorWindow?.orderOut(nil) }
+        // Retain the window and engine so the next OLE activation is warm.
+        if let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first {
+            word.activate(options: [])
+        }
+        if hideEditor { EditorLifecycleLog.logger.info("word_editor_hidden") }
+        else { EditorLifecycleLog.logger.info("word_navigation_handoff") }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { editorReady = true; (webView as? EquationWKWebView)?.recordLifecycle("loaded"); (webView as? EquationWKWebView)?.syncAppearance(); syncInterfaceLanguage(); deliverWordSession() }
     func invoke(_ function: String, argument: Int? = nil) { webView?.evaluateJavaScript("window.\(function)?.(\(argument.map(String.init) ?? ""))", completionHandler: nil) }
@@ -233,6 +249,12 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             let elapsed = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
             EditorLifecycleLog.logger.info("interaction action=\(action, privacy: .public) editor_ms=\(elapsed, format: .fixed(precision: 2))")
             if case .failure(let error) = result { self?.state.message = error.localizedDescription; self?.state.messageError = true }
+        }
+    }
+    func previewNumbering(_ pattern: String, chapter: Int, section: Int, equation: Int, completion: @escaping (String?) -> Void) {
+        guard let root = Bundle.main.resourceURL?.appendingPathComponent("engine"), let node = bundledNodeURL() else { completion(nil); return }
+        engine.request(id: UUID().uuidString, action: "numberingPreview", payload: ["pattern": pattern, "values": ["chapter": chapter, "section": section, "equation": equation]], node: node, root: root) { result in
+            DispatchQueue.main.async { completion((result["data"] as? [String: Any])?["text"] as? String) }
         }
     }
     func fieldBinding(_ id: String, fallback: String) -> Binding<String> {
@@ -280,7 +302,11 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if action == "state" {
             if let active = payload["wordSession"] as? Bool {
                 if active { wordSessionActive = true }
-                else if payload["wordSessionEnded"] as? Bool == true { wordSessionActive = false; wordTicket = nil; wordSessionDelivered = false }
+                else if payload["wordSessionEnded"] as? Bool == true {
+                    let wasActive = wordSessionActive
+                    wordSessionActive = false; wordTicket = nil; wordSessionDelivered = false
+                    if wasActive { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
+                }
             }
             reply(id, ["ok": true, "data": [:]]); return
         }

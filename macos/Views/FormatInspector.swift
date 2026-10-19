@@ -92,19 +92,21 @@ struct FormatInspector: View {
     private var documentSections: some View {
         Group {
             InspectorSection("Word 编排") {
-                ForEach(bridge.state.layout) { field in
+                ForEach(bridge.state.layout.filter { $0.id != "layout-format" }) { field in
                     if !field.options.isEmpty {
                         Picker(bridge.t(field.label), selection: bridge.fieldBinding(field.id, fallback: field.value)) {
                             ForEach(field.options) { Text(bridge.t($0.label)).tag($0.value) }
-                        }.controlSize(.small)
+                        }.controlSize(.small).disabled(field.disabled)
                     } else {
                         LabeledContent(bridge.t(field.label)) {
                             TextField(bridge.t(field.label), text: bridge.fieldBinding(field.id, fallback: field.value))
-                                .textFieldStyle(.roundedBorder).frame(maxWidth: 160)
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 160).disabled(field.disabled)
                         }
                     }
                 }
-                Text(bridge.t("#C 为章、#S 为节、#E 为公式。编号与引用使用 Word 域。")).font(.caption2).foregroundStyle(.secondary)
+                if let format = bridge.state.layout.first(where: { $0.id == "layout-format" }) {
+                    NumberingFormatEditor(bridge: bridge, field: format).id(bridge.state.selected)
+                }
                 if bridge.state.canArrange {
                     Toggle(bridge.t("应用到文档全部独立公式"), isOn: Binding(get: { bridge.state.arrangeAll }, set: { bridge.action("arrangeAll", ["value": $0]) }))
                         .font(.caption).toggleStyle(.checkbox)

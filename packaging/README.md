@@ -1,41 +1,19 @@
-# Equation Lab release packaging
+# 打包
 
-The distribution channel is GitHub Releases. `scripts/package_release.sh` creates a self-contained Apple Silicon application, a complete App + Word `.pkg`, ZIP and optional read-only DMG. The complete PKG is the primary download for ordinary users. Recipients need no Node, npm, Swift, Xcode, Python, source checkout, local compilation, macro import or plugin-folder selection. The current candidate is 0.5.9 build46 under `dist/0.5.9-build46/`, with signed update manifests and the existing Word discovery and Startup relocation fixes. The replacement rendering resources are retained. Keep only the current installer locally after validation. This workflow does not submit the app to the Mac App Store.
-
-The builder uses v6 optical icon assets, release Swift executables and official Node24.21.0 verified against the vendor SHA256 manifest. It installs locked production dependencies into a private staging tree, applies `prune-dependencies.mjs`, verifies production entries and internal symlinks, preserves licenses, and strips only Node local symbols before nested signing. Native dependencies outside system libraries are rejected. No private key, developer certificate, vendor installer or REA binary is shipped.
+版本与运行时配置在 `packaging/release.json`。先执行 `npm ci`，使用现有脚本构建：
 
 ```sh
-EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.11" \
+EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.12" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-  ./scripts/package_release.sh --output "$PWD/dist/NEW_EMPTY_RELEASE_DIRECTORY"
+./scripts/package_release.sh --version 0.6.0 --build 49 --app-only --no-dmg --output dist/0.6.0-build49
 ```
 
-For repeat local builds, `EQUATIONLAB_NODE_RUNTIME_CACHE` can reuse a trusted, previously verified runtime. The cache contains `bin/node`, `LICENSE`, and `runtime-cache.json` with schema `equationlab.node-runtime-cache.v1`, the exact Node `version`, `source`, optional `archiveSha256`, and SHA-256 values in `files` for both files. The builder checks the version and digests, uses the local npm build tool, and records that provenance. The default still downloads and verifies the official Node archive. Cache files stay outside the source export.
+安装包包含 App、独立 Node 运行时、生产依赖、字体、预览资源、Word 模板与辅助组件。运行路径相对 App 定位；无需用户安装开发工具。
 
-A release requires a frozen real Word-compiled template and host-accepted signed helper. `--purpose qa` can omit these and clearly disables native installation. Freezing uses `word-native-installer/artifacts.mjs` with matching source/template/helper hashes and real cold AutoExec acceptance. ZIP extraction and DMG read-only engine execution receive fresh signature checks.
+Word 模板须在真实 Word 中导入全部模块、编译、保存，并通过冷启动加载检查。`word-native-installer/artifacts.mjs` 按模板、源码、原生组件和验收记录的哈希冻结产物。VBA 导入文件使用 CRLF 行尾；发布时核对所有模块与源码一致，并实际重开 Word 验证入口和文档事件。
 
-Starting with 0.5.8, complete releases also require the local Ed25519 update-signing key. The builder verifies that it matches `updater/UpdateTrust.swift` and emits `EquationLab-update.json` plus `SHA256SUMS.txt`. Upload both with the PKG. Update notes in `packaging/update-notes.json` must match the release version. The private key stays outside Git and the app bundle; preserve and securely back it up. See [application updates](../docs/updates.md) for the client behavior and trust boundary. Source builds and QA builds do not need the release key.
+安装器从 Word 设置中检测 Startup 位置，只管理本产品记录的文件。安装前检查 Word 和 App 已退出；安装后验证用户安装记录、后台服务和新 Word 进程的加载记录。
 
-`Contents/Resources/runtime/bin/node` is the runtime; `engine/` holds the renderer and production dependencies, and `engine/bin/EquationFontMetrics` is the CoreText helper. All runtime paths are bundle-relative. Node exported symbols are compared before and after stripping; native Word artifacts keep their exact host-accepted signatures.
+完整发布上传 `Equation-Lab-0.6.0.pkg`、`EquationLab-update.json`、`SHA256SUMS.txt`。更新密钥只保存在本地，公共验证密钥在 `updater/UpdateTrust.swift`；不要把私钥放进 Git 或 App。
 
-The complete PKG installs the App and native Word integration automatically. The App toolbar and Word menu expose an Office plugin manager. A previously registered user installation can update directly through the App; first installation and uninstall use bundled system installers. Neither path asks the user to choose a plugin folder.
-
-If macOS denies access to Office's shared container, the manager offers a system `NSOpenPanel` focused on `UBF8T346G9.Office`. The explicit selection grants access for reading the Startup setting and managing owned plugin files; a security-scoped bookmark keeps the choice across app restarts. This is separate from selecting Word's Startup location, which still comes from Word's setting. Full Disk Access is not required.
-
-CLI entry checks must compare canonical file paths. PackageKit starts scripts through `/tmp`, while Node resolves module URLs to `/private/tmp`; comparing the uncanonicalized strings silently skipped both hooks in earlier packages. Regression tests launch the real CLI files through a symlinked directory and require an explicit response. A successful system receipt alone is insufficient: validate a fresh Word installation record, installed components, background service and cold Word registration after the package runs.
-
-The native integration combines the compiled global RibbonX `.dotm`, adjacent signed helper and generated install context. Cold Word AutoExec writes a receipt bound to install ID, template/helper hashes, version and live Word PID. Verify distinguishes a changed Startup location, waiting for restart, and actual registration. The installer reads only Word's `STARTUP-PATH` from the Office user registry, recognizes localized directory layouts, and relocates hash-owned components when the location changes. Preflight makes no changes; failed relocation restores the previous installation, and unrelated files are preserved. Installer's native `must-close` prompt runs before installation, with a second process check in the privileged script. Word's macro policy remains in effect. A login LaunchAgent maintains the local native transport after the App closes.
-
-The previous Web sideload manifest is backed up and removed only when its installed hash matches its ownership record. A fresh native installation does not require Office.js, a local HTTPS certificate or developer add-in activation. The older manual NSOpenPanel/Web workflows are development history, not the current user installation flow.
-
-The standalone App works without Word. Current Office integration targets Word only. Full original MathType parity remains unverified; see [current feature scope](../docs/features.md).
-
-```sh
-node --test packaging/word-native-installer/installer.test.mjs
-```
-
-The builder checks the relocated engine using its bundled runtime and dependencies, preserves the frozen Word component signatures, and verifies the final application and extracted ZIP signatures. Real Word editing and fresh-machine installation are separate validation steps.
-
-By default signing is ad-hoc, and the PKG is unsigned. Open-source publication and GitHub preview releases do not depend on App Store submission or buying a signing identity. macOS may warn about or block downloaded unsigned/unnotarized artifacts, so the current preview must not be described as friction-free on every fresh Mac.
-
-Optional direct-distribution signing uses `EQUATIONLAB_SIGN_IDENTITY` for a real existing Developer ID Application identity and `EQUATIONLAB_INSTALLER_SIGN_IDENTITY` for a Developer ID Installer identity. These certificates and notarization support distribution outside the Mac App Store; GitHub can remain the download channel. No Apple account credentials are read, and notarization is not automatic. A Gatekeeper policy override never counts as distribution trust. See [Apple Developer ID](https://developer.apple.com/developer-id/) and [Apple's downloaded-software guidance](https://support.apple.com/102445).
+源码导出使用 `node packaging/export-source.mjs --review --output dist/source-review`，输出目录须不存在。主仓库保留源码、文档和演示，安装包放 GitHub Releases。

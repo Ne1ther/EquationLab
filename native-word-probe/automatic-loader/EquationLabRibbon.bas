@@ -79,21 +79,10 @@ Private Function NextNumber() As Long
     NextNumber = count + 1
 End Function
 
-Private Sub WriteUtf8(ByVal path As String, ByVal value As String)
+Public Sub ELWriteUtf8(ByVal path As String, ByVal value As String)
     Dim bytes() As Byte, i As Long, used As Long, code As Long, file As Integer
-    ReDim bytes(0 To Len(value) * 3 + 3)
-    For i = 1 To Len(value)
-        code = AscW(Mid$(value, i, 1)) And &HFFFF&
-        If code < &H80 Then
-            bytes(used) = code: used = used + 1
-        ElseIf code < &H800 Then
-            bytes(used) = &HC0 Or (code \ 64): bytes(used + 1) = &H80 Or (code And 63): used = used + 2
-        Else
-            bytes(used) = &HE0 Or (code \ 4096): bytes(used + 1) = &H80 Or ((code \ 64) And 63): bytes(used + 2) = &H80 Or (code And 63): used = used + 3
-        End If
-    Next
-    If used = 0 Then Exit Sub
-    ReDim Preserve bytes(0 To used - 1)
+    If Len(value) = 0 Then Exit Sub
+    EncodeTextUtf8 value, bytes
     file = FreeFile
     Open path For Output As #file
     Close #file
@@ -109,7 +98,7 @@ Private Sub InsertEquation(ByVal kind As String)
     start = Selection.Start
     Set target = Selection.Range.Duplicate
     original = target.Text
-    WriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & Preference("EquationLabChapter", "1") & vbLf & Preference("EquationLabSection", "1") & vbLf & CStr(NextNumber()) & vbLf
+    ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & Preference("EquationLabChapter", "1") & vbLf & Preference("EquationLabSection", "1") & vbLf & CStr(NextNumber()) & vbLf
     NativeTool kind
     If Selection.Start <> start Or Selection.End <> start Or target.Text <> original Then Err.Raise vbObjectError + 7347, "Equation Lab", "The document cursor changed; no equation was inserted."
     beforeLength = ActiveDocument.Content.End
@@ -119,6 +108,7 @@ Private Sub InsertEquation(ByVal kind As String)
         If equation.Range.Start >= start And equation.Range.Start < insertedEnd Then
             If IsEquation(equation) Then
                 equation.Range.Select
+                ELCaptureEquation equation
                 equation.OLEFormat.Activate
                 Exit Sub
             End If
@@ -142,6 +132,7 @@ Private Sub EditEquation()
     If equations.count = 0 Then Set equations = Selection.Paragraphs(1).Range.InlineShapes
     If equations.count <> 1 Then Err.Raise vbObjectError + 7349, "Equation Lab", "Select one MathType equation, or place the cursor in its own paragraph."
     If Not IsEquation(equations(1)) Then Err.Raise vbObjectError + 7350, "Equation Lab", "The selected object is not a MathType equation."
+    ELCaptureEquation equations(1)
     equations(1).OLEFormat.Activate
 End Sub
 
@@ -197,7 +188,7 @@ End Sub
 Private Sub InsertNumber()
     RequireDocument
     If Selection.Start <> Selection.End Then Err.Raise vbObjectError + 7352, "Equation Lab", "Place an empty cursor before inserting a number."
-    WriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & Preference("EquationLabChapter", "1") & vbLf & Preference("EquationLabSection", "1") & vbLf & CStr(NextNumber()) & vbLf
+    ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & Preference("EquationLabChapter", "1") & vbLf & Preference("EquationLabSection", "1") & vbLf & CStr(NextNumber()) & vbLf
     InsertPreparedFragment "Number"
 End Sub
 
@@ -240,7 +231,10 @@ Private Sub UpdateNumbers()
     Dim field As Field, code As String
     For Each field In ActiveDocument.Fields
         code = Trim$(field.Code.Text)
-        If Left$(code, 15) = "SEQ EquationLab" Or Left$(code, 7) = "REF EL_" Or Left$(code, 13) = "SEQ ELChapter" Or Left$(code, 13) = "SEQ ELSection" Then field.Update
+        If Left$(code, 15) = "SEQ EquationLab" Or Left$(code, 13) = "SEQ ELChapter" Or Left$(code, 13) = "SEQ ELSection" Then field.Update
+    Next
+    For Each field In ActiveDocument.Fields
+        If Left$(Trim$(field.Code.Text), 7) = "REF EL_" Then field.Update
     Next
 End Sub
 
@@ -265,6 +259,39 @@ Private Sub SetChapter()
     If CDbl(chapter) < 1 Or CDbl(chapter) > 32767 Or CDbl(chapter) <> Fix(CDbl(chapter)) Or CDbl(section) < 1 Or CDbl(section) > 32767 Or CDbl(section) <> Fix(CDbl(section)) Then Exit Sub
     SavePreference "EquationLabChapter", CStr(CLng(chapter))
     SavePreference "EquationLabSection", CStr(CLng(section))
-    WriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & CStr(CLng(chapter)) & vbLf & CStr(CLng(section)) & vbLf & CStr(NextNumber()) & vbLf
+    ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & CStr(CLng(chapter)) & vbLf & CStr(CLng(section)) & vbLf & CStr(NextNumber()) & vbLf
     InsertPreparedFragment "Chapter"
+End Sub
+
+Private Sub EncodeTextUtf8(ByVal value As String, ByRef bytes() As Byte)
+    Dim i As Long
+    Dim used As Long
+    Dim code As Long
+    Dim following As Long
+    ReDim bytes(0 To Len(value) * 3)
+    i = 1
+    Do While i <= Len(value)
+        code = AscW(Mid$(value, i, 1)) And &HFFFF&
+        If code = 0 Then Err.Raise vbObjectError + 7308, "Equation Lab", "Native string contains NUL."
+        If code >= &HD800& And code <= &HDBFF& Then
+            If i = Len(value) Then Err.Raise vbObjectError + 7308, "Equation Lab", "Invalid UTF-16 path."
+            following = AscW(Mid$(value, i + 1, 1)) And &HFFFF&
+            If following < &HDC00& Or following > &HDFFF& Then Err.Raise vbObjectError + 7308, "Equation Lab", "Invalid UTF-16 path."
+            code = &H10000 + (code - &HD800&) * 1024 + following - &HDC00&
+            i = i + 1
+        ElseIf code >= &HDC00& And code <= &HDFFF& Then
+            Err.Raise vbObjectError + 7308, "Equation Lab", "Invalid UTF-16 path."
+        End If
+        If code < &H80& Then
+            bytes(used) = CByte(code): used = used + 1
+        ElseIf code < &H800& Then
+            bytes(used) = CByte(&HC0& Or (code \ 64)): bytes(used + 1) = CByte(&H80& Or (code And 63)): used = used + 2
+        ElseIf code < &H10000 Then
+            bytes(used) = CByte(&HE0& Or (code \ 4096)): bytes(used + 1) = CByte(&H80& Or ((code \ 64) And 63)): bytes(used + 2) = CByte(&H80& Or (code And 63)): used = used + 3
+        Else
+            bytes(used) = CByte(&HF0& Or (code \ 262144)): bytes(used + 1) = CByte(&H80& Or ((code \ 4096) And 63)): bytes(used + 2) = CByte(&H80& Or ((code \ 64) And 63)): bytes(used + 3) = CByte(&H80& Or (code And 63)): used = used + 4
+        End If
+        i = i + 1
+    Loop
+    ReDim Preserve bytes(0 To used - 1)
 End Sub

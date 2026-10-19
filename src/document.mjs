@@ -123,15 +123,35 @@ function priorCounters(doc,paragraph){
   }}return values;
 }
 
+// Reconstruct the format from live fields, not their cached numeric text.
+function bookmarkNumberFormat(bookmark){
+  const counters={EquationLab:'E',ELChapter:'C',ELSection:'S'},formats={ARABIC:'1',ALPHABETIC:'A',alphabetic:'a',ROMAN:'I',roman:'i'};
+  const token=code=>{const m=/^\s*SEQ\s+(EquationLab|ELChapter|ELSection)\b[\s\S]*?\\\*\s+(ARABIC|ALPHABETIC|alphabetic|ROMAN|roman)\b/.exec(code);return m?'#'+counters[m[1]]+formats[m[2]]:null;};
+  let result='',depth=0,code='',failed=false;
+  const visit=node=>{
+    if(node.nodeType!==1)return;
+    if(node.namespaceURI===NS.w){
+      if(node.localName==='fldSimple'){const value=token(node.getAttributeNS(NS.w,'instr'));if(value)result+=value;else failed=true;return;}
+      if(node.localName==='fldChar'){const kind=node.getAttributeNS(NS.w,'fldCharType');if(kind==='begin'){depth++;code='';}else if(kind==='separate'){const value=token(code);if(value)result+=value;else failed=true;}else if(kind==='end')depth--;return;}
+      if(node.localName==='instrText'){code+=node.textContent;return;}
+      if(node.localName==='t'){if(!depth)result+=node.textContent;return;}
+    }
+    for(const child of Array.from(node.childNodes))visit(child);
+  };
+  for(let n=bookmark.nextSibling;n;n=n.nextSibling){if(n.localName==='bookmarkEnd'&&n.getAttributeNS(NS.w,'id')===bookmark.getAttributeNS(NS.w,'id'))break;visit(n);}
+  return !failed&&result.includes('#E')?result:null;
+}
+
 export async function inspectDocx(buffer) {
   const zip = await JSZip.loadAsync(buffer), doc = parseXml(await zip.file('word/document.xml').async('string'));
   const objects = [];
-  const parts=Object.keys(zip.files).filter(p=>/^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p));
+  const parts=Object.keys(zip.files).filter(p=>/^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p)).sort((a,b)=>a==='word/document.xml'?-1:b==='word/document.xml'?1:0);
   for (const part of parts) {
   const partDoc=part==='word/document.xml'?doc:parseXml(await zip.file(part).async('string'));
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
+  const references=new Map();for(const code of fieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
   for(const e of Array.from(partDoc.getElementsByTagNameNS(NS.o,'OLEObject'))) {
     const progId = e.getAttribute('ProgID'); if(!['Equation.DSMT4','Equation.3'].includes(progId)) continue;
@@ -148,6 +168,13 @@ export async function inspectDocx(buffer) {
     let numberText=null;if(bookmark){numberText='';let within=false;for(const node of Array.from(paragraph.childNodes)){if(node===bookmark){within=true;continue;}if(node.localName==='bookmarkEnd'&&node.getAttributeNS(NS.w,'id')===bookmark.getAttributeNS(NS.w,'id'))break;if(within&&node.nodeType===1)numberText+=Array.from(node.getElementsByTagNameNS(NS.w,'t')).map(n=>n.textContent).join('');}}
     const layout={owned,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null,numberText};
     layout.mode=fields.some(code=>/SEQ EquationLab/.test(code))?(Array.from(paragraph.childNodes).indexOf(bookmark)<Array.from(paragraph.childNodes).indexOf(e.parentNode.parentNode)?'numbered-left':'numbered-right'):owned&&paragraph.getElementsByTagNameNS(NS.w,'jc')[0]?.getAttributeNS(NS.w,'val')==='center'?'display':'inline';
+    if(!owned)layout.mode='unknown';
+    if(bookmark){
+      const context=priorCounters(partDoc,paragraph);layout.numberFormat=bookmarkNumberFormat(bookmark);layout.chapter=context.ELChapter;layout.section=context.ELSection;
+      const code=fields.find(code=>/^\s*SEQ\s+EquationLab\b/i.test(code)&&!/\\c\b/.test(code));
+      const reset=code&&/\\r\s+(\d+)/.exec(code);layout.equation=code?(reset?Number(reset[1]):context.EquationLab+1):null;
+      layout.referenceCount=references.get(layout.bookmarkName)??0;
+    }
     let typography,typographyError;try{typography=readTypography(ole);}catch(error){typographyError=error.message;}
     objects.push({index:objects.length,path,part,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
   }

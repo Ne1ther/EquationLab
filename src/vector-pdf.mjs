@@ -57,6 +57,40 @@ export function outlineCommands(data){
  return out;
 }
 
+/** Drawn bounds in SVG viewBox coordinates, including transformed curves.
+ * Keep advances/empty template slots separately in the caller's layout box. */
+export function vectorInkBounds({vector}){
+ let bounds=null;
+ const merge=(a,b)=>a?[Math.min(a[0],b[0]),Math.min(a[1],b[1]),Math.max(a[2],b[2]),Math.max(a[3],b[3])]:b;
+ const point=([a,b,c,d,e,f],x,y)=>[a*x+c*y+e,b*x+d*y+f];
+ const curve=(points,t)=>{const p=points.map(x=>[...x]);for(let n=p.length-1;n>0;n--)for(let i=0;i<n;i++)for(let axis=0;axis<2;axis++)p[i][axis]=(1-t)*p[i][axis]+t*p[i+1][axis];return p[0];};
+ for(const item of vector){
+  const stroked=item.stroke!=='none'&&item.strokeWidth>0;if(item.fill==='none'&&!stroked)continue;
+  let box=null,current=[0,0],start=current;
+  for(const {op,values}of item.commands){
+   const points=[];for(let i=0;i<values.length;i+=2)points.push(point(item.matrix,values[i],values[i+1]));
+   if(op==='M'){current=start=points[0];continue;}
+   if(op==='Z')points.push(start);
+   const p=[current,...points],times=[0,1];
+   for(let axis=0;axis<2;axis++){
+    const v=p.map(x=>x[axis]);
+    if(op==='Q'){const denominator=v[0]-2*v[1]+v[2];if(denominator)times.push((v[0]-v[1])/denominator);}
+    if(op==='C'){
+     const a=-v[0]+3*v[1]-3*v[2]+v[3],b=2*(v[0]-2*v[1]+v[2]),c=v[1]-v[0];
+     if(Math.abs(a)<1e-12){if(b)times.push(-c/b);}else {const discriminant=b*b-4*a*c;if(discriminant>=0)times.push((-b+Math.sqrt(discriminant))/(2*a),(-b-Math.sqrt(discriminant))/(2*a));}
+    }
+   }
+   for(const t of times)if(t>=0&&t<=1){const [x,y]=curve(p,t);box=merge(box,[x,y,x,y]);}
+   current=points.at(-1);
+  }
+  if(!box)continue;
+  if(stroked){const [a,b,c,d]=item.matrix,margin=item.strokeWidth/2*Math.max(Math.hypot(a,b),Math.hypot(c,d))*(item.lineJoin==='miter'?10:1);box=[box[0]-margin,box[1]-margin,box[2]+margin,box[3]+margin];}
+  for(const clip of item.clips??[]){const [x,y,w,h]=clip.rect,corners=[[x,y],[x+w,y],[x,y+h],[x+w,y+h]].map(([cx,cy])=>point(clip.matrix,cx,cy)),cb=corners.reduce((b,[cx,cy])=>merge(b,[cx,cy,cx,cy]),null);box=[Math.max(box[0],cb[0]),Math.max(box[1],cb[1]),Math.min(box[2],cb[2]),Math.min(box[3],cb[3])];}
+  if(box[0]<=box[2]&&box[1]<=box[3])bounds=merge(bounds,box);
+ }
+ return bounds;
+}
+
 export function vectorPdfRequest(svg,width,height){
  if(typeof svg!=='string'||svg.length>24_000_000||/<!DOCTYPE|<!ENTITY/i.test(svg))throw Error('Invalid vector document');
  const doc=new DOMParser().parseFromString(svg,'image/svg+xml'),root=doc.documentElement,view=numbers(root.getAttribute('viewBox'));

@@ -34,7 +34,7 @@ struct EditorWindowLifecycle: NSViewRepresentable {
             closing = true
             bridge.prepareToClose { [weak self, weak sender] saved in
                 self?.closing = false
-                if saved { sender?.performClose(nil) }
+                if saved { sender?.orderOut(nil) }
             }
             return false
         }

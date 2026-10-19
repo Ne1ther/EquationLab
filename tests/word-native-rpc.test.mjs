@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFile,writeFile,access} from 'node:fs/promises';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
 import {nativeSessionOperation as sessionOperation} from '../src/word-native-session.mjs';
-import {createDocx} from '../src/document.mjs';
+import {createDocx,flatOpc} from '../src/document.mjs';
 import {makeOle,inspectOle,characters,editCharacters} from '../src/native.mjs';
 
 // This process routes RPC HTTP calls directly to an isolated in-memory service.
@@ -78,4 +78,28 @@ test('RPC validation failures keep the session editable and its original native 
  assert.equal(calls.some(c=>c.operation==='native-complete'),false);await assertEditing(source);
  const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:source.ticket}});assert.equal(read.path,source.path);assert.equal(read.objects.length,1);assert.equal(read.wordTicket,source.ticket);
  await desktopRequest({action:'wordSessionCancel',payload:{ticket:source.ticket}});assert.equal((await sessionOperation('native-poll',{ticket:source.ticket})).state,'cancelled');await assert.rejects(access(source.path),error=>error.code==='ENOENT');live.delete(source.ticket);
+});
+
+test('A live document snapshot exposes every equation and its actual layout while save remains bound to the activated duplicate',async()=>{
+ const ole=makeOle('x^3'),document=await createDocx([{ole,layout:{mode:'numbered-right',chapter:2,numberFormat:'(#C1.#E1)'}},{latex:'y^9'},{ole,layout:{mode:'numbered-left',chapter:3,section:2,numberFormat:'(#C1.#S1.#E1)'}}]);
+ const activated=inspectOle(ole).native.toString('base64'),opened=await sessionOperation('native-open',{session:String(next++),native:activated,document:{ooxml:await flatOpc(document),index:2,name:'未保存的中文文档.docx'}});live.add(opened.ticket);
+ const result=await desktopRequest({action:'wordSessionRead',payload:{ticket:opened.ticket}});
+ assert.equal(result.objects.length,3);assert.equal(result.activeIndex,2);assert.equal(result.documentName,'未保存的中文文档.docx');assert.equal(result.objects[2].layout.numberFormat,'(#C1.#S1.#E1)');assert.equal(result.objects[2].layout.mode,'numbered-left');assert.equal(result.objects[2].layout.chapter,3);assert.equal(result.objects[2].layout.section,2);
+ assert.notEqual(result.activePath,result.path);
+ await assert.rejects(save({ticket:opened.ticket,path:result.path}),/不属于当前 Word 会话/);
+ const offset=characters(inspectOle(ole).parsed).find(c=>c.char==='3').offset;
+ await save({ticket:opened.ticket,path:result.activePath},{replacements:{[offset]:'4'}});
+ assert.equal((await sessionOperation('native-poll',{ticket:opened.ticket})).native,inspectOle(editCharacters(ole,{[offset]:'4'})).native.toString('base64'));live.delete(opened.ticket);
+});
+
+test('Wrong snapshot index or native bytes cannot attach another document; navigation is single-use and drops private staging',async()=>{
+ const a=makeOle('x^3'),b=makeOle('y^9'),ooxml=await flatOpc(await createDocx([{ole:a},{ole:b}]));
+ await assert.rejects(sessionOperation('native-open',{session:String(next++),native:inspectOle(a).native.toString('base64'),document:{ooxml,index:1,name:'wrong.docx'}}),/does not match/);
+ const opened=await sessionOperation('native-open',{session:String(next++),native:inspectOle(a).native.toString('base64'),document:{ooxml,index:0,name:'test.docx'}});live.add(opened.ticket);
+ const staged=await sessionOperation('native-read',{ticket:opened.ticket});
+ for(const index of [-1,0,2,0.5])await assert.rejects(desktopRequest({action:'wordSessionNavigate',payload:{ticket:opened.ticket,index}}),/navigation target/);
+ await desktopRequest({action:'wordSessionNavigate',payload:{ticket:opened.ticket,index:1}});
+ await assert.rejects(access(staged.path));await assert.rejects(access(staged.document.path));
+ assert.deepEqual(await sessionOperation('native-poll',{ticket:opened.ticket}),{state:'navigate',index:1});
+ await assert.rejects(sessionOperation('native-poll',{ticket:opened.ticket}),/expired/);live.delete(opened.ticket);
 });

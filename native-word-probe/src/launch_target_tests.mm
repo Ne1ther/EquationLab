@@ -4,6 +4,9 @@
 #include <iostream>
 #include <stdexcept>
 
+NSDictionary* EquationLabCapturedDocumentContext(){return nil;}
+void EquationLabSetNavigationTarget(std::int32_t){}
+
 namespace bridge_probe {
 void setEditorHooks(OpenEditor,void*){}
 void setEditorCancelHook(CancelEditor){}
@@ -52,7 +55,7 @@ void runCase(NSString* url,BOOL available,BOOL failOpen,BOOL missingRunningAppli
     check([workspace.queriedBundle isEqualToString:@"app.equationlab.mac"],"wrong bundle identity");
     check(workspace.defaultHandlerCalls==0,"launch fell back to scheme handler");
     check(workspace.explicitOpenCalls==(available?1u:0u),"unexpected explicit open count");
-    if(available){check([workspace.openedApplication isEqual:workspace.targetApplication],"resolved application URL was discarded");check(workspace.openedURLs.count==1&&[workspace.openedURLs[0].absoluteString isEqualToString:url],"wake/edit URL changed");check(workspace.activated,"app activation disabled");}
+    if(available){check([workspace.openedApplication isEqual:workspace.targetApplication],"resolved application URL was discarded");check(workspace.openedURLs.count==1&&[workspace.openedURLs[0].absoluteString isEqualToString:url],"wake/edit URL changed");check(!workspace.activated,"unready editor was activated before formula delivery");}
     if(!available||failOpen||missingRunningApplication)check(result&&result.code==LaunchFailure&&[result.domain isEqualToString:@"NativeEquationTransport"],"failure not classified as LaunchFailure");
     else check(!result,"successful explicit launch failed");
 }

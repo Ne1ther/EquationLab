@@ -25,7 +25,7 @@ Private mReceiptResult As Long
 Private mBindingError As Long
 Private mPhase As String
 
-Public Sub AutoExec()
+Public Sub ELConnectNativeAtStartup()
     If mAttempted Then Exit Sub
     mAttempted = True
     ConnectDynamicBridge
@@ -174,7 +174,7 @@ Private Sub EncodeUtf8Z(ByVal value As String, ByRef bytes() As Byte)
 End Sub
 #End If
 
-Public Sub EquationLabShowConnectionStatus()
+Public Sub ELShowNativeConnectionStatus()
     MsgBox "Connected: " & CStr(mConnected) & vbCrLf & _
         "Phase: " & mPhase & vbCrLf & "Native result: " & CStr(mNativeResult) & vbCrLf & _
         "Startup receipt: " & CStr(mReceiptResult) & vbCrLf & "VBA binding error: " & CStr(mBindingError), _
