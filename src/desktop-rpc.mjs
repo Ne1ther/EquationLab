@@ -161,7 +161,7 @@ export async function desktopRequest(request) {
   await writeFile(payload.output,bytes); return {path:payload.output,bytes:bytes.length};
  }
  if(action==='editPreview') {
-  const {objects}=await inspectDocx(await readFile(payload.input)),o=objects[payload.index];
+  const {objects}=await readDocument(payload.input),o=objects[payload.index];
   if(!o||o.parseError)throw Error(o?.parseError||'公式不存在');
   const changed=payload.mode==='rebuild'?replaceOleLatex(o.ole,payload.latex):editCharacters(o.ole,payload.replacements),updated=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),latex=oleLatex(updated),p=await renderNative(updated,{raster:false});
   return {latex,nativeSha256:hash(inspectOle(updated).native),svg:p.svg};

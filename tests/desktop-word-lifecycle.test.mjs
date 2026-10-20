@@ -79,6 +79,29 @@ test('Explicit cancel works during an incoming read and a late response cannot r
  finishRead();assert.equal(await opening,false);assert.equal(c.wordTicket,null);assert.equal(c.source,null);assert.equal(c.mf.value,'');assert.equal(c.busy,false);
 });
 
+test('A delayed cancel acknowledgement cannot clear a newer Word activation',async()=>{
+ const p=editor(),c=p.context;installCommit(c);
+ const a='a'.repeat(64),b='b'.repeat(64);
+ assert.equal(await c.window.nativeOpenWordSession(a),true);
+ let finishCancel,startedCancel;const endedTickets=[],cancelledTickets=[];const originalNative=c.native;
+ const cancelStarted=new Promise(resolve=>{startedCancel=resolve;});
+ const cancelAck=new Promise(resolve=>{finishCancel=resolve;});
+ c.native=async(action,payload)=>{if(action==='wordSessionCancel'){cancelledTickets.push(payload.ticket);return {};}return originalNative(action,payload);};
+ c.syncSidebar=async(ended,_navigating,_switching,endedWordTicket)=>{if(ended){endedTickets.push(endedWordTicket);assert.deepEqual(cancelledTickets,[a],'cancel the captured native ticket before waiting for the ended-state acknowledgement');startedCancel();await cancelAck;}};
+ const cancelling=c.window.nativeCancelWordSession();await cancelStarted;
+ assert.deepEqual(cancelledTickets,[a]);
+ assert.equal(c.wordTicket,null);
+ assert.equal(await c.window.nativeOpenWordSession(b),true);
+ const newerSource=c.source,newerSelection=c.selected;
+ finishCancel();assert.equal(await cancelling,true);
+ assert.equal(c.wordTicket,b,'the newer ticket must remain active');
+ assert.strictEqual(c.source,newerSource,'the cancelled activation must not clear the newer document');
+ assert.strictEqual(c.selected,newerSelection,'the cancelled activation must not clear the newer selection');
+ assert.equal(c.mf.value,b.slice(0,8),'the cancelled activation must not clear the newer formula');
+ assert.deepEqual(endedTickets,[a],'the ended state must identify the ticket it closes');
+ assert.deepEqual(cancelledTickets,[a],'a late cancel acknowledgement must not cancel the newer ticket');
+});
+
 test('Cancel during an actual Word save keeps the draft until the bounded acknowledgement finishes',async()=>{
  const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mf.value='changed';
  c.ensureValid=async()=>{};c.sourceEditMode=()=> 'rebuild';c.rulerPatch=()=>({});

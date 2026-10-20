@@ -5,8 +5,10 @@
 ```sh
 EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.18" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --version 0.6.1 --build 54 --app-only --no-dmg --output dist/0.6.1-build55
+./scripts/package_release.sh --no-dmg --output dist/release
 ```
+
+版本和构建号默认读取配置；输出目录须为空。本地功能迭代用 `./scripts/build_and_run.sh --word-test run`，不运行安装器。
 
 安装包包含 App、独立 Node 运行时、生产依赖、字体、预览资源、Word 模板与辅助组件。运行路径相对 App 定位；无需用户安装开发工具。
 

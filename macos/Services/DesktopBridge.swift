@@ -86,7 +86,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var pendingWordTickets: [String] = []
     private var deliveringWordTicket: String?
     private var revealEditorWhenAttached = false
-    private var wordPresentationGeneration = 0
+    private(set) var wordPresentationGeneration = 0
     private var focusEventSequence = 0
     private func recordWindowEvent(_ event: String, reason: String) {
         focusEventSequence += 1
@@ -176,6 +176,26 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if !NSApp.isActive { NSApp.activate() }
     }
     func editorWindowDidAttach() { if revealEditorWhenAttached { showEditorWindow(reason: "window-attached") } }
+    // Returns whether this state update should hand the visible editor back to Word.
+    func updateWordSessionState(_ payload: [String: Any]) -> Bool {
+        guard let active = payload["wordSession"] as? Bool else { return false }
+        if active {
+            wordSessionActive = true; wordSessionDelivered = true
+            if let ticket = payload["wordTicket"] as? String { wordTicket = ticket }
+        } else if payload["wordSessionEnded"] as? Bool == true {
+            guard let ended = payload["endedWordTicket"] as? String,
+                  ended == wordTicket || ended == deliveringWordTicket || pendingWordTickets.contains(ended) else { return false }
+            let wasActive = wordSessionActive && ended == wordTicket
+            // An older cancellation must not invalidate a replacement already
+            // being delivered, clear its ticket, or hide its window.
+            if ended == deliveringWordTicket { wordPresentationGeneration += 1 }
+            if ended == wordTicket { wordSessionActive = false; wordTicket = nil; wordSessionDelivered = false }
+            pendingWordTickets.removeAll { $0 == ended }
+            let replacing = (deliveringWordTicket != nil && deliveringWordTicket != ended) || !pendingWordTickets.isEmpty
+            return wasActive && !replacing && payload["wordSessionSwitching"] as? Bool != true
+        }
+        return false
+    }
     private func deliverWordSession() {
         guard editorReady, deliveringWordTicket == nil, !pendingWordTickets.isEmpty, let web = webView else { return }
         let ticket = pendingWordTickets.removeFirst()
@@ -248,7 +268,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         webView.callAsyncJavaScript("return await window.nativePrepareToClose()", arguments: [:], in: nil, in: .page) { [weak self] result in
             switch result {
             case .success(let value):
-                let accepted = value as? Bool == true
+                // A completed close belongs to the session that requested it.
+                // Do not hide or terminate a replacement opened during its ACK.
+                let accepted = value as? Bool == true && self?.hasWordSessionOrRequest != true
                 self?.recordWindowEvent("close_result", reason: accepted ? "accepted" : "kept-draft")
                 completion(accepted)
             case .failure(let error):
@@ -314,18 +336,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         guard let id = body["id"] as? String else { return }
         var payload = body["payload"] as? [String: Any] ?? [:]
         if action == "state" {
-            if let active = payload["wordSession"] as? Bool {
-                if active {
-                    wordSessionActive = true; wordSessionDelivered = true
-                    if let ticket = payload["wordTicket"] as? String { wordTicket = ticket }
-                }
-                else if payload["wordSessionEnded"] as? Bool == true {
-                    let wasActive = wordSessionActive
-                    wordPresentationGeneration += 1
-                    wordSessionActive = false; wordTicket = nil; wordSessionDelivered = false
-                    if wasActive && payload["wordSessionSwitching"] as? Bool != true { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
-                }
-            }
+            if updateWordSessionState(payload) { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
             reply(id, ["ok": true, "data": [:]]); return
         }
         if action == "wordSessionWillSave" {

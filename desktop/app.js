@@ -101,7 +101,7 @@ let favorites;try{favorites=JSON.parse(localStorage.getItem('equationlab.favorit
 function renderFavorites(){$('favorites').replaceChildren();for(const value of favorites){const b=document.createElement('button');b.className='favorite';b.textContent=value;b.title=value;b.onclick=()=>{if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return;}window.nativeNew();mf.value=value;changed();};$('favorites').append(b);}}
 $('add-favorite').onclick=()=>{if(!mf.value.trim())return;favorites=[mf.value,...favorites.filter(v=>v!==mf.value)].slice(0,20);localStorage.setItem('equationlab.favorites',JSON.stringify(favorites));renderFavorites();message('已收藏当前公式');};renderFavorites();validate();
 
-function syncSidebar(ended=false,navigating=false,switching=false){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,objects:(source?.objects||[]).map(o=>({id:o.index,label:`${o.index+1}. ${o.latex||'暂不支持的结构'}`,detail:o.error?'只读 · '+o.progId:'原生 MathType · '+o.application})),favorites,selected:selected?.index??null}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
+function syncSidebar(ended=false,navigating=false,switching=false,endedWordTicket=null){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,...endedWordTicket?{endedWordTicket}:{},objects:(source?.objects||[]).map(o=>({id:o.index,label:`${o.index+1}. ${o.latex||'暂不支持的结构'}`,detail:o.error?'只读 · '+o.progId:'原生 MathType · '+o.application})),favorites,selected:selected?.index??null}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
 window.nativeSelectObject=async index=>{
  if(busy||wordNavigating||!source?.objects[index]||selected?.index===index)return;
  if(!wordTicket){selectObject(index);return;}
@@ -201,7 +201,7 @@ window.nativeCommitWordSession=()=>{
  })().catch(error=>{if(commitGeneration===(window.wordSessionGeneration??0))message(error.message,true);return false;});
  return wordCommitRunning.finally(()=>{window.wordSaveInFlight=false;wordCommitRunning=null;});
 };
-async function finishWordSave(){wordTicket=null;wordSaveQueued=false;await syncSidebar(true);resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已保存回 Word 原生公式。');}
+async function finishWordSave(){const endedTicket=wordTicket;wordTicket=null;wordSaveQueued=false;await syncSidebar(true,false,false,endedTicket);if(wordTicket)return;resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已保存回 Word 原生公式。');}
 async function waitForWordSave(){
  message('正在保存回 Word…');const deadline=Date.now()+20000,ticket=wordTicket,generation=window.wordSessionGeneration??0;
  while(Date.now()<deadline){
@@ -226,7 +226,7 @@ window.nativePrepareToClose=async()=>{
  if(!saved&&wordTicket){const answer=await native('confirmWordSessionSwitch',{closing:true});if(answer.discard)return await window.nativeCancelWordSession();}
  return saved;
 };
-window.nativeCancelWordSession=async()=>{if(window.wordSaveInFlight||wordSaveQueued){message('Word 正在完成保存，请稍候。确认结果前会保留编辑内容。');return false;}const ticket=wordTicket;window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;clearTimeout(wordNavigationTimer);wordNavigating=false;wordTicket=null;wordSaveQueued=false;await syncSidebar(true);resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已结束本次编辑。');if(ticket)native('wordSessionCancel',{ticket}).catch(()=>{});controls();return true;};
+window.nativeCancelWordSession=async()=>{if(window.wordSaveInFlight||wordSaveQueued){message('Word 正在完成保存，请稍候。确认结果前会保留编辑内容。');return false;}const ticket=wordTicket;const generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;clearTimeout(wordNavigationTimer);wordNavigating=false;wordTicket=null;wordSaveQueued=false;if(ticket)native('wordSessionCancel',{ticket}).catch(()=>{});await syncSidebar(true,false,false,ticket);if(generation===(window.wordSessionGeneration??0)&&!wordTicket){resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已结束本次编辑。');controls();}return true;};
 $('word-session-save').onclick=window.nativeCommitWordSession;$('word-session-cancel').onclick=window.nativeCancelWordSession;
 
 // The native workbench owns navigation, palettes and inspectors. The existing
