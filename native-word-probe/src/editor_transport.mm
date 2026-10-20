@@ -9,6 +9,7 @@
 #include <cerrno>
 #include <algorithm>
 #include <CommonCrypto/CommonDigest.h>
+#include <os/log.h>
 
 NSDictionary* EquationLabCapturedDocumentContext();
 BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context);
@@ -27,6 +28,10 @@ std::atomic<std::uint32_t> lastCaptureState{0};
 // Diagnostic codes contain no equation, ticket, document name, or URL.
 enum : std::uint32_t { NetworkFailure=1,InvalidReply=2,LaunchFailure=3,Expired=4,ApplyFailure=5 };
 NSDate* documentCapturedAt;
+void logOpenPhase(const char* phase,CFAbsoluteTime started){
+    static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
+    os_log_info(logger,"word_open phase=%{public}s elapsed_ms=%.2f",phase,(CFAbsoluteTimeGetCurrent()-started)*1000);
+}
 NSString* nativeDigest(NSData* data){
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(data.bytes,static_cast<CC_LONG>(data.length),digest);
     NSMutableString* hex=[NSMutableString stringWithCapacity:64];for(auto value:digest)[hex appendFormat:@"%02x",value];return hex;
@@ -146,6 +151,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 
 @interface ProbeEditState : NSObject
 @property(nonatomic) std::uint64_t sessionId;
+@property(nonatomic) CFAbsoluteTime started;
 @property(nonatomic,strong) NSString* ticket;
 @property(nonatomic,strong) ProbeJsonRequest* request;
 @property(nonatomic,strong) NSDate* expires;
@@ -410,7 +416,7 @@ static ProbeEditorTransport* transport=nil;
         if(existing.ticket&&!existing.request){existing.pollScheduled=NO;++existing.pollGeneration;[self poll:existing];}
         return;
     }
-    [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
+    [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.started=CFAbsoluteTimeGetCurrent();logOpenPhase("verb",state.started);state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
     // On macOS the OLE verb can arrive before Word's selection event. Allow
     // that event to capture the live document before freezing the source binding.
     state.requiresDocumentCapture=self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil;
@@ -431,7 +437,10 @@ static ProbeEditorTransport* transport=nil;
     BOOL anchoredSelection=EquationLabDocumentContextIsPendingSelection(context);
     if(!documentCapturedAt||(!anchoredSelection&&documentCapturedAt.timeIntervalSinceNow<-.5))context=nil;
     for(ProbeEditState* state in self.edits.allValues){
-        if(!state.awaitingDocument||state.request||state.documentDeadline.timeIntervalSinceNow<=0)continue;
+        // WordOpenXML can block the main queue past the deadline. Accept a completed
+        // capture while the state still awaits it; the queued timeout callback or
+        // cleanup retires the state, while context freshness and identity checks still apply.
+        if(!state.awaitingDocument||state.request)continue;
         if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);continue;}
         if(self.captureRequest.claimed&&self.captureRequest.state==state)continue;
         NSDictionary* owned=[self documentForOwner:state];NSDictionary* candidate=context;
@@ -444,6 +453,7 @@ static ProbeEditorTransport* transport=nil;
         if([state.attemptedDocumentKey isEqual:key]){[self requestCapture:state];continue;}
         state.attemptedDocumentKey=key;
         state.documentContext=candidate;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;
+        logOpenPhase("capture-ready",state.started);
         if(candidate==context&&anchoredSelection){EquationLabConsumeDocumentSelection(context);anchoredSelection=NO;context=nil;}
         [self openState:state];
     }
@@ -495,6 +505,7 @@ static ProbeEditorTransport* transport=nil;
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(state.documentContext)body[@"document"]=state.documentContext;
     state.opening=YES;
+    logOpenPhase("service-request",state.started);
     state.request=[self request:@"/api/native-open" body:body reply:^(NSDictionary* json,NSError* error){
         ProbeEditState* current=state;current.request=nil;current.opening=NO;
         if(error){
@@ -511,6 +522,7 @@ static ProbeEditorTransport* transport=nil;
             }else[self fail:current code:NetworkFailure];return;
         }
         id ticket=json[@"ticket"],url=json[@"editorUrl"];
+        logOpenPhase("service-reply",current.started);
         NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
         if(![ticket isKindOfClass:NSString.class]||[ticket length]!=64||[ticket rangeOfCharacterFromSet:invalid].location!=NSNotFound||![url isKindOfClass:NSString.class]||![url isEqualToString:[@"equationlab://word-edit/" stringByAppendingString:ticket]]){[self fail:current code:InvalidReply];return;}
         if(![self active:current]){
@@ -528,6 +540,7 @@ static ProbeEditorTransport* transport=nil;
         // the newer document/selection. Already delivered editors retain
         // ownership until the App confirms a draft switch.
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
+        logOpenPhase("editor-launch",current.started);
         if(self.launch){if(!self.launch([url UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
         else {
             launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=state;if(![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});

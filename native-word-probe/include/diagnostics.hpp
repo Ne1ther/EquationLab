@@ -12,7 +12,7 @@ enum class Metric : std::uint32_t {
     DAdviseFormat,DAdviseAspect,RunnableQueries,SnapshotResult,SnapshotCalls,
     SaveNotifications,CloseNotifications,EditGeneration,SameAsLoad,
     SaveObjectWithoutPersistSave,DoVerbCalls,DoVerbResult,CancelCalls,CancelResult,
-    SaveCompletedWithoutSave,Count
+    SaveCompletedWithoutSave,DrawCalls,DrawResult,DrawPdfBytes,DrawMissingPreview,Count
 };
 std::int32_t diagnosticValue(std::uint32_t);
 }

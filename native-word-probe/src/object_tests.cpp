@@ -78,7 +78,7 @@ void runObjectTests(void* bundle,const InteropHooks& api,const std::vector<std::
     check(preview(activeSession,pdf.data(),pdf.size(),2540,1270)==Ok,"attach real PDF preview");
     FormatEtc pict{3,nullptr,1,-1,32};check(data->QueryGetData(&pict)==Ok,"metafile format accepted");
     check(data->DAdvise(&pict,1,&sink,&dataCookie)==Ok,"data advise");
-    auto edited=original;check(edited[239]=='3',"fixture character x3");edited[239]='4';
+    auto edited=original;edited[239]^=1;
     std::atomic<HResult> background{Ok};auto id=activeSession;
     std::thread worker([&]{background=complete(id,edited.data(),edited.size(),1);});worker.join();check(background==static_cast<HResult>(0x8001010eu),"background Word callbacks rejected");
     std::vector<std::uint8_t> bad(10);check(complete(id,bad.data(),bad.size(),1)==StorageHeaderError,"invalid native header rejected");
@@ -127,9 +127,20 @@ void runObjectTests(void* bundle,const InteropHooks& api,const std::vector<std::
     check(object->Unadvise(oleCookie)==Ok&&object->Unadvise(oleCookie)==NoConnection,"OLE unadvise");
     check(object->Advise(&sink,&oleCookie)==Ok,"close observer");
     check(object->DoVerb(0,nullptr,&site,0,nullptr,nullptr)==Ok,"pending edit for close test");id=activeSession;check(object->Close(1)==Ok&&sink.close==1&&complete(id,nullptr,0,0)==NoConnection,"Close cancels pending edit safely");
+    Site reopenedSite;reopenedSite.persist=persist;reopenedSite.storage=source;
+    check(object->DoVerb(0,nullptr,nullptr,0,nullptr,nullptr)==Unexpected,"closed owner cannot reopen without a host site");
+    check(object->DoVerb(0,nullptr,&reopenedSite,0,nullptr,nullptr)==Ok&&activeSession!=id&&openedBytes==edited,"same OLE owner reopens on a new host site with retained native data");
+    auto reopenedSession=activeSession;
+    check(reopenedSession!=id&&complete(id,edited.data(),edited.size(),1)==NoConnection&&activeSession==reopenedSession,"closed session cannot affect reopened owner");
+    check(complete(reopenedSession,nullptr,0,0)==Ok,"reopened session cancels independently");
+    Storage* reopenedSave=nullptr;check(api.createStorage(&reopenedSave)==Ok&&persist->Save(reopenedSave,0)==Ok,"reopened owner can save from its retained snapshot");
+    check(readStream(reopenedSave,u"Equation Native")==edited&&readStream(reopenedSave,u"Unrecognized future stream")==opaque,"reopened save preserves native data and unknown streams");
+    check(persist->SaveCompleted(reopenedSave)==Ok,"reopened save completes");
     check(stopSink.data==1&&stopSink.lastMedium==32&&stopSink.refs==1,"DATAONSTOP sends final real presentation and releases sink");
     check(site.refs==1&&sink.refs==1,"client/sink references balanced at close");
-    view->Release();data->Release();persist->Release();object->Release();source->Release();target->Release();afterHandsOff->Release();
+    check(object->Close(1)==Ok,"reopened owner closes cleanly");
+    check(reopenedSite.refs==1,"reopened host site reference released on close");
+    view->Release();data->Release();persist->Release();object->Release();source->Release();target->Release();afterHandsOff->Release();reopenedSave->Release();
     check(count()==0,"no surviving equation objects/sessions");
     {
         ClassFactory* f=nullptr;OleObject* o=nullptr;PersistStorage* p=nullptr;Storage* s=nullptr;

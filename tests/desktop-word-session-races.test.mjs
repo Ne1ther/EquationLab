@@ -43,9 +43,9 @@ async function withLocalNativeService(fn){
 }
 
 function createEditor(native){
- const calls=[],messages=[],elements=new Map();let timerId=0,context;
+ const calls=[],messages=[],elements=new Map();let timerId=0,clock=0,context;
  const element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
- context=vm.createContext({window:{},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,mf:{value:'',readOnly:false},
+ context=vm.createContext({window:{},performance:{now:()=>++clock},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,mf:{value:'',readOnly:false},
   $:element,controls(){},message:text=>messages.push(text),requestWorkbenchSync(){},renderObjects(){},loadWordThumbnails(){},syncSidebar:async()=>{},validate:async()=>{},
   selectObject(index){context.selected=context.source.objects[index];context.mf.value=context.selected.latex;context.selected.editorBaseline=context.mf.value;},
   wordSessionChanged:()=>context.mf.value!==context.selected?.editorBaseline,
@@ -66,6 +66,17 @@ function createEditor(native){
 function installWordBrowse(context){
  const browse=appSource.slice(appSource.indexOf('function syncSidebar(ended=false'),appSource.indexOf('window.nativeFavorite='));
  vm.runInContext(browse,context);
+}
+
+function installActualWordBrowse(context){
+ const elements=new Map();
+ context.$=id=>{if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,value:'',textContent:'',options:[],append(){},replaceChildren(){},querySelectorAll:()=>[]});return elements.get(id);};
+ context.document={createElement:()=>({})};context.window.resetEditorHistory=()=>{};context.window.desktopTypographyLoad=()=>{};
+ context.loadObjectLayout=()=>{};context.renderModes=()=>{};context.changed=()=>{};
+ const select=appSource.split('\n').find(line=>line.startsWith('function selectObject('));
+ vm.runInContext(select,context);
+ context.renderObjects=()=>{context.renderCount++;return context.syncSidebar();};
+ installWordBrowse(context);
 }
 
 function installWordCommit(context){
@@ -128,6 +139,39 @@ test('Concurrent Word activations leave the editor on the newest formula rather 
  assert.equal(editor.context.busy,false);assert.equal(editor.context.wordNavigating,false);
 });
 
+test('Opening a Word formula renders and syncs once, skips the debounce, and waits for validation before ready',async()=>{
+ const ticket='9'.repeat(64),editor=createEditor(async action=>action==='wordSessionRead'?snapshot(25,'open'):{}),context=editor.context;
+ let renders=0,syncs=0,scheduleValidation=null,releaseValidation,validationStartedResolve;
+ const validationGate=new Promise(resolve=>{releaseValidation=resolve;}),validationStarted=new Promise(resolve=>{validationStartedResolve=resolve;});
+ const timingMessages=[];
+ context.window.webkit={messageHandlers:{native:{postMessage(body){timingMessages.push(body);throw Error('simulated logger bridge failure');}}}};
+ const elements=new Map();
+ context.$=id=>{if(!elements.has(id)){const value={hidden:false,textContent:'',replaceChildren(){},append(){}};elements.set(id,value);}return elements.get(id);};
+ context.document={createElement:()=>({})};
+ context.loadObjectLayout=()=>{};context.renderModes=()=>{};context.controls=()=>{};context.status=()=>{};
+ context.syncSidebar=()=>{syncs++;return Promise.resolve();};
+ context.renderObjects=()=>{renders++;return context.syncSidebar();};
+ context.changed=scheduled=>{scheduleValidation=scheduled;};
+ const select=appSource.split('\n').find(line=>line.startsWith('function selectObject('));
+ vm.runInContext(select,context);
+ context.validate=async()=>{validationStartedResolve();await validationGate;};
+ let ready=false;
+ const opening=context.window.nativeOpenWordSession(ticket).then(result=>{ready=true;return result;});
+ await validationStarted;
+ await Promise.resolve();
+ assert.equal(ready,false,'an unfinished validation must keep the window delivery pending');
+ assert.equal(renders,1,'the active formula should trigger the sole list render');
+ assert.equal(syncs,1,'the selected state should be synchronized once');
+ assert.equal(scheduleValidation,false,'open should skip the 90 ms edit debounce');
+ assert.equal(context.wordTicket,ticket);
+ releaseValidation();
+ assert.equal(await opening,true,'the Word session becomes ready after validation resolves');
+ assert.equal(timingMessages.length,1,'a successful new session emits one timing event');
+ assert.equal(timingMessages[0].action,'wordOpenTiming');
+ assert.deepEqual(Object.keys(timingMessages[0].payload).sort(),['prepareMs','readMs','sidebarMs','totalMs','validateMs']);
+ for(const value of Object.values(timingMessages[0].payload))assert.ok(Number.isFinite(value)&&value>=0&&value<60_000);
+});
+
 test('Repeated live same-ticket activation validates the native session without overwriting an unsaved formula-26 draft',async()=>{
  const ticket='d'.repeat(64);let reads=0,statusChecks=0;
  const editor=createEditor(async(action,payload={})=>{
@@ -146,12 +190,11 @@ test('Repeated live same-ticket activation validates the native session without 
  assert.ok(reads+statusChecks>=2);
 });
 
-test('Browsing the 30-formula Word list is local and never navigates Word until save',async()=>{
+test('Browsing the 30-formula Word list uses actual selection and one render/sync without navigating Word',async()=>{
  const ticket='e'.repeat(64),editor=createEditor(async()=>({})),context=editor.context;
  const objects=sourceDocument.objects.map((object,index)=>({...object,index}));
  context.wordTicket=ticket;context.source={hasDocumentContext:true,activeIndex:0,path:'/tmp/equations.docx',objects};context.selected=objects[0];context.mf.value=objects[0].latex;context.selected.editorBaseline=context.mf.value;context.favorites=[];
- context.selectObject=index=>{context.selected=context.source.objects[index];context.mf.value=context.selected.latex;context.selected.editorBaseline=context.mf.value;};
- installWordBrowse(context);
+ context.renderCount=0;installActualWordBrowse(context);
  for(let index=0;index<30;index++){
   const result=await context.window.nativeSelectObject(index);
   if(index===0)assert.equal(result,undefined,'formula 1 is already the active local selection');
@@ -159,8 +202,16 @@ test('Browsing the 30-formula Word list is local and never navigates Word until 
   assert.equal(context.selected.index,index);assert.equal(context.mf.value,sourceDocument.objects[index].latex);
   assert.equal(context.source.activeIndex,0,'local browsing must not change Word’s active OLE binding');
  }
+ assert.equal(context.renderCount,29,'actual selection renders the object list once per changed selection');
  assert.equal(editor.calls.filter(call=>call.action==='wordSessionNavigate').length,0);
  assert.equal(editor.calls.filter(call=>call.action==='state').length,29,'the native workbench may receive sidebar state updates for the 29 actual changes');
+ assert.ok(editor.calls.filter(call=>call.action==='state').every(call=>call.payload.wordSession===true&&!call.payload.wordSessionNavigating&&!call.payload.wordSessionEnded),'sidebar updates must preserve the live Word owner without a navigation handoff');
+ assert.equal(sourceDocument.objects[25].layout.numberText,'(3.6)','the formula 26 fixture retains its original numbering');
+ assert.deepEqual(JSON.parse(JSON.stringify(context.source.objects[25].layout)),JSON.parse(JSON.stringify(sourceDocument.objects[25].layout)),'local browsing must preserve formula 26 layout and numbering');
+ const rendersBeforeDirtyGuard=context.renderCount,statesBeforeDirtyGuard=editor.calls.filter(call=>call.action==='state').length;context.mf.value+=' + unsaved';
+ assert.equal(await context.window.nativeSelectObject(0),undefined,'a dirty formula must block local browsing');
+ assert.equal(context.selected.index,29);assert.equal(context.renderCount,rendersBeforeDirtyGuard);assert.equal(editor.calls.filter(call=>call.action==='state').length,statesBeforeDirtyGuard);
+ assert.match(editor.messages.at(-1),/修改，请先保存/);
 });
 
 test('Saving a locally browsed formula sends one target-bound save without navigation or reopening',async()=>{

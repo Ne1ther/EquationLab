@@ -2,6 +2,7 @@ import SwiftUI
 import AppKit
 import WebKit
 import UniformTypeIdentifiers
+import CoreFoundation
 
 @MainActor
 final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, WKNavigationDelegate {
@@ -315,6 +316,23 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        if action == "wordOpenTiming" {
+            let keys: Set<String> = ["readMs", "prepareMs", "sidebarMs", "validateMs", "totalMs"]
+            guard let payload = body["payload"] as? [String: Any], Set(payload.keys) == keys else { return }
+            func milliseconds(_ key: String) -> Double? {
+                guard let value = payload[key] as? NSNumber,
+                      CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+                let number = value.doubleValue
+                return number.isFinite && number >= 0 && number < 60_000 ? number : nil
+            }
+            guard let readMs = milliseconds("readMs"),
+                  let prepareMs = milliseconds("prepareMs"),
+                  let sidebarMs = milliseconds("sidebarMs"),
+                  let validateMs = milliseconds("validateMs"),
+                  let totalMs = milliseconds("totalMs") else { return }
+            EditorLifecycleLog.logger.info("word_open_timing read_ms=\(readMs, format: .fixed(precision: 1)) prepare_ms=\(prepareMs, format: .fixed(precision: 1)) sidebar_ms=\(sidebarMs, format: .fixed(precision: 1)) validate_ms=\(validateMs, format: .fixed(precision: 1)) total_ms=\(totalMs, format: .fixed(precision: 1))")
+            return
+        }
         if action == "editorMenu" {
             if let payload = body["payload"] as? [String: Any], let matrix = payload["matrix"] as? [String: Int], let rows = matrix["rows"], let columns = matrix["columns"] { state.matrix = MatrixContext(rows: rows, columns: columns) }
             else { state.matrix = nil }

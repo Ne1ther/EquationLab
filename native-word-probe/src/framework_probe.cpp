@@ -203,9 +203,11 @@ int main(int argc, char** argv) {
             else{
                 std::cerr<<"stage: own OLE object vtables/lifecycles on real Office storage\n";
                 runObjectTests(own,api,payload,preview,dc,symbol<void(*)(StgMedium*)>(ole,"ReleaseStgMedium"));
-                auto cfbPath=(std::filesystem::path(argv[3]).parent_path()/"mathtype-original-x3-cfb.bin").string();
-                std::cerr<<"stage: explicit MathType Windows/Mac alias registration and original storage preservation\n";
-                runMathTypeAliasTests(own,shim,com,ole,api,payload,cfbPath.c_str());
+                if(!std::getenv("PROBE_OBJECT_TESTS_ONLY")){
+                    auto cfbPath=(std::filesystem::path(argv[3]).parent_path()/"mathtype-original-x3-cfb.bin").string();
+                    std::cerr<<"stage: explicit MathType Windows/Mac alias registration and original storage preservation\n";
+                    runMathTypeAliasTests(own,shim,com,ole,api,payload,cfbPath.c_str());
+                }
             }
             if(argc>4){
                 auto port=std::stoul(argv[4]);require(port>0&&port<=65535,"Invalid test loopback port");

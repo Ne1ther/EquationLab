@@ -14,6 +14,8 @@ const optionalFile=async file=>{try{const stat=await lstat(file);if(!stat.isFile
 export function servicePlist(app,support){
  if(!isAbsolute(app)||!isAbsolute(support)||[app,support].some(value=>/[\u0000-\u001f]/.test(value)))throw Error('后台服务需要有效的绝对路径');
  const resources=join(app,'Contents/Resources'),node=join(resources,'runtime/bin/node'),script=join(resources,'engine/src/app-services.mjs');
+ // Word waits for these user-initiated HTTP requests. Background throttles
+ // document parsing; Adaptive cannot boost this service without XPC activity.
  return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
@@ -22,7 +24,7 @@ export function servicePlist(app,support){
 <key>WorkingDirectory</key><string>${xml(join(resources,'engine'))}</string>
 <key>EnvironmentVariables</key><dict><key>EQUATIONLAB_DATA_DIR</key><string>${xml(support)}</string><key>PATH</key><string>/usr/bin:/bin:/usr/sbin:/sbin</string></dict>
 <key>RunAtLoad</key><true/><key>KeepAlive</key><true/><key>ThrottleInterval</key><integer>5</integer>
-<key>ProcessType</key><string>Background</string>
+<key>ProcessType</key><string>Interactive</string>
 <key>StandardOutPath</key><string>${xml(join(support,'logs/word-service.log'))}</string>
 <key>StandardErrorPath</key><string>${xml(join(support,'logs/word-service-error.log'))}</string>
 </dict></plist>\n`;

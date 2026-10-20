@@ -13,6 +13,7 @@ Private mSnapshotEnd As Long
 Private mSnapshotShapes As Long
 Private mSnapshotGeneration As Long
 Private mSnapshotSaved As Boolean
+Private mSnapshotIdentity As Long
 Private mDocumentIdentity As Long
 Private mSnapshotToken As Long
 Private mKnownDocuments As Collection
@@ -142,6 +143,14 @@ Private Function EquationIndex(ByVal target As InlineShape) As Long
 Missing:
 End Function
 
+Private Sub ELCaptureTimingMarker(ByVal command As String)
+    Dim ignored As Long
+    On Error Resume Next
+    ignored = EquationLabNativeCommand(command)
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
 Public Sub ELWatchNativeSession()
     On Error GoTo Missing
     If EquationLabNativeCommand("MathTypeBridgeCaptureWatch") <> 0 Then SchedulePoll
@@ -216,14 +225,17 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     If elapsed < 0 Then elapsed = elapsed + 86400#
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
-    ' Selection, double-click and OLE activation can describe the same user
-    ' action. Reuse that short-lived snapshot rather than serializing the
-    ' whole document three times on Word's UI thread.
-    If Not forceSnapshot And mSnapshotReady And elapsed < 0.5 And generation = mSnapshotGeneration And contentEnd = mSnapshotEnd And shapeCount = mSnapshotShapes And isSaved = mSnapshotSaved Then
+    ' A clean document remains a valid snapshot past the short event-coalescing
+    ' window. Unsaved snapshots remain short-lived because same-size edits can
+    ' leave the range end and formula count unchanged.
+    If Not forceSnapshot And mSnapshotReady And generation = mSnapshotGeneration And contentEnd = mSnapshotEnd And shapeCount = mSnapshotShapes And isSaved = mSnapshotSaved And mDocumentIdentity = mSnapshotIdentity And ((selectionBound And isSaved) Or elapsed < 0.5) Then
         selected = EquationIndex(target)
         If selected >= 0 Then
-            selectionText = CStr(selected)
-            If selectionBound Then selectionText = "ELSEL3" & vbLf & selectionText
+            If selectionBound Then
+                selectionText = "ELSEL4" & vbLf & CStr(mSnapshotIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected)
+            Else
+                selectionText = CStr(selected)
+            End If
             ELWriteUtf8 directory & "/.EquationLab/document-selection.txt", selectionText
             result = EquationLabNativeCommand("MathTypeBridgeSelectDocumentEquation")
             If result = 0 Then GoTo Captured
@@ -241,7 +253,9 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     If selected < 0 Then GoTo Failed
     ' WordOpenXML reflects the live document, including unsaved edits. Never
     ' save, rename, or alter the user's document to obtain this snapshot.
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingStart"
     xml = mDocument.Content.WordOpenXML
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
     If Len(xml) > 30000000 Then GoTo Failed
     mSnapshotToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
     ' Word does not emit another selection/double-click event when an already
@@ -251,6 +265,7 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     contextHeader = "ELCTX2"
     If selectionBound Then contextHeader = "ELCTX3"
     ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
     result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
     If result = 0 Then RememberSnapshot
     mSnapshotReady = (result = 0)
@@ -259,6 +274,7 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     mSnapshotShapes = shapeCount
     mSnapshotSaved = isSaved
     mSnapshotGeneration = generation
+    mSnapshotIdentity = mDocumentIdentity
 Captured:
     mCapturing = False
     If result = 0 Then SchedulePoll

@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <string>
 #include <atomic>
+#include <os/log.h>
 #include "diagnostics.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
@@ -14,7 +15,10 @@ extern "C" std::int32_t MathTypeBridgeRibbonOpen();
 void EquationLabDocumentContextDidCapture();
 void EquationLabDocumentContextDidClear();
 void EquationLabDocumentContextDidClearSelection();
-namespace { NSDictionary* pendingDocument; BOOL pendingDocumentSelection=NO; std::int32_t navigationTarget=0; std::atomic<std::int32_t> bindingToken{0}; }
+namespace {
+NSDictionary* pendingDocument;NSDictionary* explicitSelectionBase;BOOL pendingDocumentSelection=NO;std::int32_t navigationTarget=0;std::atomic<std::int32_t> bindingToken{0};
+struct CaptureTiming {CFAbsoluteTime started=0,xmlReady=0,fileReady=0;};CaptureTiming captureTiming;
+}
 // Word owns the latest captured snapshot. ELCTX2 remains short-lived; an exact
 // ELCTX3 selection snapshot is consumed once when first dispatched to an OLE owner.
 NSDictionary* EquationLabCapturedDocumentContext(){return pendingDocument;}
@@ -110,32 +114,81 @@ NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr)
     if(selectionBound)*selectionBound=selected;
     return context;
 }
-BOOL decodeSelectionEquation(NSString* text,NSInteger* index,BOOL* selectionBound){
-    if(!text||!index)return NO;BOOL bound=[text hasPrefix:@"ELSEL3\n"];if(bound)text=[text substringFromIndex:7];
+BOOL decodeSelectionEquation(NSString* text,NSInteger* index,BOOL* selectionBound,NSInteger* documentIdentity=nullptr,NSInteger* snapshotToken=nullptr,BOOL* explicitCached=nullptr){
+    if(!text||!index)return NO;
+    BOOL bound=NO,cached=NO;NSInteger document=0,snapshot=0;
+    if([text hasPrefix:@"ELSEL4\n"]){
+        NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
+        if(fields.count!=4||![fields[0] isEqual:@"ELSEL4"])return NO;
+        auto positiveLong=[](NSString* value,NSInteger* out){
+            if(!value.length)return NO;
+            for(NSUInteger i=0;i<value.length;i++){unichar c=[value characterAtIndex:i];if(c<'0'||c>'9')return NO;}
+            NSScanner* scanner=[NSScanner scannerWithString:value];NSInteger number=0;
+            if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<=0||number>INT32_MAX)return NO;
+            *out=number;return YES;
+        };
+        if(!positiveLong(fields[1],&document)||!positiveLong(fields[2],&snapshot))return NO;
+        text=fields[3];bound=YES;cached=YES;
+    }else if([text hasPrefix:@"ELSEL3\n"]){bound=YES;text=[text substringFromIndex:7];}
     NSScanner* scanner=[NSScanner scannerWithString:text];NSInteger number=-1;
     if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return NO;
-    *index=number;if(selectionBound)*selectionBound=bound;return YES;
+    *index=number;if(selectionBound)*selectionBound=bound;if(documentIdentity)*documentIdentity=document;if(snapshotToken)*snapshotToken=snapshot;if(explicitCached)*explicitCached=cached;return YES;
+}
+void installDocumentContext(NSDictionary* context,BOOL selectionBound){
+    pendingDocument=context;pendingDocumentSelection=selectionBound;
+    // Keep one shallow immutable dictionary as a selection-only base. The
+    // large OOXML NSString is shared; it is never copied into this slot.
+    explicitSelectionBase=[context copy];
+}
+void clearDocumentSelectionState(){pendingDocument=nil;pendingDocumentSelection=NO;}
+void clearDocumentContextState(){clearDocumentSelectionState();explicitSelectionBase=nil;}
+std::int32_t applySelectionEquation(NSString* text){
+    NSInteger index=-1,document=0,snapshot=0;BOOL selectionBound=NO,explicitCached=NO;
+    if(!decodeSelectionEquation(text,&index,&selectionBound,&document,&snapshot,&explicitCached))return -3;
+    NSDictionary* source=nil;
+    if(explicitCached){
+        if(!explicitSelectionBase)return -1;
+        NSString* suffix=[NSString stringWithFormat:@":%ld",static_cast<long>(document)];
+        if(![explicitSelectionBase[@"identity"] isKindOfClass:NSString.class]||![explicitSelectionBase[@"identity"] hasSuffix:suffix]||![explicitSelectionBase[@"snapshot"] isKindOfClass:NSNumber.class]||[explicitSelectionBase[@"snapshot"] integerValue]!=snapshot)return -4;
+        source=explicitSelectionBase;
+    }else{
+        if(!pendingDocument)return -1;
+        source=pendingDocument;
+    }
+    NSMutableDictionary* next=[source mutableCopy];next[@"index"]=@(index);pendingDocument=next;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();return 0;
 }
 std::int32_t captureDocument(){
-    if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClearSelection();
+    if(!validHost())return -1;clearDocumentSelectionState();explicitSelectionBase=nil;EquationLabDocumentContextDidClearSelection();
+    const CFAbsoluteTime readStarted=CFAbsoluteTimeGetCurrent();
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"document-context.txt");
     if(!data)return -2;
+    const CFAbsoluteTime decodeStarted=CFAbsoluteTimeGetCurrent();
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
-    BOOL selectionBound=NO;pendingDocument=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding],&selectionBound);
-    if(!pendingDocument)return -3;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();
+    BOOL selectionBound=NO;NSDictionary* context=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding],&selectionBound);
+    const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();
+    if(!context)return -3;installDocumentContext(context,selectionBound);EquationLabDocumentContextDidCapture();
+    const CFAbsoluteTime finished=CFAbsoluteTimeGetCurrent();
+    if(captureTiming.started>0&&captureTiming.xmlReady>=captureTiming.started&&captureTiming.fileReady>=captureTiming.xmlReady){
+        const double total=(finished-captureTiming.started)*1000.0;
+        const double xml=(captureTiming.xmlReady-captureTiming.started)*1000.0;
+        const double write=(captureTiming.fileReady-captureTiming.xmlReady)*1000.0;
+        const double decode=(decoded-decodeStarted)*1000.0;
+        const double read=(decodeStarted-readStarted)*1000.0;
+        const double finalize=(finished-decoded)*1000.0;
+        os_log_info(OS_LOG_DEFAULT,"WordHostPerformance xml_ms=%.3f vba_utf8_write_ms=%.3f file_read_ms=%.3f native_decode_ms=%.3f capture_finalize_ms=%.3f total_ms=%.3f",xml,write,read,decode,finalize,total);
+    }
+    captureTiming={};
     return 0;
 }
-std::int32_t clearDocument(){if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClear();return 0;}
-std::int32_t clearDocumentSelection(){if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClearSelection();return 0;}
+std::int32_t clearDocument(){if(!validHost())return -1;clearDocumentContextState();EquationLabDocumentContextDidClear();return 0;}
+std::int32_t clearDocumentSelection(){if(!validHost())return -1;clearDocumentSelectionState();EquationLabDocumentContextDidClearSelection();return 0;}
 std::int32_t selectDocumentEquation(){
-    if(!validHost()||!pendingDocument)return -1;
+    if(!validHost())return -1;
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSString* text=[[NSString alloc] initWithData:inputFile(directory,@"document-selection.txt") encoding:NSUTF8StringEncoding];
     unlink([directory URLByAppendingPathComponent:@"document-selection.txt"].fileSystemRepresentation);
-    if(!text)return -2;BOOL selectionBound=NO;NSInteger index=-1;
-    if(!decodeSelectionEquation(text,&index,&selectionBound))return -3;
-    NSMutableDictionary* next=[pendingDocument mutableCopy];next[@"index"]=@(index);pendingDocument=next;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();return 0;
+    if(!text)return -2;return applySelectionEquation(text);
 }
 }
 #define RIBBON_EXPORT(name,expression) extern "C" __attribute__((visibility("default"))) std::int32_t name(){@autoreleasepool{return expression;}}
@@ -155,6 +208,9 @@ RIBBON_EXPORT(MathTypeBridgeCaptureDocument,captureDocument())
 RIBBON_EXPORT(MathTypeBridgeClearDocumentContext,clearDocument())
 RIBBON_EXPORT(MathTypeBridgeClearDocumentSelection,clearDocumentSelection())
 RIBBON_EXPORT(MathTypeBridgeSelectDocumentEquation,selectDocumentEquation())
+RIBBON_EXPORT(MathTypeBridgeCaptureTimingStart,([&](){if(!validHost())return -1;captureTiming={};captureTiming.started=CFAbsoluteTimeGetCurrent();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeCaptureTimingXMLReady,([&](){if(!validHost()||captureTiming.started<=0)return -1;captureTiming.xmlReady=CFAbsoluteTimeGetCurrent();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeCaptureTimingFileReady,([&](){if(!validHost()||captureTiming.started<=0||captureTiming.xmlReady<captureTiming.started)return -1;captureTiming.fileReady=CFAbsoluteTimeGetCurrent();return 0;})())
 RIBBON_EXPORT(MathTypeBridgeEditGeneration,bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration)))
 RIBBON_EXPORT(MathTypeBridgeNewDocumentToken,EquationLabNewDocumentToken())
 RIBBON_EXPORT(MathTypeBridgeTakeNavigation,([](){auto target=navigationTarget;navigationTarget=0;return target;})())

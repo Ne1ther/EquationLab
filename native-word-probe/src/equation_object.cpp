@@ -9,6 +9,7 @@
 #include <vector>
 #include <limits>
 #include <cstdlib>
+#include <os/log.h>
 
 namespace bridge_probe {
 namespace {
@@ -188,7 +189,7 @@ public:
         if(session_)completeEdit(session_,nullptr,0,false);
         if(forgetEditorOwner)forgetEditorOwner(identity_,editorContext);
         notifyData(true);
-        auto sinks=oleSinks_;oleSinks_.clear();dataSinks_.clear();viewSink_={};client_={};source_={};backup_={};closed_=true;
+        auto sinks=oleSinks_;oleSinks_.clear();dataSinks_.clear();viewSink_={};client_={};source_={};closed_=true;
         for(auto& [cookie,c]:sinks){(void)cookie;increment(Metric::CloseNotifications);c.sink->OnClose();}gauges();return Ok;
     }
     HResult SetMoniker(std::uint32_t,Unknown*)override{return NotImplemented;}
@@ -196,9 +197,10 @@ public:
     HResult InitFromData(DataObject*,std::int32_t,std::uint32_t)override{return NotImplemented;}
     HResult GetClipboardData(std::uint32_t,DataObject** out)override{if(!out)return PointerError;*out=static_cast<DataObject*>(this);AddRef();return Ok;}
     HResult DoVerb(std::int32_t verb,void*,OleClientSite* site,std::int32_t,void*,const RectL*)override{return measured(Metric::DoVerbCalls,Metric::DoVerbResult,[&]() -> HResult {
-        if(!correctThread())return WrongThread;if(closed_||noScribble_)return Unexpected;
+        if(!correctThread())return WrongThread;if(noScribble_)return Unexpected;
         if(verb!=0&&verb!=1&&verb!=-1&&verb!=-2)return static_cast<HResult>(0x80040181u);
-        if(site)SetClientSite(site);if(!openEditor)return NotImplemented;
+        if(closed_&&!site)return Unexpected;if(!openEditor)return NotImplemented;
+        if(site)SetClientSite(site);if(closed_)closed_=false;
         // An external editor may be behind Word or hidden. Re-activation must
         // bring that SAME session back, without allocating another OLE owner.
         if(session_)return openEditor(session_,native_.data(),native_.size(),editorContext);
@@ -232,7 +234,15 @@ public:
     }
     HResult DUnadvise(std::uint32_t cookie)override{auto hr=dataSinks_.erase(cookie)?Ok:NoConnection;gauges();return hr;}
     HResult EnumDAdvise(EnumStatData** out)override{if(!out)return PointerError;*out=new AdviseEnumerator(dataSinks_);return Ok;}
-    HResult Draw(std::uint32_t aspect,std::int32_t index,void*,void* target,void*,void* dc,const RectL* bounds,const RectL*,std::int32_t(*keepGoing)(std::uintptr_t),std::uintptr_t context)override{if(aspect!=1)return AspectError;if(index!=-1||target)return FormatError;if(!bounds||!dc)return PointerError;if(keepGoing&&!keepGoing(context))return static_cast<HResult>(0x80004004u);return api_.drawPict?api_.drawPict(pdf_.data(),pdf_.size(),dc,bounds):NotImplemented;}
+    HResult Draw(std::uint32_t aspect,std::int32_t index,void*,void* target,void*,void* dc,const RectL* bounds,const RectL*,std::int32_t(*keepGoing)(std::uintptr_t),std::uintptr_t context)override{return measured(Metric::DrawCalls,Metric::DrawResult,[&]() -> HResult {
+        record(Metric::DrawPdfBytes,static_cast<std::int32_t>(pdf_.size()));
+        if(aspect!=1)return AspectError;if(index!=-1||target)return FormatError;if(!bounds||!dc)return PointerError;if(keepGoing&&!keepGoing(context))return static_cast<HResult>(0x80004004u);
+        auto result=api_.drawPict?api_.drawPict(pdf_.data(),pdf_.size(),dc,bounds):NotImplemented;
+        if(pdf_.empty()){
+            increment(Metric::DrawMissingPreview);
+            if(current(Metric::DrawMissingPreview)<=20){static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");os_log_info(logger,"word_draw preview_bytes=0 result=%d",result);}
+        }
+        return result;});}
     HResult GetColorSet(std::uint32_t,std::int32_t,void*,void*,void*,void** palette)override{if(!palette)return PointerError;*palette=nullptr;return NotImplemented;}
     HResult Freeze(std::uint32_t,std::int32_t,void*,std::uint32_t* cookie)override{if(!cookie)return PointerError;*cookie=0;return NotImplemented;}
     HResult Unfreeze(std::uint32_t)override{return NotImplemented;}

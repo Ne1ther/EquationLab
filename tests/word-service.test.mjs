@@ -12,11 +12,12 @@ async function fixture(){
  const execute=(_,args)=>{calls.push(args);if(args[0]==='print'){if(!loaded)throw Error('not loaded');return 'loaded';}if(args[0]==='bootout'){loaded=false;return '';}if(args[0]==='bootstrap'){if(failBootstrap){failBootstrap=false;throw Error('bootstrap failed');}loaded=true;return '';}};
  return {home,app,execute,calls,setFailure(){failBootstrap=true;},get loaded(){return loaded;},target:join(home,'Library/LaunchAgents',SERVICE_LABEL+'.plist'),cleanup:()=>rm(home,{recursive:true,force:true})};
 }
-test('User background service installs, upgrades and removes only its own agent',async()=>{
+test('User Word service installs, upgrades and removes only its own agent',async()=>{
  const f=await fixture();try{
   const request={home:f.home,app:f.app,uid:501,execute:f.execute};
   assert.equal((await manageWordService(request)).installed,true);assert.equal(f.loaded,true);
   const plist=await readFile(f.target,'utf8');assert.match(plist,/Equation &amp; Lab/);assert.match(plist,/<key>KeepAlive<\/key><true\/>/);
+  assert.match(plist,/<key>ProcessType<\/key><string>Interactive<\/string>/);
   assert.equal((await manageWordService({...request,action:'status'})).installed,true);
   await manageWordService(request);assert.equal(f.loaded,true);
   await manageWordService({...request,action:'remove'});assert.equal(f.loaded,false);await assert.rejects(access(f.target));

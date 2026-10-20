@@ -36,6 +36,14 @@ swift test
 node --test packaging/word-native-installer/installer.test.mjs
 ```
 
+本机装有 Word 时，可额外检查原生编辑会话的回收：
+
+```sh
+node native-word-probe/script/run_session_cleanup_tests.mjs
+```
+
+它使用独立端口和真实会话服务，检查连续关闭 20 次、迟到响应和取消写回；Word 界面的切换、保存重开仍要单独测试。
+
 `node scripts/build/build-word-demo.mjs` 重新生成公开的 30 公式演示。用桌面 Word 检查并导出 PDF；预览和单元测试之外，还需验证冷启动、编辑回存和保存重开。
 
 开发构建使用仓库内的运行资源。[第三方资源](../THIRD_PARTY_NOTICES.md)已随源码提供。完整发行包需要在 Word 中编译启动模板并验证加载，见[打包说明](../packaging/README.md)。
@@ -45,6 +53,8 @@ node --test packaging/word-native-installer/installer.test.mjs
 ---
 
 The source tree contains the native macOS UI, equation canvas, rendering engine, native Word integration, and updater. Use the commands above to build and test. A complete release also needs a Word-compiled startup template with real host validation; see the packaging guide.
+
+With Word installed, `node native-word-probe/script/run_session_cleanup_tests.mjs` checks repeated owner closure and late responses against the real session service on separate ports. It does not replace Word UI or save/reopen testing.
 
 For Word development, use `./scripts/build_and_run.sh --word-test --build-only`, then save and quit Word and Equation Lab before `--word-test run`. The release-configured build is staged at `.local/word-test/Equation Lab.app` and runs from `/Applications/Equation Lab.app`. It reuses an accepted App's bundled runtime and native artifacts; `EQUATIONLAB_WORD_TEST_SEED` selects that App. A changed dependency lock or native source version requires a matching seed. It never silently falls back to an older helper, downloads a runtime or creates a PKG.
 

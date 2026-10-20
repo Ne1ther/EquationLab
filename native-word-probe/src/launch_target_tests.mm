@@ -209,6 +209,22 @@ void runSelectionSnapshotCases(){
     ProbeEditState* expired=makePending(704);auto opened=client.openedContexts;[client documentReady];
     check(client.openedContexts==opened&&!expired.documentContext,"ELCTX2 capture unexpectedly bypassed its 0.5-second TTL");
     [client cleanup:expired.sessionId];client.testDocumentContext=nil;fixtureDocumentContext=nil;fixtureSelectionPending=NO;documentCapturedAt=nil;
+
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@9,@"index":@9,@"name":@"same-name.docx",@"ooxml":@"<late-exact-selection/>"};NSDictionary* lateExact=fixtureDocumentContext;fixtureSelectionPending=YES;documentCapturedAt=[NSDate dateWithTimeIntervalSinceNow:-1];
+    ProbeEditState* late=makePending(706);late.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:-1];auto beforeLate=client.openedContexts;[client documentReady];
+    check(client.openedContexts==beforeLate+1&&late.documentContext==lateExact&&!late.awaitingDocument,"fresh anchored capture arriving after the wall-clock deadline was discarded");
+    check(!fixtureDocumentContext&&!fixtureSelectionPending&&!documentCapturedAt,"late exact selection was not consumed once dispatched");[client cleanup:late.sessionId];
+
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@10,@"index":@10,@"name":@"same-name.docx",@"ooxml":@"<stale-legacy-capture/>"};fixtureSelectionPending=NO;documentCapturedAt=[NSDate dateWithTimeIntervalSinceNow:-1];
+    ProbeEditState* staleLegacy=makePending(707);staleLegacy.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:-1];beforeLate=client.openedContexts;[client documentReady];
+    check(client.openedContexts==beforeLate&&!staleLegacy.documentContext,"wall-clock-expired legacy capture bypassed its freshness limit");[client cleanup:staleLegacy.sessionId];
+
+    ProbeEditState* ended=makePending(708);ended.requiresDocumentCapture=YES;ended.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:-1];lastCaptureState=CaptureTimedOut;[client fail:ended code:InvalidReply];
+    check(!client.edits[@(ended.sessionId)]&&ended.terminal,"expired on-demand capture did not retire its state");
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@11,@"index":@11,@"name":@"same-name.docx",@"ooxml":@"<post-timeout-selection/>"};fixtureSelectionPending=YES;documentCapturedAt=NSDate.date;
+    beforeLate=client.openedContexts;[client documentReady];
+    check(client.openedContexts==beforeLate&&!ended.documentContext,"a later exact selection resurrected a timeout-retired OLE state");
+    fixtureDocumentContext=nil;fixtureSelectionPending=NO;documentCapturedAt=nil;
     transport=savedTransport;
 }
 }
@@ -222,7 +238,7 @@ int main(){@autoreleasepool{
         runCaptureRequestCases();
         runSelectionSnapshotCases();
         std::cout<<"{\"on_demand_capture_cases\":16,\"capture_same_owner_write_no_selection_event\":true,\"capture_request_latest_and_deduplicated\":true,\"capture_request_live_anchor_and_native_sha_guard\":true,\"capture_request_document_clear_close_release\":true,\"capture_request_no_xml_in_tiny_binding\":true,\"capture_request_rejects_old_or_foreign_snapshot\":true,\"capture_request_no_saveobject_reentry\":true,\"capture_request_failure_retryable\":true,\"capture_request_rebinds_fresh_index\":true,";
-        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"real_workspace_or_gui_used\":false}\n";
+        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"late_exact_capture_beats_queued_deadline\":true,\"timeout_retirement_not_resurrected\":true,\"stale_legacy_capture_still_expires\":true,\"real_workspace_or_gui_used\":false}\n";
         return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }}

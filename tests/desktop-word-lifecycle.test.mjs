@@ -1,13 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import vm from 'node:vm';
+import {performance} from 'node:perf_hooks';
 import {readFile} from 'node:fs/promises';
 
 const code=await readFile(new URL('../desktop/app.js',import.meta.url),'utf8');
 const slice=(from,to)=>code.slice(code.indexOf(from),code.indexOf(to));
 function editor(){
  const calls=[],messages=[],elements=new Map();let confirm=false,failRead=false;
- const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,editingRuler:undefined,
+ const context=vm.createContext({window:{},performance,busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,editingRuler:undefined,
   mf:{value:'',readOnly:false},$:id=>{if(!elements.has(id))elements.set(id,{hidden:false,value:'',querySelectorAll:()=>[]});return elements.get(id);},
   setTimeout,clearTimeout,controls(){},message:text=>messages.push(text),requestWorkbenchSync(){},renderObjects(){},loadWordThumbnails(){},resetNewFormula(){context.mf.value='';context.source=null;context.selected=null;},
   syncSidebar:async()=>{},validate:async()=>{},

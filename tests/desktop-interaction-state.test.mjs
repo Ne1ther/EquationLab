@@ -31,7 +31,7 @@ test('Rapid sidebar browsing changes only the local selection and retains the Wo
  const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordTicket:'a'.repeat(64),
   source:{hasDocumentContext:true,activeIndex:0,path:'immutable-snapshot.docx',objects:[{index:0},{index:1},{index:2}]},selected:{index:0},
   message(){},wordSessionChanged:()=>false,native:async action=>calls.push(action),syncSidebar:async()=>{sidebar++;},
-  selectObject(index){selected.push(index);context.selected=context.source.objects[index];}});
+  selectObject(index){selected.push(index);context.selected=context.source.objects[index];return context.syncSidebar();}});
  const dispatch=source.slice(source.indexOf('window.nativeSelectObject=async'),source.indexOf(';window.nativeFavorite='))+';';
  vm.runInContext(dispatch,context);
  for(const index of [1,2,0])assert.equal(await context.window.nativeSelectObject(index),true);
