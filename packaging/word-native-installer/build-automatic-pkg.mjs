@@ -3,7 +3,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readArtifacts,isMainModule} from './installer.mjs';
+import {readArtifacts,requireRibbonVerifiedArtifact,isMainModule} from './installer.mjs';
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const xml=text=>String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
@@ -11,7 +11,7 @@ const run=(binary,args)=>execFileSync(binary,args,{encoding:'utf8',stdio:['ignor
 export async function buildAutomaticPackage({app,artifacts,output,version,kind='full',signIdentity=process.env.EQUATIONLAB_INSTALLER_SIGN_IDENTITY}={}){
  if(!['full','word','remove'].includes(kind))throw Error('Unknown package type.');
  if(!/^\d+\.\d+\.\d+$/.test(version??''))throw Error('Package version required.');
- const accepted=await readArtifacts(artifacts);if(accepted.manifest.binding!=='startup-adjacent')throw Error('Automatic package requires the portable adjacent loader.');
+ const accepted=requireRibbonVerifiedArtifact(await readArtifacts(artifacts));if(accepted.manifest.binding!=='startup-adjacent')throw Error('Automatic package requires the portable adjacent loader.');
  const temporary=await fs.mkdtemp(path.join(tmpdir(),'equationlab-auto-pkg-'));
  try{
   const scripts=path.join(temporary,'scripts'),modules=path.join(scripts,'word-native-installer'),resources=path.join(temporary,'resources');

@@ -3,11 +3,11 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
-import {readArtifacts,isMainModule} from './installer.mjs';
+import {readArtifacts,requireRibbonVerifiedArtifact,isMainModule} from './installer.mjs';
 const xml = s => String(s).replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;').replaceAll('"', '&quot;');
 
 export async function prepareFixedPackage({artifactDirectory, nodeRuntime, nodeLicense, output}) {
-  const artifacts = await readArtifacts(artifactDirectory);
+  const artifacts = requireRibbonVerifiedArtifact(await readArtifacts(artifactDirectory));
   if (artifacts.manifest.binding !== 'system-fixed') throw Error('The host-accepted adjacent loader uses the per-user app installer and needs no fixed-system package.');
   const version = artifacts.manifest.nativeVersion;
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw Error('Invalid component version.');

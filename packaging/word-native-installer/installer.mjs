@@ -135,6 +135,10 @@ export async function readArtifacts(directory, verifySignature = bundle => execF
   await verifySignature(bundle);
   return {manifest: {...manifest, binding}, manifestSha256: digest(bytes), root, bundle, template};
 }
+export function requireRibbonVerifiedArtifact(accepted) {
+  if (accepted?.manifest?.hostValidation?.ribbonVerified !== true) fail('HOST_VALIDATION_REQUIRED', 'Word Ribbon 尚未通过真实宿主验收，无法构建安装包。');
+  return accepted;
+}
 function productionWordProcesses() {
   const result = execFileSync('/bin/ps', ['-axo', 'pid=,comm='], {encoding: 'utf8'});
   return result.split('\n').flatMap(line => {

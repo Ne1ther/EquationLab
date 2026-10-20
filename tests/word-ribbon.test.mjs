@@ -8,6 +8,7 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import sharp from 'sharp';
 import JSZip from 'jszip';
+import {validateRibbonAcceptance,validateRibbonTemplateZip} from '../packaging/word-native-installer/artifacts.mjs';
 
 await import('../word-ribbon/command-registry.js');
 const registry=globalThis.EquationLabCommands;
@@ -34,9 +35,10 @@ test('native Word template builder embeds the retained Ribbon ABI and icons with
   fixture.file('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
   await writeFile(input,await fixture.generateAsync({type:'nodebuffer'}));
   await execFileAsync(process.execPath,[fileURLToPath(new URL('../native-word-probe/automatic-loader/build-ribbon-template.mjs',import.meta.url)),input,output]);
-  const built=await JSZip.loadAsync(await readFile(output)),xml=await built.file('customUI/customUI.xml').async('string');
+  const outputBytes=await readFile(output),built=await JSZip.loadAsync(outputBytes),xml=await built.file('customUI/customUI.xml').async('string');
   assert.equal((xml.match(/<group /g)||[]).length,5);assert.equal((xml.match(/<button /g)||[]).length,20);
   assert.match(xml,/tag="open-pane"/);assert.doesNotMatch(xml,/Taskpane|TaskPane|appsforoffice|localhost:37951/);
+  assert.deepEqual(await validateRibbonTemplateZip(built),{groups:5,buttons:20,iconRelationships:new Set([...registry.commands.map(command=>command.icon),'inline']).size});
   const relationXml=await built.file('customUI/_rels/customUI.xml.rels').async('string');
   const iconNames=[...relationXml.matchAll(/Target="icons\/([^\"]+)"/g)].map(match=>match[1]);
   assert.equal(new Set(iconNames).size,iconNames.length);
@@ -45,7 +47,23 @@ test('native Word template builder embeds the retained Ribbon ABI and icons with
    assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
    assert.equal(bytes.readUInt32BE(16),32);assert.equal(bytes.readUInt32BE(20),32);
   }
+  const noRibbon=await JSZip.loadAsync(outputBytes);noRibbon.remove('customUI/customUI.xml');
+  await assert.rejects(validateRibbonTemplateZip(noRibbon),/missing customUI part/);
+  const brokenCallback=await JSZip.loadAsync(outputBytes),ribbonXml=await brokenCallback.file('customUI/customUI.xml').async('string');
+  brokenCallback.file('customUI/customUI.xml',ribbonXml.replace('tag="open-pane" image="inline" onAction="EquationLabRibbon.ELRibbonAction"','tag="open-pane" image="inline" onAction="Missing.Callback"'));
+  await assert.rejects(validateRibbonTemplateZip(brokenCallback),/open-pane callback is missing or invalid/);
+  const brokenAsset=await JSZip.loadAsync(outputBytes);brokenAsset.remove(`customUI/icons/${iconNames[0]}`);
+  await assert.rejects(validateRibbonTemplateZip(brokenAsset),/missing icon asset/);
+  const brokenRoot=await JSZip.loadAsync(outputBytes),rootXml=await brokenRoot.file('_rels/.rels').async('string');
+  brokenRoot.file('_rels/.rels',rootXml.replace(/<Relationship Id="EquationLabRibbon"[^>]*\/>/,''));
+  await assert.rejects(validateRibbonTemplateZip(brokenRoot),/missing internal Office customUI root relationship/);
  }finally{await rm(temp,{recursive:true,force:true});}
+});
+
+test('artifact freezing requires a real Word Ribbon visibility receipt',()=>{
+ assert.throws(()=>validateRibbonAcceptance({}),/real Word confirmation/);
+ assert.throws(()=>validateRibbonAcceptance({ribbonVerified:false}),/real Word confirmation/);
+ assert.equal(validateRibbonAcceptance({ribbonVerified:true}),undefined);
 });
 
 test('requested document capture uses retained anchors without selection, activation or periodic XML',async()=>{

@@ -5,7 +5,7 @@ import path from 'node:path';
 import {tmpdir} from 'node:os';
 import {createHash} from 'node:crypto';
 import {execFileSync} from 'node:child_process';
-import {createInstaller, FIXED_LIBRARIES, treeInventory, errorResponse, readArtifacts} from './installer.mjs';
+import {createInstaller, FIXED_LIBRARIES, treeInventory, errorResponse, readArtifacts, requireRibbonVerifiedArtifact} from './installer.mjs';
 import {installAutomatically} from './automatic-install.mjs';
 const hash = value => createHash('sha256').update(value).digest('hex');
 
@@ -125,6 +125,13 @@ test('artifact corruption and source-only loader are rejected before installatio
   await assert.rejects(readArtifacts(f.source, async () => {}), {code: 'ARTIFACT_CHANGED'});
   const manifestPath = path.join(f.source, 'artifact-manifest.json'), m = JSON.parse(await fs.readFile(manifestPath)); m.compiledTemplate = false;
   await fs.writeFile(manifestPath, JSON.stringify(m)); await assert.rejects(f.installer.plan(f.request('system-fixed')), {code: 'UNRELEASED_ARTIFACTS'});
+}));
+test('legacy frozen artifacts remain readable but cannot be repackaged without Ribbon acceptance', () => scoped(async f => {
+  const accepted = await readArtifacts(f.source, async () => {});
+  assert.equal(accepted.manifest.hostValidation.ribbonVerified, undefined);
+  assert.throws(() => requireRibbonVerifiedArtifact(accepted), {code: 'HOST_VALIDATION_REQUIRED'});
+  const ribbonAccepted={...accepted,manifest:{...accepted.manifest,hostValidation:{...accepted.manifest.hostValidation,ribbonVerified:true}}};
+  assert.equal(requireRibbonVerifiedArtifact(ribbonAccepted),ribbonAccepted);
 }));
 test('symlink Startup path is rejected without writing through it', () => scoped(async f => {
   const other = path.join(f.root, 'Other'); await fs.mkdir(other); await fs.mkdir(f.home, {recursive: true}); await fs.symlink(other, f.startup);
