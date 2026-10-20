@@ -1,5 +1,5 @@
 {
   "version": "0.6.1",
-  "zh": "公式列表在 App 内切换，保存时后台写回目标公式。修复取消或保存后列表丢失、失效会话无法编辑或关闭、多行公式和根号接头重叠。统一 Word 按钮与双击打开，改善冷启动、Dock 重开和编号显示。移除旧 Word 内嵌侧栏。",
-  "en": "Browse equations in the app and save to the selected formula in the background. Fix lost lists after cancelling or saving, stale sessions blocking edits or closing, multiline equations, and overlapping radical strokes. Unify opening from Word and by double-click, improve cold launch, Dock reopening and numbering details, and remove the old Word task pane."
+  "zh": "修复公式列表丢失、旧会话无法编辑或关闭、多行公式保存和根号接头重叠。公式列表在 App 内切换，保存时后台写回。改善反复打开、冷启动和编号显示，移除旧 Word 内嵌侧栏。补齐安装包中的 Word 顶栏资源。",
+  "en": "Fix lost formula lists, stale sessions blocking edits or closing, multiline saving, and overlapping radical strokes. Switch formulas in the app and save back in the background. Improve reopening, cold launch and numbering details, remove the old Word task pane, and restore missing Word ribbon resources in the installer."
 }

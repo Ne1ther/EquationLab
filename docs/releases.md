@@ -1,6 +1,6 @@
 # 版本记录
 
-## 0.6.1
+## 0.6.1 · build63
 
 - 修复多行公式变成单行、换行被当作反斜杠保存的问题。
 - 关闭编辑窗口后保留已加载的编辑器，从 Dock 或 Word 重新打开。
@@ -11,6 +11,7 @@
 - 根号与横线使用连续轮廓，消除高根号接头处的重叠粗线。
 - 缓存文档解析和公式缩略图，减少反复打开时的重复工作。
 - 修复取消或保存后，再开公式时文档列表偶尔只剩一条的问题。
+- 补齐安装包里的 Word 功能区资源，防止装好后没有 Equation Lab 顶栏。
 - 提高章、节和编号信息的对比度。
 - 删除旧的 Word 内嵌侧栏，保留独立编辑器里的文档公式列表。
 
@@ -29,4 +30,4 @@
 
 ---
 
-0.6.1 browses document equations in the app and saves to the selected formula in the background. It fixes multiline conversion, stale sessions, lost document lists after cancelling or saving, and overlapping radical strokes. It brings the editor forward on cold launch, improves numbering readability, caches document parsing and thumbnails, and removes the old embedded Word task pane.
+0.6.1 build63 browses document equations in the app and saves to the selected formula in the background. It fixes multiline conversion, stale sessions, lost document lists, overlapping radical strokes, and missing Word ribbon resources in the installer. It improves reopening, numbering readability, and document caching, and removes the old embedded Word task pane.
