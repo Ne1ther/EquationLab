@@ -4,7 +4,10 @@
 #include <iostream>
 #include <stdexcept>
 
-NSDictionary* EquationLabCapturedDocumentContext(){return nil;}
+namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; }
+NSDictionary* EquationLabCapturedDocumentContext(){return fixtureDocumentContext;}
+BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context){return context&&fixtureSelectionPending&&context==fixtureDocumentContext;}
+void EquationLabConsumeDocumentSelection(NSDictionary* context){if(EquationLabDocumentContextIsPendingSelection(context)){fixtureDocumentContext=nil;fixtureSelectionPending=NO;EquationLabDocumentContextDidClearSelection();}}
 void EquationLabSetNavigationTarget(std::int32_t){}
 std::int32_t EquationLabNewDocumentToken(){static std::int32_t token=100;return ++token;}
 
@@ -180,6 +183,34 @@ void runCaptureRequestCases(){
     check(MathTypeBridgeFinishDocumentCaptureRequest()==-4&&!client.captureRequest&&!client.edits.count,"late capture response reopened an expired session");EquationLabDocumentContextDidClear();
     transport=savedTransport;
 }
+void runSelectionSnapshotCases(){
+    ProbeEditorTransport* savedTransport=transport;CaptureTestTransport* client=[CaptureTestTransport new];transport=client;
+    auto makePending=[&](std::uint64_t id){ProbeEditState* state=[ProbeEditState new];state.sessionId=id;state.ownerIdentity=id;state.openDigest=@"selection-native-sha";state.activation=++client.activation;state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:2];client.edits[@(id)]=state;return state;};
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@7,@"index":@9,@"name":@"same-name.docx",@"ooxml":@"<full-document/>"};NSDictionary* selectedContext=fixtureDocumentContext;fixtureSelectionPending=YES;documentCapturedAt=[NSDate dateWithTimeIntervalSinceNow:-1];
+    ProbeEditState* first=makePending(701);[client documentReady];
+    check(client.openedContexts==1&&first.documentContext==selectedContext,"aged ELCTX3 selection snapshot was not dispatched to the first owner");
+    check(!fixtureDocumentContext&&!fixtureSelectionPending&&!documentCapturedAt,"ELCTX3 selection snapshot was not consumed when dispatched");
+    ProbeEditState* second=makePending(702);[client documentReady];
+    check(client.openedContexts==1&&!second.documentContext,"a second owner borrowed the consumed selection snapshot");
+    [client cleanup:first.sessionId];[client cleanup:second.sessionId];
+
+    ProbeEditState* cached=cacheState(703,7,9,@"<owned-snapshot/>");cached.documentEpoch=client.documentEpoch;cached.editGeneration=client.cacheGeneration;[client rememberDocument:cached];
+    auto bytes=client.documentBytes,owners=client.ownerDocuments.count,bindings=client.ownerCaptureBindings.count;
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@7,@"index":@9,@"name":@"same-name.docx",@"ooxml":@"<full-document/>"};fixtureSelectionPending=YES;documentCapturedAt=NSDate.date;
+    EquationLabDocumentContextDidClearSelection();fixtureDocumentContext=nil;fixtureSelectionPending=NO;
+    check(client.documentBytes==bytes&&client.ownerDocuments.count==owners&&client.ownerCaptureBindings.count==bindings,"selection clear invalidated retained owner cache");
+
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@8,@"index":@9,@"name":@"same-name.docx",@"ooxml":@"<invalidated-selection/>"};fixtureSelectionPending=YES;documentCapturedAt=nil;
+    ProbeEditState* invalidated=makePending(705);auto openedAfterClear=client.openedContexts;[client documentReady];
+    check(client.openedContexts==openedAfterClear&&!invalidated.documentContext,"ELCTX3 bypassed a missing capture timestamp after write/cache invalidation");
+    [client cleanup:invalidated.sessionId];fixtureDocumentContext=nil;fixtureSelectionPending=NO;
+
+    fixtureDocumentContext=@{@"identity":@"process:1",@"snapshot":@8,@"index":@9,@"name":@"same-name.docx",@"ooxml":@"<legacy-document/>"};fixtureSelectionPending=NO;documentCapturedAt=[NSDate dateWithTimeIntervalSinceNow:-1];
+    ProbeEditState* expired=makePending(704);auto opened=client.openedContexts;[client documentReady];
+    check(client.openedContexts==opened&&!expired.documentContext,"ELCTX2 capture unexpectedly bypassed its 0.5-second TTL");
+    [client cleanup:expired.sessionId];client.testDocumentContext=nil;fixtureDocumentContext=nil;fixtureSelectionPending=NO;documentCapturedAt=nil;
+    transport=savedTransport;
+}
 }
 int main(){@autoreleasepool{
     try {
@@ -189,8 +220,9 @@ int main(){@autoreleasepool{
         runCooperativeActivationCases();
         runDocumentCacheCases();
         runCaptureRequestCases();
+        runSelectionSnapshotCases();
         std::cout<<"{\"on_demand_capture_cases\":16,\"capture_same_owner_write_no_selection_event\":true,\"capture_request_latest_and_deduplicated\":true,\"capture_request_live_anchor_and_native_sha_guard\":true,\"capture_request_document_clear_close_release\":true,\"capture_request_no_xml_in_tiny_binding\":true,\"capture_request_rejects_old_or_foreign_snapshot\":true,\"capture_request_no_saveobject_reentry\":true,\"capture_request_failure_retryable\":true,\"capture_request_rebinds_fresh_index\":true,";
-        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"real_workspace_or_gui_used\":false}\n";
+        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"real_workspace_or_gui_used\":false}\n";
         return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }}

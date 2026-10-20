@@ -92,6 +92,15 @@ End Sub
 
 Public Sub ELInvalidateDocumentSnapshot()
     mSnapshotReady = False
+    ELClearSelectionCapture
+End Sub
+
+Private Sub ELClearSelectionCapture()
+    On Error Resume Next
+    Dim result As Long
+    ' A text click invalidates the pending selection, not the live Range
+    ' bindings of existing OLE owners or their verified document snapshots.
+    result = EquationLabNativeCommand("MathTypeBridgeClearDocumentSelection")
 End Sub
 
 Public Sub ELStartDocumentEvents()
@@ -149,11 +158,13 @@ End Function
 
 Public Sub ELCaptureSelection(ByVal selected As Selection, Optional ByVal allowParagraphFallback As Boolean = True)
     On Error GoTo Missing
-    If selected.Range.StoryType <> wdMainTextStory Then Exit Sub
+    If mCapturing Then Exit Sub
+    If selected.Range.StoryType <> wdMainTextStory Then GoTo Missing
     Dim shapes As InlineShapes, shape As InlineShape, position As Long
     Set shapes = selected.InlineShapes
     If shapes.Count = 1 Then
-        ELCaptureEquation shapes(1)
+        If Not Supported(shapes(1)) Then GoTo Missing
+        ELCaptureEquation shapes(1), False, True
         Exit Sub
     End If
     ' Word's text/caret selection and its OLE sizing frame can expose
@@ -164,28 +175,38 @@ Public Sub ELCaptureSelection(ByVal selected As Selection, Optional ByVal allowP
     Set shapes = selected.Paragraphs(1).Range.InlineShapes
     For Each shape In shapes
         If position >= shape.Range.Start And position < shape.Range.End Then
-            If Supported(shape) Then ELCaptureEquation shape
+            If Not Supported(shape) Then GoTo Missing
+            ELCaptureEquation shape, False, True
             Exit Sub
         End If
     Next
     ' A before-double-click callback can precede Word updating its selection.
     ' This unambiguous single-object fallback is restricted to that callback;
     ' ordinary selection changes only use the exact hit above.
-    If allowParagraphFallback And shapes.Count = 1 Then ELCaptureEquation shapes(1)
+    If allowParagraphFallback And shapes.Count = 1 Then
+        ELClearSelectionCapture
+        ELCaptureEquation shapes(1)
+        Exit Sub
+    End If
 Missing:
+    ELClearSelectionCapture
 End Sub
 
-Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False)
+Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False, Optional ByVal selectionBound As Boolean = False)
     On Error GoTo Failed
     If mCapturing Then Exit Sub
     If Not Supported(target) Then Exit Sub
     If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then
-        If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureAllowed") = 0 Then SchedulePoll: Exit Sub
+        If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureAllowed") = 0 Then
+            If selectionBound Then ELClearSelectionCapture
+            SchedulePoll
+            Exit Sub
+        End If
     End If
     If target.Range.StoryType <> wdMainTextStory Then Exit Sub
     mCapturing = True
     Dim shape As InlineShape, selected As Long, index As Long, directory As String, xml As String, result As Long
-    Dim generation As Long, elapsed As Double, contentEnd As Long, shapeCount As Long, isSaved As Boolean
+    Dim generation As Long, elapsed As Double, contentEnd As Long, shapeCount As Long, isSaved As Boolean, selectionText As String, contextHeader As String
     ELObserveDocument target.Range.Document
     generation = EquationLabNativeCommand("MathTypeBridgeEditGeneration")
     contentEnd = mDocument.Content.End
@@ -201,7 +222,9 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     If Not forceSnapshot And mSnapshotReady And elapsed < 0.5 And generation = mSnapshotGeneration And contentEnd = mSnapshotEnd And shapeCount = mSnapshotShapes And isSaved = mSnapshotSaved Then
         selected = EquationIndex(target)
         If selected >= 0 Then
-            ELWriteUtf8 directory & "/.EquationLab/document-selection.txt", CStr(selected)
+            selectionText = CStr(selected)
+            If selectionBound Then selectionText = "ELSEL3" & vbLf & selectionText
+            ELWriteUtf8 directory & "/.EquationLab/document-selection.txt", selectionText
             result = EquationLabNativeCommand("MathTypeBridgeSelectDocumentEquation")
             If result = 0 Then GoTo Captured
         End If
@@ -221,7 +244,13 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     xml = mDocument.Content.WordOpenXML
     If Len(xml) > 30000000 Then GoTo Failed
     mSnapshotToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
-    ELWriteUtf8 directory & "/.EquationLab/document-context.txt", "ELCTX2" & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+    ' Word does not emit another selection/double-click event when an already
+    ' selected OLE object is opened. An exact selection remains eligible until
+    ' the selection changes or one activation consumes it. Other captures keep
+    ' the short-lived ELCTX2 contract.
+    contextHeader = "ELCTX2"
+    If selectionBound Then contextHeader = "ELCTX3"
+    ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
     result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
     If result = 0 Then RememberSnapshot
     mSnapshotReady = (result = 0)
@@ -237,6 +266,7 @@ Captured:
 Failed:
     mCapturing = False
     mSnapshotReady = False
+    ELClearSelectionCapture
     Debug.Print "Equation Lab document context unavailable: "; Err.Number
 End Sub
 

@@ -11,6 +11,8 @@
 #include <CommonCrypto/CommonDigest.h>
 
 NSDictionary* EquationLabCapturedDocumentContext();
+BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context);
+void EquationLabConsumeDocumentSelection(NSDictionary* context);
 void EquationLabSetNavigationTarget(std::int32_t index);
 std::int32_t EquationLabNewDocumentToken();
 
@@ -149,6 +151,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic,strong) NSDate* expires;
 @property(nonatomic) NSUInteger failures;
 @property(nonatomic) BOOL terminal;
+@property(nonatomic) BOOL opening;
 @property(nonatomic,strong) NSData* openNative;
 @property(nonatomic,strong) NSDictionary* documentContext;
 @property(nonatomic,strong) NSDictionary* bindingContext;
@@ -227,6 +230,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 - (void)openState:(ProbeEditState*)state;
 - (void)poll:(ProbeEditState*)state;
 - (void)cleanup:(std::uint64_t)sessionId;
+- (void)retireTicket:(NSString*)ticket session:(std::uint64_t)sessionId attempt:(NSUInteger)attempt;
 - (void)fail:(ProbeEditState*)state code:(std::uint32_t)code;
 - (void)failResult:(ProbeEditState*)state code:(std::uint32_t)code;
 - (void)documentReady;
@@ -341,16 +345,31 @@ static ProbeEditorTransport* transport=nil;
 - (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
     return [[ProbeJsonRequest alloc] initWithURL:[NSURL URLWithString:[self.baseURL stringByAppendingString:path]] body:body completion:reply];
 }
+- (void)retireTicket:(NSString*)ticket session:(std::uint64_t)sessionId attempt:(NSUInteger)attempt {
+    if(!ticket.length)return;
+    NSString* session=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(sessionId)];
+    NSDictionary* body=@{@"ticket":ticket,@"session":session};
+    [self request:@"/api/native-cancel" body:body reply:^(NSDictionary* cancelResult,NSError* cancelError){
+        (void)cancelResult;(void)cancelError;
+        [self request:@"/api/native-poll" body:body reply:^(NSDictionary* result,NSError* pollError){
+            if(pollError)return;
+            NSString* state=result[@"state"];
+            if([state isEqual:@"complete"]){
+                [self request:@"/api/native-ack" body:@{@"ticket":ticket,@"session":session,@"ok":@NO} reply:^(NSDictionary* ack,NSError* ackError){(void)ack;(void)ackError;}];
+            }else if([state isEqual:@"editing"]&&attempt<2){
+                dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[self retireTicket:ticket session:sessionId attempt:attempt+1];});
+            }
+        }];
+    }];
+}
 - (void)cleanup:(std::uint64_t)sessionId {
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
     ProbeEditState* state=self.edits[@(sessionId)];if(!state)return;
     if(self.captureRequest.state==state)self.captureRequest=nil;
-    state.terminal=YES;state.openNative=nil;state.documentContext=nil;[state.request cancel];state.request=nil;[self.edits removeObjectForKey:@(sessionId)];
-    if(state.ticket){
-        // Best-effort immediate erasure; a missing endpoint leaves server TTL cleanup.
-        __block ProbeJsonRequest* cancelRequest=nil;
-        cancelRequest=[self request:@"/api/native-cancel" body:@{@"ticket":state.ticket} reply:^(NSDictionary* json,NSError* error){(void)json;(void)error;cancelRequest=nil;}];
-    }
+    state.terminal=YES;state.openNative=nil;state.documentContext=nil;
+    if(!state.opening){[state.request cancel];state.request=nil;}
+    [self.edits removeObjectForKey:@(sessionId)];
+    if(state.ticket)[self retireTicket:state.ticket session:sessionId attempt:0];
     state.ticket=nil;
 }
 - (void)fail:(ProbeEditState*)state code:(std::uint32_t)code {
@@ -409,7 +428,8 @@ static ProbeEditorTransport* transport=nil;
 }
 - (void)documentReady {
     NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();
-    if(!documentCapturedAt||documentCapturedAt.timeIntervalSinceNow<-.5)context=nil;
+    BOOL anchoredSelection=EquationLabDocumentContextIsPendingSelection(context);
+    if(!documentCapturedAt||(!anchoredSelection&&documentCapturedAt.timeIntervalSinceNow<-.5))context=nil;
     for(ProbeEditState* state in self.edits.allValues){
         if(!state.awaitingDocument||state.request||state.documentDeadline.timeIntervalSinceNow<=0)continue;
         if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);continue;}
@@ -423,7 +443,9 @@ static ProbeEditorTransport* transport=nil;
         if(!candidate){[self requestCapture:state];continue;}
         if([state.attemptedDocumentKey isEqual:key]){[self requestCapture:state];continue;}
         state.attemptedDocumentKey=key;
-        state.documentContext=candidate;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;[self openState:state];
+        state.documentContext=candidate;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;
+        if(candidate==context&&anchoredSelection){EquationLabConsumeDocumentSelection(context);anchoredSelection=NO;context=nil;}
+        [self openState:state];
     }
 }
 - (void)ackBackground:(ProbeBackgroundSave*)save ok:(BOOL)ok {
@@ -470,12 +492,13 @@ static ProbeEditorTransport* transport=nil;
 - (void)openState:(ProbeEditState*)state {
     if(![self active:state])return;
     if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);return;}
-    __weak ProbeEditState* weak=state;
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(state.documentContext)body[@"document"]=state.documentContext;
+    state.opening=YES;
     state.request=[self request:@"/api/native-open" body:body reply:^(NSDictionary* json,NSError* error){
-        ProbeEditState* current=weak;if(!current||![self active:current])return;current.request=nil;
+        ProbeEditState* current=state;current.request=nil;current.opening=NO;
         if(error){
+            if(![self active:current])return;
             if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
             if(connectionRefused(error)){if(!current.wakeAttempted)[self wake:current];else[self retryOpen:current];}
             else if(current.documentContext&&current.documentDeadline.timeIntervalSinceNow>0){
@@ -490,6 +513,10 @@ static ProbeEditorTransport* transport=nil;
         id ticket=json[@"ticket"],url=json[@"editorUrl"];
         NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
         if(![ticket isKindOfClass:NSString.class]||[ticket length]!=64||[ticket rangeOfCharacterFromSet:invalid].location!=NSNotFound||![url isKindOfClass:NSString.class]||![url isEqualToString:[@"equationlab://word-edit/" stringByAppendingString:ticket]]){[self fail:current code:InvalidReply];return;}
+        if(![self active:current]){
+            current.ticket=ticket;current.openNative=nil;
+            [self retireTicket:ticket session:current.sessionId attempt:0];current.ticket=nil;return;
+        }
         for(ProbeEditState* other in self.edits.allValues)if(other!=current&&[other.ticket isEqualToString:ticket]){[self fail:current code:InvalidReply];return;}
         current.ticket=ticket;current.openNative=nil;
         if([current.documentContext[@"identity"] isKindOfClass:NSString.class]&&!bridge_probe::bindEditDocument(current.sessionId,[current.documentContext[@"identity"] UTF8String])){[self fail:current code:InvalidReply];return;}
@@ -503,7 +530,7 @@ static ProbeEditorTransport* transport=nil;
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         if(self.launch){if(!self.launch([url UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
         else {
-            launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=weak;if(!active||![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
+            launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=state;if(![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
         }
     }];
 }
@@ -606,6 +633,7 @@ std::uint32_t editorTransportActive(){
 std::uint32_t editorTransportLastError(){return lastError.load();}
 }
 void EquationLabDocumentContextDidCapture(){documentCapturedAt=NSDate.date;if(transport){++transport.captureSerial;[transport documentReady];}}
+void EquationLabDocumentContextDidClearSelection(){documentCapturedAt=nil;}
 void EquationLabDocumentContextDidClear(){documentCapturedAt=nil;if(transport){[transport invalidateDocuments];[transport.ownerCaptureBindings removeAllObjects];[transport.ownerCaptureOrder removeAllObjects];for(ProbeEditState* state in transport.edits.allValues)if(state.awaitingDocument&&state.requiresDocumentCapture){lastCaptureState=CaptureSuperseded;[transport fail:state code:InvalidReply];}}}
 extern "C" __attribute__((visibility("default")))
 bridge_probe::HResult MathTypeBridgeInstallTransportForTesting(std::uint16_t port,bridge_probe::LaunchEditorUrl launch,void* context,std::uint32_t interval){return bridge_probe::installEditorTransportForTesting(port,launch,context,interval);}

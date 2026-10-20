@@ -199,16 +199,28 @@ int main(int argc, char** argv) {
             auto wrap=symbol<void*(*)(CGContextRef,const CGRect*,std::int32_t)>(graphics,"WrapContextEx");
             auto deleteDc=symbol<std::int32_t(*)(void*)>(graphics,"DeleteDC");
             CGRect deviceBounds=CGRectMake(0,0,128,64);CGContextRetain(bitmap);void* dc=wrap(bitmap,&deviceBounds,0);require(dc!=nullptr,"CGContext->WLM HDC wrapper failed");
-            std::cerr<<"stage: own OLE object vtables/lifecycles on real Office storage\n";
-            runObjectTests(own,api,payload,preview,dc,symbol<void(*)(StgMedium*)>(ole,"ReleaseStgMedium"));
-            auto cfbPath=(std::filesystem::path(argv[3]).parent_path()/"mathtype-original-x3-cfb.bin").string();
-            std::cerr<<"stage: explicit MathType Windows/Mac alias registration and original storage preservation\n";
-            runMathTypeAliasTests(own,shim,com,ole,api,payload,cfbPath.c_str());
+            if(std::getenv("PROBE_CANCEL_SLOTS_ONLY"))std::cerr<<"stage: focused native-session cleanup lifecycle; unrelated legacy-x3 object suites skipped\n";
+            else{
+                std::cerr<<"stage: own OLE object vtables/lifecycles on real Office storage\n";
+                runObjectTests(own,api,payload,preview,dc,symbol<void(*)(StgMedium*)>(ole,"ReleaseStgMedium"));
+                auto cfbPath=(std::filesystem::path(argv[3]).parent_path()/"mathtype-original-x3-cfb.bin").string();
+                std::cerr<<"stage: explicit MathType Windows/Mac alias registration and original storage preservation\n";
+                runMathTypeAliasTests(own,shim,com,ole,api,payload,cfbPath.c_str());
+            }
             if(argc>4){
                 auto port=std::stoul(argv[4]);require(port>0&&port<=65535,"Invalid test loopback port");
                 std::cerr<<"stage: standalone native HTTP editing contract\n";
                 auto controlPort=argc>5?std::stoul(argv[5]):0;require(controlPort<=65535,"Invalid control loopback port");
                 runTransportTests(own,api,payload,static_cast<std::uint16_t>(port),static_cast<std::uint16_t>(controlPort));
+            }
+            if(std::getenv("PROBE_CANCEL_SLOTS_ONLY")){
+                require(deleteDc(dc)!=0,"Focused test DeleteDC failed");
+                require(CFGetRetainCount(bitmap)==1,"Focused test HDC ownership differs from expected");
+                CGContextRelease(bitmap);CFRelease(pdf);
+                std::cout<<",\"focused_native_session_cleanup\":true,\"loaded_into_word\":false}\n";
+                if(testRegistration)uninitialize();
+                if(!privateRegistryDirectory.empty())std::filesystem::remove_all(privateRegistryDirectory);
+                return 0;
             }
             require(deleteDc(dc)!=0,"DeleteDC failed");
             require(CFGetRetainCount(bitmap)==1,"HDC ownership contract differs from expected");

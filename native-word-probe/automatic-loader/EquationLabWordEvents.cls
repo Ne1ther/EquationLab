@@ -12,8 +12,8 @@ Option Explicit
 Public WithEvents Host As Word.Application
 
 Private Sub Host_WindowSelectionChange(ByVal Sel As Selection)
-    ' macOS can activate OLE before its double-click callback reaches VBA.
-    ' Capture only an explicitly selected object, while the native session is idle.
+    ' Opening an already selected OLE object need not emit another selection
+    ' or double-click callback. Keep this exact selection for its activation.
     EquationLabDocumentContext.ELObserveDocument Sel.Document
     EquationLabDocumentContext.ELCaptureSelection Sel, False
 End Sub

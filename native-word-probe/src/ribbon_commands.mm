@@ -13,10 +13,16 @@ extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
 void EquationLabDocumentContextDidCapture();
 void EquationLabDocumentContextDidClear();
-namespace { NSDictionary* pendingDocument; std::int32_t navigationTarget=0; std::atomic<std::int32_t> bindingToken{0}; }
-// Word owns this snapshot while the object remains selected. Selection/document
-// events invalidate it; repeated OLE activation must not consume it once.
+void EquationLabDocumentContextDidClearSelection();
+namespace { NSDictionary* pendingDocument; BOOL pendingDocumentSelection=NO; std::int32_t navigationTarget=0; std::atomic<std::int32_t> bindingToken{0}; }
+// Word owns the latest captured snapshot. ELCTX2 remains short-lived; an exact
+// ELCTX3 selection snapshot is consumed once when first dispatched to an OLE owner.
 NSDictionary* EquationLabCapturedDocumentContext(){return pendingDocument;}
+BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context){return context&&pendingDocumentSelection&&context==pendingDocument;}
+void EquationLabConsumeDocumentSelection(NSDictionary* context){
+    if(!EquationLabDocumentContextIsPendingSelection(context))return;
+    pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClearSelection();
+}
 std::int32_t EquationLabNewDocumentToken(){return ++bindingToken;}
 void EquationLabSetNavigationTarget(std::int32_t index){navigationTarget=index+1;}
 namespace {
@@ -79,11 +85,11 @@ std::int32_t prepare(NSString* layout,NSString* operation=@"ribbon-create"){
     if(docx.length<4||memcmp(docx.bytes,"PK\x03\x04",4)||!outputFile(directory,@"ribbon-insert.docx",docx)||!outputFile(directory,@"ribbon-insert.xml",xml))return -4;
     return 0;
 }
-NSDictionary* decodeDocumentContext(NSString* text){
+NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr){
     NSRange first=[text rangeOfString:@"\n"];if(!text||first.location==NSNotFound)return nil;
     NSRange second=[text rangeOfString:@"\n" options:0 range:NSMakeRange(NSMaxRange(first),text.length-NSMaxRange(first))];if(second.location==NSNotFound)return nil;
-    NSString* index=[text substringToIndex:first.location];NSString* identity=nil;NSNumber* snapshot=nil;
-    if([index isEqualToString:@"ELCTX2"]){
+    NSString* index=[text substringToIndex:first.location];NSString* identity=nil;NSNumber* snapshot=nil;BOOL selected=[index isEqualToString:@"ELCTX3"];
+    if([index isEqualToString:@"ELCTX2"]||selected){
         NSMutableArray<NSString*>* fields=[NSMutableArray arrayWithCapacity:4];NSUInteger offset=0;
         for(NSUInteger i=0;i<4;i++){
             NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound)return nil;
@@ -101,27 +107,35 @@ NSDictionary* decodeDocumentContext(NSString* text){
     if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return nil;
     NSMutableDictionary* context=[@{@"index":@(number),@"name":[text substringWithRange:NSMakeRange(NSMaxRange(first),second.location-NSMaxRange(first))],@"ooxml":[text substringFromIndex:NSMaxRange(second)]} mutableCopy];
     if(identity){context[@"identity"]=identity;context[@"snapshot"]=snapshot;}
+    if(selectionBound)*selectionBound=selected;
     return context;
 }
+BOOL decodeSelectionEquation(NSString* text,NSInteger* index,BOOL* selectionBound){
+    if(!text||!index)return NO;BOOL bound=[text hasPrefix:@"ELSEL3\n"];if(bound)text=[text substringFromIndex:7];
+    NSScanner* scanner=[NSScanner scannerWithString:text];NSInteger number=-1;
+    if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return NO;
+    *index=number;if(selectionBound)*selectionBound=bound;return YES;
+}
 std::int32_t captureDocument(){
-    if(!validHost())return -1;pendingDocument=nil;
+    if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClearSelection();
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"document-context.txt");
     if(!data)return -2;
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
-    pendingDocument=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
-    if(!pendingDocument)return -3;EquationLabDocumentContextDidCapture();
+    BOOL selectionBound=NO;pendingDocument=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding],&selectionBound);
+    if(!pendingDocument)return -3;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();
     return 0;
 }
-std::int32_t clearDocument(){if(!validHost())return -1;pendingDocument=nil;EquationLabDocumentContextDidClear();return 0;}
+std::int32_t clearDocument(){if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClear();return 0;}
+std::int32_t clearDocumentSelection(){if(!validHost())return -1;pendingDocument=nil;pendingDocumentSelection=NO;EquationLabDocumentContextDidClearSelection();return 0;}
 std::int32_t selectDocumentEquation(){
     if(!validHost()||!pendingDocument)return -1;
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSString* text=[[NSString alloc] initWithData:inputFile(directory,@"document-selection.txt") encoding:NSUTF8StringEncoding];
     unlink([directory URLByAppendingPathComponent:@"document-selection.txt"].fileSystemRepresentation);
-    if(!text)return -2;NSScanner* scanner=[NSScanner scannerWithString:text];NSInteger index=-1;
-    if(![scanner scanInteger:&index]||!scanner.isAtEnd||index<0||index>10000)return -3;
-    NSMutableDictionary* next=[pendingDocument mutableCopy];next[@"index"]=@(index);pendingDocument=next;EquationLabDocumentContextDidCapture();return 0;
+    if(!text)return -2;BOOL selectionBound=NO;NSInteger index=-1;
+    if(!decodeSelectionEquation(text,&index,&selectionBound))return -3;
+    NSMutableDictionary* next=[pendingDocument mutableCopy];next[@"index"]=@(index);pendingDocument=next;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();return 0;
 }
 }
 #define RIBBON_EXPORT(name,expression) extern "C" __attribute__((visibility("default"))) std::int32_t name(){@autoreleasepool{return expression;}}
@@ -139,6 +153,7 @@ RIBBON_EXPORT(MathTypeBridgeRibbonNumber,prepare(@"inline",@"ribbon-number"))
 RIBBON_EXPORT(MathTypeBridgeRibbonChapter,prepare(@"inline",@"ribbon-chapter"))
 RIBBON_EXPORT(MathTypeBridgeCaptureDocument,captureDocument())
 RIBBON_EXPORT(MathTypeBridgeClearDocumentContext,clearDocument())
+RIBBON_EXPORT(MathTypeBridgeClearDocumentSelection,clearDocumentSelection())
 RIBBON_EXPORT(MathTypeBridgeSelectDocumentEquation,selectDocumentEquation())
 RIBBON_EXPORT(MathTypeBridgeEditGeneration,bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration)))
 RIBBON_EXPORT(MathTypeBridgeNewDocumentToken,EquationLabNewDocumentToken())

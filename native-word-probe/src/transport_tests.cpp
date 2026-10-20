@@ -8,6 +8,7 @@
 #include <memory>
 #include <fstream>
 #include <cstdlib>
+#include <iterator>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <unistd.h>
@@ -28,8 +29,8 @@ struct Site final:OleClientSite {
 struct TestObject {
     OleObject* object=nullptr;PersistStorage* persist=nullptr;Storage* storage=nullptr;Site site;
     std::vector<std::uint8_t> original;
-    TestObject(PublicGetClassObject getClass,const InteropHooks& api,const std::vector<std::uint8_t>& source,std::uint8_t marker):original(source){
-        original[27]=marker;ClassFactory* factory=nullptr;
+    TestObject(PublicGetClassObject getClass,const InteropHooks& api,const std::vector<std::uint8_t>& source,std::uint8_t marker,bool stampMarker=true):original(source){
+        if(stampMarker)original[27]=marker;ClassFactory* factory=nullptr;
         check(getClass(&ProbeClassId,&ClassFactoryId,reinterpret_cast<void**>(&factory))==Ok,"transport factory");
         check(factory->CreateInstance(nullptr,OleObjectId,reinterpret_cast<void**>(&object))==Ok,"transport object");factory->Release();
         check(object->QueryInterface(PersistStorageId,reinterpret_cast<void**>(&persist))==Ok,"transport persistence");
@@ -45,6 +46,8 @@ struct TestObject {
 std::thread::id mainThread;std::string lastEditorUrl;std::uint32_t launches=0,wakes=0;std::uint16_t controlPort=0;
 bool ownerAddressReuseObserved=false;
 enum class WakeMode {Start,Cancel,Timeout};WakeMode wakeMode=WakeMode::Start;OleObject* cancelOnWake=nullptr;
+std::string textFile(const char* path){std::ifstream input(path,std::ios::binary);return {std::istreambuf_iterator<char>(input),std::istreambuf_iterator<char>()};}
+std::vector<std::uint8_t> byteFile(const char* path){auto text=textFile(path);return {text.begin(),text.end()};}
 std::string control(const char* command){
     int fd=socket(AF_INET,SOCK_STREAM,0);check(fd>=0,"control socket");timeval timeout{2,0};setsockopt(fd,SOL_SOCKET,SO_RCVTIMEO,&timeout,sizeof(timeout));setsockopt(fd,SOL_SOCKET,SO_SNDTIMEO,&timeout,sizeof(timeout));
     sockaddr_in address{};address.sin_family=AF_INET;address.sin_port=htons(controlPort);address.sin_addr.s_addr=htonl(INADDR_LOOPBACK);
@@ -75,6 +78,66 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
     auto configure=resolve<HResult(*)(const InteropHooks*,std::size_t)>(bundle,"MathTypeBridgeSetInteropHooks");
     check(configure(&api,sizeof(api))==Ok,"transport runtime hooks");
     auto reset=[&]{check(install(port,launch,nullptr,10)==Ok,"install test-only transport");};
+    if(std::getenv("PROBE_CANCEL_SLOTS_ONLY")){
+        check(controlPort,"cancel-slot regression requires its isolated control endpoint");
+        reset();const auto base=launches;std::uint32_t completedCleanups=0;std::uint32_t firstFailure=0;
+        for(std::uint32_t i=0;i<20;i++){
+            TestObject owner(getClass,api,native,1);owner.begin();
+            const auto expectedLaunch=base+i+1;
+            const auto deadline=CFAbsoluteTimeGetCurrent()+4;
+            while(launches<expectedLaunch&&CFAbsoluteTimeGetCurrent()<deadline&&active()!=0)
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode,.01,true);
+            if(launches<expectedLaunch){firstFailure=i+1;break;}
+            check(owner.object->Close(1)==Ok,"cancel-slot owner Close");
+            spin([&]{return active()==0;});
+            check(owner.site.saves==0&&owner.saved()==owner.original,"cancel-slot cleanup changed native storage");
+            ++completedCleanups;
+            // Give the just-issued cancellation time to enter the serialized
+            // service queue; the next native-open also acts as a barrier.
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode,.015,false);
+        }
+        check(completedCleanups==20,"Word owner cleanup exhausted native session slots before 20 cycles");
+        check(launches==base+20,"not all twenty owners received a Word edit ticket");
+        std::string afterCycles;
+        spin([&]{afterCycles=control("counts");return afterCycles.find("\"cancel\":20")!=std::string::npos&&afterCycles.find("\"poll\":20")!=std::string::npos;});
+        check(afterCycles.find("\"open\":20")!=std::string::npos,"not all twenty native sessions were opened");
+
+        control("hold-next-open");const auto delayedLaunches=launches;
+        TestObject delayedOwner(getClass,api,native,1);delayedOwner.begin();
+        spin([&]{return control("open-held").find("\"held\":true")!=std::string::npos;});
+        check(delayedOwner.object->Close(1)==Ok,"delayed-open owner Close");
+        spin([&]{return active()==0;});
+        control("release-open");
+        spin([&]{auto counts=control("counts");return counts.find("\"cancel\":21")!=std::string::npos&&counts.find("\"poll\":21")!=std::string::npos;});
+        check(launches==delayedLaunches,"closed owner launched after delayed native-open response");
+
+        control("complete-next-open");const auto completedLaunches=launches;
+        TestObject completedOwner(getClass,api,native,1);completedOwner.begin();
+        spin([&]{return control("open-held").find("\"held\":true")!=std::string::npos;});
+        check(completedOwner.object->Close(1)==Ok,"completed-open owner Close");
+        spin([&]{return active()==0;});
+        control("release-open");
+        spin([&]{auto counts=control("counts");return counts.find("\"ack\":1")!=std::string::npos&&counts.find("\"failed\"")!=std::string::npos;});
+        check(launches==completedLaunches&&completedOwner.site.saves==0&&completedOwner.saved()==completedOwner.original,
+              "closed owner applied or launched a delayed completed native result");
+
+        const auto priorLaunches=launches,previousError=error();
+        TestObject finalOwner(getClass,api,native,1);finalOwner.begin();
+        const auto deadline=CFAbsoluteTimeGetCurrent()+4;
+        while(launches==priorLaunches&&active()!=0&&error()==previousError&&CFAbsoluteTimeGetCurrent()<deadline)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode,.01,true);
+        std::cerr<<"CANCEL_SLOT_OBSERVATION {\"attemptedOwners\":"<<(completedCleanups+(firstFailure?1:0))
+                 <<",\"completedCleanups\":"<<completedCleanups<<",\"blockedAttempt\":"<<firstFailure
+                 <<",\"finalOpenLaunched\":"<<(launches==priorLaunches+1?"true":"false")
+                 <<",\"transportError\":"<<error()<<"}\n";
+        check(launches==priorLaunches+1,"new Word owner could not open after repeated cleanup");
+        check(finalOwner.object->Close(1)==Ok,"final cancel-slot owner Close");
+        spin([&]{return active()==0;});
+        spin([&]{auto counts=control("counts");return counts.find("\"cancel\":23")!=std::string::npos&&counts.find("\"poll\":23")!=std::string::npos;});
+        std::cerr<<"CANCEL_SLOT_DRAINED {\"completedCleanups\":"<<completedCleanups
+                 <<",\"finalOpenLaunched\":true,\"closedOwnerLaunchedAfterDelayedResponse\":false,\"http\":"<<control("counts")<<"}\n";
+        return;
+    }
     if(const char* documentPath=std::getenv("PROBE_NO_EVENT_DOCUMENT")){
         // Isolated regression: real owner/storage + real backend validation,
         // but no Word UI or selection events. A native write invalidates XML;
@@ -117,6 +180,71 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
         // here; observing a one-item fallback must never turn this test green.
         check(readback.find("\"fullDocumentCount\":30")!=std::string::npos,"Saved same OLE owner reopened without full document context (expected 30 formulas)");
         test.object->Close(1);return;
+    }
+    if(const char* candidate9Path=std::getenv("PROBE_CAPTURE_RECOVERY_CANDIDATE9")){
+        const char* candidate10Path=std::getenv("PROBE_CAPTURE_RECOVERY_CANDIDATE10");const char* native10Path=std::getenv("PROBE_CAPTURE_RECOVERY_NATIVE");
+        check(candidate10Path&&native10Path,"capture-recovery fixture paths");auto candidate9=textFile(candidate9Path),candidate10=textFile(candidate10Path);auto native10=byteFile(native10Path);
+        check(!candidate9.empty()&&!candidate10.empty()&&native10.size()>239,"capture-recovery fixture contents");
+        reset();control("capture-recovery-start");
+        check(setDocument(candidate9.c_str())==Ok,"install deliberately stale formula-9 snapshot");
+        check(ageDocument(0)==Ok,"refresh candidate-9 capture timestamp");
+        const auto base=launches;
+        {
+            TestObject test(getClass,api,native10,0,false);test.begin();
+            std::string rejected;
+            spin([&]{rejected=control("capture-recovery-status");return launches!=base||rejected.find("\"staleIndexRejected\":1")!=std::string::npos;});
+            if(launches!=base)std::cerr<<"CAPTURE_RECOVERY_EARLY_LAUNCH "<<control("capture-recovery-status")<<"\n";
+            check(launches==base,"formula-9 candidate launched the formula-10 owner");
+            check(rejected.find("\"staleIndexRejected\":1")!=std::string::npos&&rejected.find("\"correctIndexAccepted\":0")!=std::string::npos,"formula-9 candidate was not rejected before activation");
+            check(setDocument(candidate10.c_str())==Ok,"publish exact formula-10 capture before the request deadline");
+            check(ageDocument(0)==Ok,"refresh exact formula-10 capture timestamp");
+            spin([&]{return launches==base+1;});
+            auto accepted=control("capture-recovery-status");
+            check(accepted.find("\"correctIndexAccepted\":1")!=std::string::npos&&accepted.find("\"fullDocumentCount\":30")!=std::string::npos&&accepted.find("\"lastIndex\":9")!=std::string::npos,"correct formula-10 snapshot did not reopen with the 30-formula context");
+            control("cancel-editing");spin([&]{return active()==0;});
+            check(test.site.saves==0&&test.saved()==test.original,"capture-recovery cancellation changed Word storage");
+            check(test.object->Close(1)==Ok,"capture-recovery object close");
+        }
+        check(setDocument(nullptr)==Ok&&clearDocuments()==Ok,"capture-recovery context cleanup");
+        reset();control("capture-recovery-start");
+        check(setDocument(candidate9.c_str())==Ok,"install stale formula-9 candidate for late-capture observation");
+        check(ageDocument(0)==Ok,"refresh late-capture candidate timestamp");
+        const auto lateBase=launches;bool lateFallbackObserved=false;
+        {
+            TestObject test(getClass,api,native10,0,false);test.begin();std::string initialStatus;
+            spin([&]{initialStatus=control("capture-recovery-status");return launches!=lateBase||initialStatus.find("\"staleIndexRejected\":1")!=std::string::npos;});
+            check(launches==lateBase,"formula-9 candidate launched before the late-capture observation");
+            const auto observationDeadline=CFAbsoluteTimeGetCurrent()+1.4;
+            std::string beforeLate;
+            while(CFAbsoluteTimeGetCurrent()<observationDeadline&&active()!=0){
+                beforeLate=control("capture-recovery-status");
+                if(beforeLate.find("\"noContextFallbackAccepted\":1")!=std::string::npos)break;
+                CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.025,false);
+            }
+            lateFallbackObserved=beforeLate.find("\"noContextFallbackAccepted\":1")!=std::string::npos;
+            if(lateFallbackObserved){
+                const auto handoffDeadline=CFAbsoluteTimeGetCurrent()+1;
+                while(launches==lateBase&&CFAbsoluteTimeGetCurrent()<handoffDeadline)CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.025,false);
+                check(launches==lateBase+1,"current no-context fallback did not launch once");
+                check(beforeLate.find("\"fullDocumentCount\":0")!=std::string::npos&&beforeLate.find("\"correctIndexAccepted\":0")!=std::string::npos,"unbound fallback was reported as a full document capture");
+            }
+            check(setDocument(candidate10.c_str())==Ok,"publish formula-10 capture after the fallback was already opened");
+            check(ageDocument(0)==Ok,"refresh late formula-10 capture timestamp");
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.1,false);
+            auto afterLate=control("capture-recovery-status");
+            if(lateFallbackObserved){
+                check(afterLate.find("\"noContextFallbackAccepted\":1")!=std::string::npos&&afterLate.find("\"correctIndexAccepted\":0")!=std::string::npos&&launches==lateBase+1,"late capture retroactively upgraded or reopened an existing fallback session");
+            }else if(afterLate.find("\"correctIndexAccepted\":1")!=std::string::npos){
+                check(afterLate.find("\"fullDocumentCount\":30")!=std::string::npos&&afterLate.find("\"lastIndex\":9")!=std::string::npos&&launches==lateBase+1,"a late correct capture was accepted without its exact 30-formula context");
+            }else{
+                check(afterLate.find("\"noContextFallbackAccepted\":0")!=std::string::npos&&afterLate.find("\"correctIndexAccepted\":0")!=std::string::npos,"late capture produced an unclassified partial context result");
+            }
+            control("cancel-editing");if(active()!=0)spin([&]{return active()==0;});
+            check(test.site.saves==0&&test.saved()==test.original,"late-capture cancellation changed Word storage");
+            check(test.object->Close(1)==Ok,"late-capture object close");
+        }
+        check(setDocument(nullptr)==Ok&&clearDocuments()==Ok,"late-capture context cleanup");control("capture-recovery-stop");
+        std::cout<<",\"native_http_formula9_candidate_rejected_without_launch\":true,\"native_http_formula10_recapture_reopens_30_context_before_deadline\":true,\"native_http_late_capture_fallback_observed_not_promoted\":"<<(lateFallbackObserved?"true":"false");
     }
     reset();{
         TestObject test(getClass,api,native,1);test.begin();check(active()==1&&test.site.saves==0,"DoVerb unexpectedly blocks for HTTP");spin([&]{return active()==0;});
