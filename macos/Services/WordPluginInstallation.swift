@@ -10,6 +10,7 @@ extension DesktopBridge {
     }
 
     func installWordPlugin() {
+        lastWordPluginVerification = nil
         restoreWordOfficeAccess()
         guard refreshWordApplication() else {
             installationMessage = "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。"
@@ -71,6 +72,7 @@ extension DesktopBridge {
     }
 
     func uninstallWordPlugin() {
+        lastWordPluginVerification = nil
         openWordPackage(removing: true)
     }
 
@@ -172,6 +174,10 @@ extension DesktopBridge {
 
     func verifyWordPlugin(showResult: Bool = false) {
         guard !installationRunning else { return }
+        let wordPID = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first?.processIdentifier
+        if !showResult, let previous = lastWordPluginVerification,
+           previous.wordPID == wordPID, Date().timeIntervalSince(previous.date) < 30 { return }
+        lastWordPluginVerification = (Date(), wordPID)
         restoreWordOfficeAccess()
         guard refreshWordApplication() else {
             nativeWordStatus = "没有找到桌面版 Microsoft Word。请安装 Word，或选择它的实际位置。"

@@ -40,10 +40,9 @@ struct NumberingFormatEditor: View {
                     Text(bridge.t("格式无效：包含一个 #E 序号，章、节和序号各用一次；数字需在 1–32767 之间。"))
                         .font(.caption).foregroundStyle(.red)
                 } else {
-                    Text(preview.isEmpty ? "…" : preview).font(.title2.monospacedDigit()).textSelection(.enabled)
+                    numberBadge(preview.isEmpty ? "…" : preview)
                         .accessibilityLabel(bridge.t("格式预览")).accessibilityValue(preview)
-                    Text(bridge.language.usesEnglish ? "Chapter \(chapter) · Section \(section) · Equation \(equation)" : "章 \(chapter) · 节 \(section) · 公式序号 \(equation)")
-                        .font(.caption2).foregroundStyle(.secondary)
+                    counters(chapter, section, equation)
                     if bridge.state.numbering?.equation == nil {
                         Text(bridge.t("以上为示例计数，实际序号由 Word 更新。")).font(.caption2).foregroundStyle(.secondary)
                     }
@@ -56,25 +55,28 @@ struct NumberingFormatEditor: View {
                     HStack(alignment: .firstTextBaseline) {
                         Text(bridge.t("文档中的编号")).font(.caption).foregroundStyle(.secondary)
                         Spacer()
-                        Text(number.actualNumber ?? bridge.t(number.mode == "unknown" ? "未读取" : "未编号"))
-                            .font(.headline.monospacedDigit()).textSelection(.enabled)
+                        numberBadge(number.actualNumber ?? bridge.t(number.mode == "unknown" ? "未读取" : "未编号"))
                     }
                     if number.hasDocumentContext {
-                        Text(bridge.language.usesEnglish ? "Equation \(number.position) of \(number.total)" : "文档中的第 \(number.position) / \(number.total) 个公式")
-                            .font(.caption).foregroundStyle(.secondary)
+                        HStack(spacing: 4) {
+                            Text(bridge.language.usesEnglish ? "Equation" : "文档中的第").foregroundStyle(.secondary)
+                            Text("\(number.position)").foregroundStyle(.blue).fontWeight(.semibold)
+                            Text("/ \(number.total)" + (bridge.language.usesEnglish ? "" : " 个公式")).foregroundStyle(.secondary)
+                        }.font(.callout).monospacedDigit().accessibilityElement(children: .combine)
                     } else {
                         Text(bridge.t("未读取整篇文档信息")).font(.caption).foregroundStyle(.secondary)
                     }
                     if number.actualNumber != nil {
-                        let details = [(bridge.t("章"), number.chapter), (bridge.t("节"), number.section), (bridge.t("公式序号"), number.equation)]
-                        Text(details.compactMap { label, value in value.map { "\(label) \($0)" } }.joined(separator: " · "))
-                            .font(.caption).foregroundStyle(.secondary)
+                        counters(number.chapter, number.section, number.equation)
                         if let references = number.referenceCount {
-                            Text(bridge.language.usesEnglish ? "Referenced \(references) time(s) in this document part" : "当前正文引用 \(references) 处")
-                                .font(.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 4) {
+                                Text(bridge.language.usesEnglish ? "References" : "当前正文引用").foregroundStyle(.secondary)
+                                Text("\(references)").foregroundStyle(.blue).fontWeight(.semibold)
+                                if !bridge.language.usesEnglish { Text("处").foregroundStyle(.secondary) }
+                            }.font(.callout).accessibilityElement(children: .combine)
                         }
                         if let format = number.format {
-                            Text(bridge.t("原格式") + "  " + format).font(.caption.monospaced()).foregroundStyle(.secondary).textSelection(.enabled)
+                            Text(bridge.t("原格式") + "  " + format).font(.caption.monospaced()).foregroundStyle(.primary).textSelection(.enabled)
                         }
                     }
                 }
@@ -95,6 +97,21 @@ struct NumberingFormatEditor: View {
             if !field.disabled { bridge.fieldBinding(field.id, fallback: field.value).wrappedValue = value }
         }
         .onChange(of: previewKey) { _, _ in refreshPreview() }
+    }
+
+    private func numberBadge(_ value: String) -> some View {
+        Text(value).font(.system(size: 21, weight: .semibold, design: .rounded).monospacedDigit())
+            .foregroundStyle(.black).padding(.horizontal, 9).padding(.vertical, 3)
+            .background(Color.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 6)).textSelection(.enabled)
+    }
+    private func counters(_ chapter: Int?, _ section: Int?, _ equation: Int?) -> some View {
+        HStack(spacing: 10) {
+            ForEach(Array([(bridge.t("章"), chapter), (bridge.t("节"), section), (bridge.t("公式序号"), equation)].enumerated()), id: \.offset) { _, item in
+                if let value = item.1 {
+                    HStack(spacing: 4) { Text(item.0).foregroundStyle(.secondary); Text("\(value)").foregroundStyle(.blue).fontWeight(.semibold) }
+                }
+            }
+        }.font(.caption).monospacedDigit().accessibilityElement(children: .combine)
     }
 
     private func refreshPreview() {

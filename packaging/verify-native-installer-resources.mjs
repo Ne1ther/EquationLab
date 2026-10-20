@@ -29,7 +29,7 @@ const artifacts=path.join(resources,'native-word-artifacts');
 const temp=await fs.mkdtemp(path.join(tmpdir(),'equationlab-packaged-installer-verify-'));
 let server,services;const checks={};
 async function listener(version){
-  const health={app:'Equation Lab',version,tls:false};
+  const health={app:'Equation Lab',version};
   server=http.createServer((_,res)=>res.end(JSON.stringify(health)));
   await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
   return {health,port:server.address().port};
@@ -37,13 +37,13 @@ async function listener(version){
 try{
   for(const obsoleteVersion of ['0.4.1','0.4.2'].filter(version=>version!==APP_VERSION)){
     const old=await listener(obsoleteVersion);
-    await assert.rejects(startAppServices({supportDirectory:temp,nativePort:old.port,watchCertificates:false}),/已被占用/);
+    await assert.rejects(startAppServices({nativePort:old.port}),/已被占用/);
     assert.deepEqual(await fetch('http://127.0.0.1:'+old.port+'/api/health').then(r=>r.json()),old.health);
     checks['old'+obsoleteVersion.replaceAll('.','')+'EngineRejected']=true;checks.oldListenerPreserved=true;
     await new Promise(resolve=>server.close(resolve));server=null;
   }
   const current=await listener(APP_VERSION);
-  services=await startAppServices({supportDirectory:temp,nativePort:current.port,watchCertificates:false});
+  services=await startAppServices({nativePort:current.port});
   assert.equal(services.status.nativeOwnership,'external');
   await services.close();services=null;assert.equal(server.listening,true);
   checks.matchingVersionReused=true;checks.externalListenerPreserved=true;

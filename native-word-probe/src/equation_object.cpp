@@ -38,6 +38,8 @@ public:
 InteropHooks hooks;
 OpenEditor openEditor=nullptr;
 CancelEditor cancelEditor=nullptr;
+ForgetEditorOwner forgetEditorOwner=nullptr;
+EditorOwnerWritten editorOwnerWritten=nullptr;
 void* editorContext=nullptr;
 std::atomic<std::uint32_t> live{0};
 // The service outlives Word. A restarted Word must not reuse identifiers still
@@ -115,6 +117,8 @@ class EquationObject final:public OleObject,public PersistStorage,public DataObj
     SizeL extent_{2540,1270};bool dirty_=false,noScribble_=false,loaded_=false,closed_=false;
     std::uint32_t nextCookie_=1,viewAspect_=1,viewFlags_=0;
     std::uint64_t session_=0;
+    const std::uint64_t identity_=nextSession++;
+    std::string documentIdentity_;
     void gauges(){record(Metric::ClientPresent,client_?1:0);record(Metric::SourceStorage,source_?1:0);record(Metric::Dirty,dirty_);record(Metric::NoScribble,noScribble_);record(Metric::DataSinks,static_cast<std::int32_t>(dataSinks_.size()));record(Metric::OleSinks,static_cast<std::int32_t>(oleSinks_.size()));record(Metric::ViewSink,viewSink_?1:0);}
     template<class F>HResult measured(Metric calls,Metric result,F&& action){increment(calls);auto hr=action();record(result,hr);if(correctThread())gauges();return hr;}
     HResult requestSave(){auto site=client_;if(!site)return NoConnection;auto before=current(Metric::PersistSaveCalls);increment(Metric::SaveObjectCalls);auto hr=site->SaveObject();record(Metric::SaveObjectResult,hr);if(hr>=0&&current(Metric::PersistSaveCalls)==before)increment(Metric::SaveObjectWithoutPersistSave);gauges();return hr;}
@@ -142,7 +146,9 @@ class EquationObject final:public OleObject,public PersistStorage,public DataObj
     void releaseMedium(StgMedium& medium){if(medium.release)medium.release->Release();else if(medium.tymed==32&&medium.handle&&api_.deletePict)api_.deletePict(medium.handle);else if(medium.tymed==8&&medium.storage)medium.storage->Release();medium={};}
 public:
     explicit EquationObject(Guid clsid):classId_(clsid),api_(hooks){++live;}
-    ~EquationObject(){--live;}
+    ~EquationObject(){if(forgetEditorOwner)forgetEditorOwner(identity_,editorContext);--live;}
+    std::uint64_t identity()const{return identity_;}
+    bool bindDocument(const char* identity){if(!identity||!correctThread())return false;if(documentIdentity_.empty())documentIdentity_=identity;return documentIdentity_==identity;}
     bool correctThread()const{return owner_==std::this_thread::get_id();}
     HResult QueryInterface(const Guid& iid,void** out)override{
         if(equal(iid,oleIid(0x126)))increment(Metric::RunnableQueries);
@@ -180,6 +186,7 @@ public:
         if(closed_)return Ok;
         if(mode!=1&&dirty_&&client_){auto hr=requestSave();if(hr<0)return hr;}
         if(session_)completeEdit(session_,nullptr,0,false);
+        if(forgetEditorOwner)forgetEditorOwner(identity_,editorContext);
         notifyData(true);
         auto sinks=oleSinks_;oleSinks_.clear();dataSinks_.clear();viewSink_={};client_={};source_={};backup_={};closed_=true;
         for(auto& [cookie,c]:sinks){(void)cookie;increment(Metric::CloseNotifications);c.sink->OnClose();}gauges();return Ok;
@@ -191,7 +198,10 @@ public:
     HResult DoVerb(std::int32_t verb,void*,OleClientSite* site,std::int32_t,void*,const RectL*)override{return measured(Metric::DoVerbCalls,Metric::DoVerbResult,[&]() -> HResult {
         if(!correctThread())return WrongThread;if(closed_||noScribble_)return Unexpected;
         if(verb!=0&&verb!=1&&verb!=-1&&verb!=-2)return static_cast<HResult>(0x80040181u);
-        if(site)SetClientSite(site);if(!openEditor)return NotImplemented;if(session_)return Ok;
+        if(site)SetClientSite(site);if(!openEditor)return NotImplemented;
+        // An external editor may be behind Word or hidden. Re-activation must
+        // bring that SAME session back, without allocating another OLE owner.
+        if(session_)return openEditor(session_,native_.data(),native_.size(),editorContext);
         session_=nextSession++;AddRef();{std::lock_guard lock(sessionMutex);sessions[session_]=this;}
         auto id=session_;auto hr=openEditor(id,native_.data(),native_.size(),editorContext);
         if(hr<0)completeEdit(id,nullptr,0,false);return hr;});
@@ -231,22 +241,30 @@ public:
     HResult GetExtent(std::uint32_t aspect,std::int32_t index,void* target,SizeL* out)override{if(index!=-1||target)return FormatError;return GetExtent(aspect,out);}
     HResult finish(std::uint64_t id,const std::uint8_t* data,std::size_t size,bool apply){return measured(apply?Metric::ApplyCalls:Metric::CancelCalls,apply?Metric::ApplyResult:Metric::CancelResult,[&]() -> HResult {
         if(!correctThread())return WrongThread;if(id!=session_)return NoConnection;
-        if(apply){if(noScribble_||closed_)return Unexpected;if(!validNative(data,size))return StorageHeaderError;native_.assign(data,data+size);dirty_=true;increment(Metric::EditGeneration);notifyData();notifyView();if(client_){auto hr=requestSave();if(hr<0)return hr;}}
+        if(apply){if(noScribble_||closed_)return Unexpected;if(!validNative(data,size))return StorageHeaderError;native_.assign(data,data+size);dirty_=true;increment(Metric::EditGeneration);if(forgetEditorOwner)forgetEditorOwner(0,editorContext);if(editorOwnerWritten)editorOwnerWritten(identity_,native_.data(),native_.size(),editorContext);notifyData();notifyView();if(client_){auto hr=requestSave();if(hr<0)return hr;}}
         session_=0;return Ok;});
     }
     HResult preview(const std::uint8_t* data,std::size_t size,SizeL extent){return measured(Metric::PreviewCalls,Metric::PreviewResult,[&]() -> HResult {if(!correctThread())return WrongThread;if(noScribble_||closed_)return Unexpected;if(!data||!size||size>MaxBytes||extent.width<=0||extent.height<=0)return InvalidArgument;pdf_.assign(data,data+size);extent_=extent;return Ok;});}
 };
 }
 void setInteropHooks(const InteropHooks& api){hooks=api;}
-void setEditorHooks(OpenEditor open,void* context){openEditor=open;editorContext=context;cancelEditor=nullptr;}
+void setEditorHooks(OpenEditor open,void* context){openEditor=open;editorContext=context;cancelEditor=nullptr;forgetEditorOwner=nullptr;editorOwnerWritten=nullptr;}
 void setEditorCancelHook(CancelEditor cancel){cancelEditor=cancel;}
+void setEditorOwnerForgetHook(ForgetEditorOwner forget){forgetEditorOwner=forget;}
+void setEditorOwnerWrittenHook(EditorOwnerWritten written){editorOwnerWritten=written;}
+std::uint64_t editObjectIdentity(std::uint64_t session){std::lock_guard lock(sessionMutex);auto it=sessions.find(session);return it==sessions.end()?0:it->second->identity();}
+bool bindEditDocument(std::uint64_t session,const char* identity){std::lock_guard lock(sessionMutex);auto it=sessions.find(session);return it!=sessions.end()&&it->second->bindDocument(identity);}
 std::uint32_t liveEquationObjects(){return live.load();}
 std::int32_t diagnosticValue(std::uint32_t metric){if(metric==0)return 2;return metric<MetricCount?diagnostics.values[metric].load():InvalidArgument;}
 HResult makeEquationObject(const Guid& clsid,const Guid& iid,void** out){if(!out)return PointerError;*out=nullptr;auto* object=new EquationObject(clsid);auto hr=object->QueryInterface(iid,out);object->Release();return hr;}
-HResult completeEdit(std::uint64_t id,const std::uint8_t* data,std::size_t size,bool apply){
+HResult completeEdit(std::uint64_t id,const std::uint8_t* data,std::size_t size,bool apply,bool reopen){
     EquationObject* object=nullptr;{std::lock_guard lock(sessionMutex);auto it=sessions.find(id);if(it==sessions.end())return NoConnection;object=it->second;object->AddRef();}
     auto hr=object->finish(id,data,size,apply);
     if(hr==Ok){bool removed=false;{std::lock_guard lock(sessionMutex);removed=sessions.erase(id)>0;}if(removed){if(cancelEditor)cancelEditor(id,editorContext);object->Release();}}
+    // A new user activation can arrive while the previous cancellation/save
+    // is being consumed. Finish that transaction first, then allocate a fresh
+    // session on this SAME live OLE object and client site.
+    if(hr==Ok&&reopen)hr=object->DoVerb(0,nullptr,nullptr,0,nullptr,nullptr);
     object->Release();return hr;
 }
 HResult setSessionPreview(std::uint64_t id,const std::uint8_t* data,std::size_t size,SizeL extent){

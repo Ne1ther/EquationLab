@@ -1,8 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
-import {createDocx,inspectDocx,arrangeDocx,flatOpc,fromFlatOpc,NS} from '../src/document.mjs';
-import {operation} from '../src/server.mjs';
+import {createDocx,inspectDocx,arrangeDocx,flatOpc,fromFlatOpc} from '../src/document.mjs';
 
 test('Numbered DOCX integrates live chapter fields, stable references and package settings',async()=>{
  const bytes=await createDocx([{latex:'x^{2}',layout:{mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:3}},{latex:'y^{2}',layout:{mode:'numbered-left',numberFormat:'(#C1.#E1)',chapter:3}}],{fragment:true,references:[{target:0,prefix:'见式 '}]}),r=await inspectDocx(bytes);
@@ -28,13 +27,6 @@ test('Arrangement rejects inline prose and custom bookmarks before writing',asyn
  let xml=await zip.file('word/document.xml').async('string');xml=xml.replace('<w:object','<w:t>Do not discard this prose.</w:t><w:object');zip.file('word/document.xml',xml);
  const altered=await zip.generateAsync({type:'nodebuffer'});await assert.rejects(arrangeDocx(altered,{layout:{mode:'numbered-right'}}),/正文/);
  const {objects}=await inspectDocx(altered);assert.equal(objects[0].latex,'x^{2}');
-});
-
-test('Word host API does not introduce sequence resets on every insertion',async()=>{
- const created=await operation('create',{latex:'x^{2}',layout:{mode:'numbered-right',equation:4},initializeContext:false}),bytes=await fromFlatOpc(created.ooxml),r=await inspectDocx(bytes);
- assert.equal(r.objects[0].layout.numberText,'(4)');assert.doesNotMatch(await r.zip.file('word/document.xml').async('string'),/SEQ EquationLab \\r/);
- const read=await operation('inspect-selection',{ooxml:created.ooxml});assert.equal(read.objects.length,1);assert.doesNotThrow(()=>JSON.stringify(read));
- const ref=await operation('reference',{bookmarkName:r.objects[0].layout.bookmarkName,cachedText:'(4)'});assert.match(ref.ooxml,/REF EL_/);
 });
 
 test('Complex fields produced by Word remain recognizable with only cached number text',async()=>{

@@ -51,7 +51,7 @@ struct WorkbenchView: View {
                     .accessibilityLabel(bridge.t(bridge.wordSessionActive ? "Word 插件" : "Office 插件"))
                 InterfaceLanguageMenu(bridge: bridge)
                 if bridge.wordSessionActive {
-                    Button(bridge.t("取消")) { bridge.invoke("nativeCancelWordSession") }.disabled(bridge.state.busy)
+                    Button(bridge.t("取消")) { bridge.invoke("nativeCancelWordSession") }
                     Button { bridge.invoke("nativeCommitWordSession") } label: {
                         Label(bridge.t("保存并返回 Word"), systemImage: "checkmark.circle.fill")
                     }.labelStyle(.titleAndIcon)
@@ -121,9 +121,9 @@ struct WorkbenchStatusBar: View {
     @ObservedObject var bridge: DesktopBridge
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: bridge.state.statusError ? "exclamationmark.triangle" : bridge.state.valid ? "checkmark.circle" : "clock")
-                .foregroundStyle(bridge.state.statusError ? .orange : bridge.state.valid ? .green : .secondary)
-                Text(bridge.t(bridge.state.message.isEmpty ? bridge.state.statusTitle : bridge.state.message))
+            Image(systemName: bridge.state.statusError || bridge.state.messageError ? "exclamationmark.triangle" : bridge.state.valid ? "checkmark.circle" : "clock")
+                .foregroundStyle(bridge.state.statusError || bridge.state.messageError ? .orange : bridge.state.valid ? .green : .secondary)
+                Text(bridge.t(bridge.state.statusError ? bridge.state.statusDetail : bridge.state.message.isEmpty ? bridge.state.statusTitle : bridge.state.message))
                 .font(.caption).lineLimit(1)
                 .foregroundStyle(bridge.state.messageError || bridge.state.statusError ? .orange : .secondary)
                 .help(bridge.t(bridge.state.statusDetail))

@@ -2,7 +2,8 @@ import SwiftUI
 import AppKit
 
 // Preserve SwiftUI's window delegate and forward its remaining behaviors.
-// The proxy only holds a close request while the Word save is in flight.
+// Closing hides the retained editor. Its WebKit process, draft and font caches
+// remain available for Dock reopening and the next Word activation.
 struct EditorWindowLifecycle: NSViewRepresentable {
     let bridge: DesktopBridge
     func makeCoordinator() -> Coordinator { Coordinator(bridge) }
@@ -24,12 +25,15 @@ struct EditorWindowLifecycle: NSViewRepresentable {
         func attach(_ window: NSWindow) {
             guard self.window !== window else { return }
             detach(); self.window = window; bridge?.editorWindow = window; previous = window.delegate; window.delegate = self
+            window.animationBehavior = .none
+            window.collectionBehavior.insert(.moveToActiveSpace)
+            bridge?.editorWindowDidAttach()
         }
         func detach() { if window?.delegate === self { window?.delegate = previous }; window = nil; previous = nil }
         override func responds(to selector: Selector!) -> Bool { super.responds(to: selector) || previous?.responds(to: selector) == true }
         override func forwardingTarget(for selector: Selector!) -> Any? { previous?.responds(to: selector) == true ? previous : super.forwardingTarget(for: selector) }
         func windowShouldClose(_ sender: NSWindow) -> Bool {
-            guard let bridge, bridge.wordSessionActive else { return previous?.windowShouldClose?(sender) ?? true }
+            guard let bridge else { return previous?.windowShouldClose?(sender) ?? true }
             guard !closing else { return false }
             closing = true
             bridge.prepareToClose { [weak self, weak sender] saved in

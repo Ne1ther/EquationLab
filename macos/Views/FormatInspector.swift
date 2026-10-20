@@ -93,7 +93,14 @@ struct FormatInspector: View {
         Group {
             InspectorSection("Word 编排") {
                 ForEach(bridge.state.layout.filter { $0.id != "layout-format" }) { field in
-                    if !field.options.isEmpty {
+                    if field.disabled && bridge.wordSessionActive {
+                        LabeledContent(bridge.t(field.label)) {
+                            Text(bridge.t(field.options.first(where: { $0.value == field.value })?.label ?? field.value))
+                                .font(.system(.body, design: .rounded).weight(.semibold)).monospacedDigit()
+                                .foregroundStyle(.primary).padding(.horizontal, 9).padding(.vertical, 4)
+                                .background(Color.primary.opacity(0.08), in: RoundedRectangle(cornerRadius: 5))
+                        }
+                    } else if !field.options.isEmpty {
                         Picker(bridge.t(field.label), selection: bridge.fieldBinding(field.id, fallback: field.value)) {
                             ForEach(field.options) { Text(bridge.t($0.label)).tag($0.value) }
                         }.controlSize(.small).disabled(field.disabled)

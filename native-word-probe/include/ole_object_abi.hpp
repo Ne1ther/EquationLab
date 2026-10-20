@@ -112,11 +112,18 @@ struct InteropHooks {
 };
 using OpenEditor = HResult(*)(std::uint64_t,const std::uint8_t*,std::size_t,void*);
 using CancelEditor = void(*)(std::uint64_t,void*);
+// A zero identity invalidates all document snapshots after a Native write.
+using ForgetEditorOwner = void(*)(std::uint64_t,void*);
+using EditorOwnerWritten = void(*)(std::uint64_t,const std::uint8_t*,std::size_t,void*);
 HResult makeEquationObject(const Guid&,const Guid&,void**);
 void setInteropHooks(const InteropHooks&);
 void setEditorHooks(OpenEditor,void*);
 void setEditorCancelHook(CancelEditor);
-HResult completeEdit(std::uint64_t,const std::uint8_t*,std::size_t,bool);
+void setEditorOwnerForgetHook(ForgetEditorOwner);
+void setEditorOwnerWrittenHook(EditorOwnerWritten);
+std::uint64_t editObjectIdentity(std::uint64_t);
+bool bindEditDocument(std::uint64_t,const char*);
+HResult completeEdit(std::uint64_t,const std::uint8_t*,std::size_t,bool,bool reopen=false);
 HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL);
 std::uint32_t liveEquationObjects();
 }

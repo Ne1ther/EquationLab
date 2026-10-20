@@ -1,4 +1,5 @@
 #include "editor_transport.hpp"
+#include "diagnostics.hpp"
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #include <mach-o/dyld.h>
@@ -7,23 +8,47 @@
 #include <atomic>
 #include <cerrno>
 #include <algorithm>
+#include <CommonCrypto/CommonDigest.h>
 
 NSDictionary* EquationLabCapturedDocumentContext();
 void EquationLabSetNavigationTarget(std::int32_t index);
+std::int32_t EquationLabNewDocumentToken();
 
 namespace {
 constexpr NSUInteger MaxBlob=16*1024*1024;
 constexpr NSUInteger MaxResponse=46*1024*1024;
 constexpr auto WrongThread=static_cast<bridge_probe::HResult>(0x8001010eu);
 std::atomic<std::uint32_t> lastError{0};
+// Counts/states only; never expose a document name, path, ticket or equation.
+enum : std::uint32_t { CapturePending=1,CaptureReady=2,CaptureTimedOut=3,CaptureSuperseded=4,CaptureRejected=5 };
+std::atomic<std::uint32_t> lastCaptureState{0};
 // Diagnostic codes contain no equation, ticket, document name, or URL.
 enum : std::uint32_t { NetworkFailure=1,InvalidReply=2,LaunchFailure=3,Expired=4,ApplyFailure=5 };
-void launchEquationLabURL(NSWorkspace* workspace,NSURL* url,void(^completion)(NSError*)){
+NSDate* documentCapturedAt;
+NSString* nativeDigest(NSData* data){
+    unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(data.bytes,static_cast<CC_LONG>(data.length),digest);
+    NSMutableString* hex=[NSMutableString stringWithCapacity:64];for(auto value:digest)[hex appendFormat:@"%02x",value];return hex;
+}
+void launchEquationLabURL(NSWorkspace* workspace,NSURL* url,void(^completion)(NSError*),NSArray<NSRunningApplication*>* runningApplications=nil,NSApplication* activationSource=nil){
     // Target the shipping application's stable identity. The scheme's default
     // handler may still point at an older development app with a different ID.
-    NSURL* applicationURL=[workspace URLForApplicationWithBundleIdentifier:@"app.equationlab.mac"];
+    // Reuse the running copy. LaunchServices can otherwise start the older
+    // /Applications copy while a newly opened build owns the edit window.
+    NSArray<NSRunningApplication*>* running=runningApplications?:[NSRunningApplication runningApplicationsWithBundleIdentifier:@"app.equationlab.mac"];
+    NSURL* applicationURL=nil;
+    for(NSRunningApplication* app in running.reverseObjectEnumerator)if(!app.terminated&&app.bundleURL){applicationURL=app.bundleURL;break;}
+    if(!applicationURL)applicationURL=[workspace URLForApplicationWithBundleIdentifier:@"app.equationlab.mac"];
     if(!applicationURL){completion([NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]);return;}
+    // The App reveals its retained editor only after this ticket's content
+    // has been accepted. Activating here would flash the previous equation
+    // first and then activate the same window a second time from Swift.
     NSWorkspaceOpenConfiguration* config=[NSWorkspaceOpenConfiguration configuration];config.activates=NO;
+    // macOS 14+ treats activation as a cooperative request. Give the App
+    // permission while Word still owns focus; it activates only after the
+    // selected formula is ready. A service-only wake must not hand off focus.
+    NSApplication* source=activationSource?:NSApp;
+    if(source.isActive&&[url.scheme isEqualToString:@"equationlab"]&&([url.host isEqualToString:@"word-edit"]||[url.host isEqualToString:@"word-tool"]))
+        [source yieldActivationToApplicationWithBundleIdentifier:@"app.equationlab.mac"];
     [workspace openURLs:@[url] withApplicationAtURL:applicationURL configuration:config completionHandler:^(NSRunningApplication* app,NSError* error){
         completion(error||!app?[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]:nil);
     }];
@@ -55,22 +80,44 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion;
 - (void)cancel;
 @end
+@interface ProbeHttpSession : NSObject <NSURLSessionDataDelegate>
+@property(nonatomic,strong) NSURLSession* session;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber*,ProbeJsonRequest*>* requests;
++ (instancetype)shared;
+@end
+@implementation ProbeHttpSession
++ (instancetype)shared {static ProbeHttpSession* client;static dispatch_once_t once;dispatch_once(&once,^{client=[ProbeHttpSession new];});return client;}
+- (instancetype)init {if((self=[super init])){
+    _requests=[NSMutableDictionary dictionary];
+    NSURLSessionConfiguration* config=NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.URLCache=nil;config.HTTPCookieStorage=nil;config.URLCredentialStorage=nil;
+    config.requestCachePolicy=NSURLRequestReloadIgnoringLocalCacheData;
+    config.timeoutIntervalForRequest=10;config.timeoutIntervalForResource=15;
+    _session=[NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:NSOperationQueue.mainQueue];
+}return self;}
+- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task willPerformHTTPRedirection:(NSHTTPURLResponse*)response newRequest:(NSURLRequest*)request completionHandler:(void(^)(NSURLRequest*))completionHandler {completionHandler(nil);}
+- (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)task didReceiveResponse:(NSURLResponse*)response completionHandler:(void(^)(NSURLSessionResponseDisposition))completionHandler {
+    ProbeJsonRequest* request=self.requests[@(task.taskIdentifier)];
+    if(request)[request URLSession:session dataTask:task didReceiveResponse:response completionHandler:completionHandler];else completionHandler(NSURLSessionResponseCancel);
+}
+- (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)task didReceiveData:(NSData*)data {[self.requests[@(task.taskIdentifier)] URLSession:session dataTask:task didReceiveData:data];}
+- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didCompleteWithError:(NSError*)error {
+    ProbeJsonRequest* request=self.requests[@(task.taskIdentifier)];[self.requests removeObjectForKey:@(task.taskIdentifier)];
+    [request URLSession:session task:task didCompleteWithError:error];
+}
+@end
 @implementation ProbeJsonRequest
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion {
     if((self=[super init])){
         _response=[NSMutableData data];_completion=[completion copy];
-        NSURLSessionConfiguration* config=NSURLSessionConfiguration.ephemeralSessionConfiguration;
-        config.URLCache=nil;config.HTTPCookieStorage=nil;config.URLCredentialStorage=nil;
-        config.requestCachePolicy=NSURLRequestReloadIgnoringLocalCacheData;
-        config.timeoutIntervalForRequest=10;config.timeoutIntervalForResource=15;
-        _session=[NSURLSession sessionWithConfiguration:config delegate:self delegateQueue:NSOperationQueue.mainQueue];
+        ProbeHttpSession* client=[ProbeHttpSession shared];_session=client.session;
         NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];
         request.HTTPMethod=@"POST";[request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
         request.HTTPBody=[NSJSONSerialization dataWithJSONObject:body options:0 error:nullptr];
-        _task=[_session dataTaskWithRequest:request];[_task resume];
+        _task=[_session dataTaskWithRequest:request];client.requests[@(_task.taskIdentifier)]=self;[_task resume];
     }return self;
 }
-- (void)cancel {self.cancelled=YES;self.completion=nil;[self.task cancel];[self.session invalidateAndCancel];self.response=nil;}
+- (void)cancel {self.cancelled=YES;self.completion=nil;[self.task cancel];[[ProbeHttpSession shared].requests removeObjectForKey:@(self.task.taskIdentifier)];self.response=nil;self.task=nil;self.session=nil;}
 - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task willPerformHTTPRedirection:(NSHTTPURLResponse*)response newRequest:(NSURLRequest*)request completionHandler:(void(^)(NSURLRequest*))completionHandler {
     (void)session;(void)task;(void)response;(void)request;completionHandler(nil);
 }
@@ -90,7 +137,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
     NSDictionary* json=nil;
     if(!error&&self.statusValid){id parsed=[NSJSONSerialization JSONObjectWithData:self.response options:0 error:&error];if([parsed isKindOfClass:NSDictionary.class])json=parsed;}
     if(!json&&!error)error=[NSError errorWithDomain:@"NativeEquationTransport" code:InvalidReply userInfo:nil];
-    self.response=nil;self.task=nil;[session finishTasksAndInvalidate];self.session=nil;
+    self.response=nil;self.task=nil;self.session=nil;
     if(callback&&!self.cancelled)callback(json,error);
 }
 @end
@@ -104,7 +151,20 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic) BOOL terminal;
 @property(nonatomic,strong) NSData* openNative;
 @property(nonatomic,strong) NSDictionary* documentContext;
+@property(nonatomic,strong) NSDictionary* bindingContext;
+@property(nonatomic,strong) NSDate* documentDeadline;
+@property(nonatomic,strong) NSString* attemptedDocumentKey;
+@property(nonatomic,strong) NSString* openDigest;
+@property(nonatomic) std::uint64_t ownerIdentity;
+@property(nonatomic) std::uint64_t documentEpoch;
+@property(nonatomic) std::int32_t editGeneration;
 @property(nonatomic) BOOL awaitingDocument;
+@property(nonatomic) BOOL reopenRequested;
+@property(nonatomic) NSUInteger pollGeneration;
+@property(nonatomic) BOOL pollScheduled;
+@property(nonatomic) std::uint64_t activation;
+@property(nonatomic) BOOL captureRequested;
+@property(nonatomic) BOOL requiresDocumentCapture;
 @property(nonatomic,strong) NSDate* wakeDeadline;
 @property(nonatomic) BOOL wakeAttempted;
 @property(nonatomic) BOOL wakePending;
@@ -113,21 +173,170 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @implementation ProbeEditState
 @end
 
+@interface ProbeBackgroundSave : NSObject
+@property(nonatomic,strong) NSString* ticket;
+@property(nonatomic,strong) NSString* session;
+@property(nonatomic,strong) NSData* native;
+@property(nonatomic,strong) NSData* pdf;
+@property(nonatomic,strong) NSString* expectedDigest;
+@property(nonatomic,strong) NSDictionary* binding;
+@property(nonatomic) bridge_probe::SizeL extent;
+@property(nonatomic) std::int32_t index;
+@property(nonatomic) BOOL claimed;
+@end
+@implementation ProbeBackgroundSave
+@end
+
+@interface ProbeCaptureRequest : NSObject
+@property(nonatomic,weak) ProbeEditState* state;
+@property(nonatomic,strong) NSDictionary* binding;
+@property(nonatomic) std::int32_t token;
+@property(nonatomic) std::uint64_t activation;
+@property(nonatomic) std::uint64_t epoch;
+@property(nonatomic) NSUInteger serial;
+@property(nonatomic) BOOL claimed;
+@end
+@implementation ProbeCaptureRequest
+@end
+
 @interface ProbeEditorTransport : NSObject
 @property(nonatomic,strong) NSMutableDictionary<NSNumber*,ProbeEditState*>* edits;
 @property(nonatomic,strong) NSString* baseURL;
 @property(nonatomic) bridge_probe::LaunchEditorUrl launch;
 @property(nonatomic) void* launchContext;
 @property(nonatomic) std::uint32_t interval;
+@property(nonatomic) BOOL applying;
+@property(nonatomic,strong) ProbeBackgroundSave* backgroundSave;
+@property(nonatomic,strong) NSDictionary* testDocumentContext;
+@property(nonatomic) std::uint64_t activation;
+@property(nonatomic) std::uint64_t lastOwnerIdentity;
+@property(nonatomic) std::uint64_t documentEpoch;
+@property(nonatomic) std::int32_t cacheGeneration;
+@property(nonatomic) NSUInteger documentBytes;
+@property(nonatomic,strong) NSMutableDictionary<NSString*,NSDictionary*>* documentSnapshots;
+@property(nonatomic,strong) NSMutableOrderedSet<NSString*>* documentSnapshotOrder;
+@property(nonatomic,strong) NSMutableDictionary<NSNumber*,NSDictionary*>* ownerDocuments;
+@property(nonatomic,strong) NSMutableOrderedSet<NSNumber*>* ownerDocumentOrder;
+// These bounded records contain no XML, document name/path, or owner AddRef.
+// A write keeps its live VBA anchor while invalidating every serialized XML.
+@property(nonatomic,strong) NSMutableDictionary<NSNumber*,NSDictionary*>* ownerCaptureBindings;
+@property(nonatomic,strong) NSMutableOrderedSet<NSNumber*>* ownerCaptureOrder;
+@property(nonatomic,strong) ProbeCaptureRequest* captureRequest;
+@property(nonatomic) NSUInteger captureSerial;
 - (void)begin:(std::uint64_t)sessionId native:(NSData*)native;
 - (void)openState:(ProbeEditState*)state;
 - (void)poll:(ProbeEditState*)state;
 - (void)cleanup:(std::uint64_t)sessionId;
 - (void)fail:(ProbeEditState*)state code:(std::uint32_t)code;
+- (void)failResult:(ProbeEditState*)state code:(std::uint32_t)code;
+- (void)documentReady;
+- (void)ackBackground:(ProbeBackgroundSave*)save ok:(BOOL)ok;
+- (BOOL)applyBackground:(std::uint64_t)sessionId native:(NSData*)native;
+- (void)invalidateDocuments;
+- (void)forgetOwner:(std::uint64_t)owner;
+- (void)rememberDocument:(ProbeEditState*)state;
+- (NSDictionary*)documentForOwner:(ProbeEditState*)state;
+- (void)rememberCaptureOwner:(std::uint64_t)owner context:(NSDictionary*)context digest:(NSString*)digest;
+- (void)requestCapture:(ProbeEditState*)state;
+- (std::int32_t)takeCaptureRequest;
+- (std::int32_t)finishCaptureRequest:(BOOL)success;
+- (void)scheduleCaptureDeadline:(ProbeEditState*)state;
 @end
 static ProbeEditorTransport* transport=nil;
 @implementation ProbeEditorTransport
-- (instancetype)init {if((self=[super init])){_edits=[NSMutableDictionary dictionary];_baseURL=@"http://127.0.0.1:37952";_interval=150;}return self;}
+- (instancetype)init {if((self=[super init])){_edits=[NSMutableDictionary dictionary];_baseURL=@"http://127.0.0.1:37952";_interval=150;
+    _documentSnapshots=[NSMutableDictionary dictionary];_documentSnapshotOrder=[NSMutableOrderedSet orderedSet];_ownerDocuments=[NSMutableDictionary dictionary];_ownerDocumentOrder=[NSMutableOrderedSet orderedSet];
+    _ownerCaptureBindings=[NSMutableDictionary dictionary];_ownerCaptureOrder=[NSMutableOrderedSet orderedSet];
+    _cacheGeneration=bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration));
+}return self;}
+- (void)invalidateDocuments {
+    ++self.documentEpoch;self.documentBytes=0;[self.ownerDocuments removeAllObjects];[self.ownerDocumentOrder removeAllObjects];[self.documentSnapshots removeAllObjects];[self.documentSnapshotOrder removeAllObjects];
+    self.captureRequest=nil;for(ProbeEditState* state in self.edits.allValues)if(state.awaitingDocument)state.captureRequested=NO;
+    self.cacheGeneration=bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration));
+}
+- (void)expireWrittenDocuments {
+    if(self.cacheGeneration!=bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration)))[self invalidateDocuments];
+}
+- (void)removeSnapshot:(NSString*)key {
+    NSDictionary* snapshot=self.documentSnapshots[key];if(!snapshot)return;
+    self.documentBytes-=[snapshot[@"bytes"] unsignedIntegerValue];[self.documentSnapshots removeObjectForKey:key];[self.documentSnapshotOrder removeObject:key];
+    for(NSNumber* owner in self.ownerDocuments.allKeys)if([self.ownerDocuments[owner][@"snapshot"] isEqual:key]){[self.ownerDocuments removeObjectForKey:owner];[self.ownerDocumentOrder removeObject:owner];}
+}
+- (void)forgetCachedOwner:(std::uint64_t)owner {
+    NSNumber* token=@(owner);NSString* key=self.ownerDocuments[token][@"snapshot"];[self.ownerDocuments removeObjectForKey:token];[self.ownerDocumentOrder removeObject:token];
+    if(key){for(NSDictionary* binding in self.ownerDocuments.allValues)if([binding[@"snapshot"] isEqual:key])return;[self removeSnapshot:key];}
+}
+- (void)forgetOwner:(std::uint64_t)owner {
+    [self forgetCachedOwner:owner];NSNumber* key=@(owner);[self.ownerCaptureBindings removeObjectForKey:key];[self.ownerCaptureOrder removeObject:key];
+    if(self.captureRequest.state.ownerIdentity==owner)self.captureRequest=nil;
+}
+- (void)rememberCaptureOwner:(std::uint64_t)owner context:(NSDictionary*)context digest:(NSString*)digest {
+    if(!owner||![context[@"identity"] isKindOfClass:NSString.class]||![context[@"snapshot"] isKindOfClass:NSNumber.class]||[context[@"snapshot"] intValue]<=0||![context[@"index"] isKindOfClass:NSNumber.class]||!digest)return;
+    NSNumber* key=@(owner);self.ownerCaptureBindings[key]=@{@"identity":context[@"identity"],@"snapshot":context[@"snapshot"],@"index":context[@"index"],@"digest":digest};
+    [self.ownerCaptureOrder removeObject:key];[self.ownerCaptureOrder addObject:key];
+    while(self.ownerCaptureOrder.count>32)[self forgetOwner:[self.ownerCaptureOrder.firstObject unsignedLongLongValue]];
+}
+- (void)rememberDocument:(ProbeEditState*)state {
+    [self expireWrittenDocuments];NSDictionary* context=state.documentContext;
+    if(!state.ownerIdentity||state.documentEpoch!=self.documentEpoch||state.editGeneration!=self.cacheGeneration||![context[@"identity"] isKindOfClass:NSString.class]||![context[@"snapshot"] isKindOfClass:NSNumber.class]||![context[@"ooxml"] isKindOfClass:NSString.class])return;
+    [self rememberCaptureOwner:state.ownerIdentity context:context digest:state.openDigest];
+    NSString* key=[NSString stringWithFormat:@"%@:%@",context[@"identity"],context[@"snapshot"]];NSUInteger bytes=[context[@"ooxml"] length]*sizeof(unichar);
+    NSNumber* owner=@(state.ownerIdentity);NSString* previous=self.ownerDocuments[owner][@"snapshot"];
+    if(previous&&![previous isEqual:key])[self forgetCachedOwner:state.ownerIdentity];
+    if(bytes>32*1024*1024){[self forgetCachedOwner:state.ownerIdentity];return;}
+    NSDictionary* snapshot=self.documentSnapshots[key];
+    if(snapshot&&![snapshot[@"context"][@"ooxml"] isEqual:context[@"ooxml"]]){[self removeSnapshot:key];snapshot=nil;}
+    if(!snapshot){NSMutableDictionary* shared=[context mutableCopy];[shared removeObjectForKey:@"index"];snapshot=@{@"context":shared,@"bytes":@(bytes)};self.documentSnapshots[key]=snapshot;self.documentBytes+=bytes;}
+    [self.documentSnapshotOrder removeObject:key];[self.documentSnapshotOrder addObject:key];
+    self.ownerDocuments[owner]=@{@"snapshot":key,@"index":context[@"index"],@"digest":state.openDigest};[self.ownerDocumentOrder removeObject:owner];[self.ownerDocumentOrder addObject:owner];
+    while(self.ownerDocumentOrder.count>32)[self forgetCachedOwner:[self.ownerDocumentOrder.firstObject unsignedLongLongValue]];
+    while(self.documentSnapshotOrder.count>4||self.documentBytes>32*1024*1024)[self removeSnapshot:self.documentSnapshotOrder.firstObject];
+}
+- (NSDictionary*)documentForOwner:(ProbeEditState*)state {
+    [self expireWrittenDocuments];NSDictionary* binding=self.ownerDocuments[@(state.ownerIdentity)];
+    if(!binding)return nil;
+    if(![binding[@"digest"] isEqual:state.openDigest]){[self forgetCachedOwner:state.ownerIdentity];return nil;}
+    NSDictionary* snapshot=self.documentSnapshots[binding[@"snapshot"]];if(!snapshot)return nil;
+    NSMutableDictionary* context=[snapshot[@"context"] mutableCopy];context[@"index"]=binding[@"index"];return context;
+}
+- (void)requestCapture:(ProbeEditState*)state {
+    if(state.captureRequested||state.activation!=self.activation||![self active:state]||!state.awaitingDocument)return;
+    NSDictionary* binding=self.ownerCaptureBindings[@(state.ownerIdentity)];
+    if(!binding||![binding[@"digest"] isEqual:state.openDigest])return;
+    state.captureRequested=YES;state.requiresDocumentCapture=YES;
+    ProbeCaptureRequest* request=[ProbeCaptureRequest new];request.state=state;request.binding=binding;request.token=EquationLabNewDocumentToken();request.activation=state.activation;request.epoch=self.documentEpoch;
+    self.captureRequest=request;
+}
+- (std::int32_t)takeCaptureRequest {
+    ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
+    if(!request||request.claimed||self.applying||self.backgroundSave.claimed)return 0;
+    if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return 0;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return 0;}
+    request.claimed=YES;request.serial=self.captureSerial;return request.token;
+}
+- (std::int32_t)finishCaptureRequest:(BOOL)success {
+    ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
+    if(!request||!request.claimed||self.applying||self.backgroundSave.claimed)return -1;
+    if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return -2;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return -4;}
+    NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();
+    BOOL matches=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"identity"] isEqual:request.binding[@"identity"]]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&![context[@"snapshot"] isEqual:request.binding[@"snapshot"]]&&[context[@"index"] isKindOfClass:NSNumber.class];
+    self.captureRequest=nil;
+    if(!matches){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return -3;}
+    // This context came from the retained live Word Range, not the current
+    // selection. The service must still verify this owner's exact Native SHA.
+    state.documentContext=context;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;[self openState:state];return 0;
+}
+- (void)scheduleCaptureDeadline:(ProbeEditState*)state {
+    const auto delay=std::max(.001,state.documentDeadline.timeIntervalSinceNow);__weak ProbeEditState* weak=state;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(delay*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
+        if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
+        lastCaptureState=CaptureTimedOut;
+        if(current.requiresDocumentCapture)[self fail:current code:InvalidReply];
+        else{current.awaitingDocument=NO;[self openState:current];}
+    });
+}
 - (BOOL)active:(ProbeEditState*)state {return !state.terminal&&self.edits[@(state.sessionId)]==state;}
 - (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
     return [[ProbeJsonRequest alloc] initWithURL:[NSURL URLWithString:[self.baseURL stringByAppendingString:path]] body:body completion:reply];
@@ -135,6 +344,7 @@ static ProbeEditorTransport* transport=nil;
 - (void)cleanup:(std::uint64_t)sessionId {
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
     ProbeEditState* state=self.edits[@(sessionId)];if(!state)return;
+    if(self.captureRequest.state==state)self.captureRequest=nil;
     state.terminal=YES;state.openNative=nil;state.documentContext=nil;[state.request cancel];state.request=nil;[self.edits removeObjectForKey:@(sessionId)];
     if(state.ticket){
         // Best-effort immediate erasure; a missing endpoint leaves server TTL cleanup.
@@ -148,23 +358,97 @@ static ProbeEditorTransport* transport=nil;
     auto hr=bridge_probe::completeEdit(state.sessionId,nullptr,0,false);
     if(hr!=bridge_probe::Ok)[self cleanup:state.sessionId];
 }
+- (void)failResult:(ProbeEditState*)state code:(std::uint32_t)code {
+    NSString* ticket=state.ticket,*session=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)];
+    [self fail:state code:code];
+    // The server has already delivered a completed payload. A rejected result
+    // must acknowledge failure promptly instead of leaving the App waiting
+    // until its save timeout with a dead edit owner.
+    if(ticket)[self request:@"/api/native-ack" body:@{@"ticket":ticket,@"session":session,@"ok":@NO} reply:^(NSDictionary*,NSError*){}];
+}
 - (void)schedule:(ProbeEditState*)state {
+    if(state.pollScheduled)return;state.pollScheduled=YES;NSUInteger generation=++state.pollGeneration;
     __weak ProbeEditState* weak=state;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(self.interval)*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ProbeEditState* current=weak;if(current&&[self active:current])[self poll:current];});
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(self.interval)*NSEC_PER_MSEC),dispatch_get_main_queue(),^{ProbeEditState* current=weak;if(current&&[self active:current]&&current.pollGeneration==generation){current.pollScheduled=NO;[self poll:current];}});
 }
 - (void)begin:(std::uint64_t)sessionId native:(NSData*)native {
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
-    if(self.edits[@(sessionId)])return;
-    ProbeEditState* state=[ProbeEditState new];state.sessionId=sessionId;state.openNative=native;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
+    if([self applyBackground:sessionId native:native])return;
+    ProbeEditState* existing=self.edits[@(sessionId)];
+    if(existing){
+        existing.activation=++self.activation;
+        if(existing.awaitingDocument){
+            // Repeated verbs for this same retained owner share one pending
+            // capture. They neither allocate another request nor invalidate a
+            // WordOpenXML response that is already being produced for it.
+            if(self.captureRequest.state==existing)self.captureRequest.activation=existing.activation;
+            [self documentReady];return;
+        }
+        // Never relaunch a ticket whose cancel/save is already queued. Read
+        // the owner's next poll first; a terminal reply will finish the old
+        // transaction and reopen this object with a fresh identity.
+        existing.reopenRequested=YES;
+        if(existing.ticket&&!existing.request){existing.pollScheduled=NO;++existing.pollGeneration;[self poll:existing];}
+        return;
+    }
+    [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
     // On macOS the OLE verb can arrive before Word's selection event. Allow
     // that event to capture the live document before freezing the source binding.
-    state.awaitingDocument=YES;
+    state.requiresDocumentCapture=self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil;
+    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture?3:1];lastCaptureState=CapturePending;
     __weak ProbeEditState* weak=state;
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
-        ProbeEditState* current=weak;if(!current||![self active:current])return;
-        current.documentContext=EquationLabCapturedDocumentContext();current.awaitingDocument=NO;
-        [self openState:current];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
+        if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
+        // The isolated CLI launcher has no Word/VBA event source unless a
+        // context was explicitly configured by its document-race tests.
+        if(self.launch&&!self.testDocumentContext&&!current.requiresDocumentCapture&&![self documentForOwner:current]){current.awaitingDocument=NO;[self openState:current];return;}
+        [self documentReady];
     });
+    [self scheduleCaptureDeadline:state];
+}
+- (void)documentReady {
+    NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();
+    if(!documentCapturedAt||documentCapturedAt.timeIntervalSinceNow<-.5)context=nil;
+    for(ProbeEditState* state in self.edits.allValues){
+        if(!state.awaitingDocument||state.request||state.documentDeadline.timeIntervalSinceNow<=0)continue;
+        if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);continue;}
+        if(self.captureRequest.claimed&&self.captureRequest.state==state)continue;
+        NSDictionary* owned=[self documentForOwner:state];NSDictionary* candidate=context;
+        NSDictionary* anchor=self.ownerCaptureBindings[@(state.ownerIdentity)];
+        if(anchor&&(![candidate[@"identity"] isEqual:anchor[@"identity"]]||![candidate[@"index"] isEqual:anchor[@"index"]]))candidate=nil;
+        if(owned&&(!candidate||![candidate[@"identity"] isEqual:owned[@"identity"]]||![candidate[@"index"] isEqual:owned[@"index"]]))candidate=owned;
+        NSString* key=candidate?[NSString stringWithFormat:@"%@:%@:%@",candidate[@"identity"]?:@"legacy",candidate[@"snapshot"]?:@0,candidate[@"index"]?:@0]:nil;
+        if(!candidate||[state.attemptedDocumentKey isEqual:key]){candidate=owned;key=candidate?[NSString stringWithFormat:@"%@:%@:%@",candidate[@"identity"],candidate[@"snapshot"],candidate[@"index"]]:nil;}
+        if(!candidate){[self requestCapture:state];continue;}
+        if([state.attemptedDocumentKey isEqual:key]){[self requestCapture:state];continue;}
+        state.attemptedDocumentKey=key;
+        state.documentContext=candidate;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;[self openState:state];
+    }
+}
+- (void)ackBackground:(ProbeBackgroundSave*)save ok:(BOOL)ok {
+    if(self.backgroundSave!=save)return;self.backgroundSave=nil;
+    save.native=nil;save.pdf=nil;save.binding=nil;
+    if(!ok)lastError=ApplyFailure;
+    [self request:@"/api/native-ack" body:@{@"ticket":save.ticket,@"session":save.session,@"ok":@(ok)} reply:^(NSDictionary*,NSError*){}];
+}
+- (BOOL)applyBackground:(std::uint64_t)sessionId native:(NSData*)native {
+    ProbeBackgroundSave* save=self.backgroundSave;if(!save.claimed)return NO;
+    // This is called synchronously by the exact live InlineShape selected by
+    // the bound VBA collection. Reject stale/deleted/replaced targets before
+    // changing either Native data or the OLE preview.
+    if(![nativeDigest(native) isEqual:save.expectedDigest]){
+        bridge_probe::completeEdit(sessionId,nullptr,0,false);[self ackBackground:save ok:NO];return YES;
+    }
+    if(!bridge_probe::bindEditDocument(sessionId,[save.binding[@"identity"] UTF8String])){bridge_probe::completeEdit(sessionId,nullptr,0,false);[self ackBackground:save ok:NO];return YES;}
+    NSMutableDictionary* targetBinding=[save.binding mutableCopy];targetBinding[@"index"]=@(save.index);
+    [self rememberCaptureOwner:bridge_probe::editObjectIdentity(sessionId) context:targetBinding digest:save.expectedDigest];
+    self.applying=YES;
+    auto hr=bridge_probe::setSessionPreview(sessionId,static_cast<const std::uint8_t*>(save.pdf.bytes),save.pdf.length,save.extent);
+    if(hr==bridge_probe::Ok)hr=bridge_probe::completeEdit(sessionId,static_cast<const std::uint8_t*>(save.native.bytes),save.native.length,true);
+    self.applying=NO;
+    if(hr!=bridge_probe::Ok)bridge_probe::completeEdit(sessionId,nullptr,0,false);
+    [self ackBackground:save ok:hr==bridge_probe::Ok];return YES;
 }
 - (void)retryOpen:(ProbeEditState*)state {
     if(![self active:state])return;
@@ -185,17 +469,38 @@ static ProbeEditorTransport* transport=nil;
 }
 - (void)openState:(ProbeEditState*)state {
     if(![self active:state])return;
+    if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);return;}
     __weak ProbeEditState* weak=state;
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(state.documentContext)body[@"document"]=state.documentContext;
     state.request=[self request:@"/api/native-open" body:body reply:^(NSDictionary* json,NSError* error){
         ProbeEditState* current=weak;if(!current||![self active:current])return;current.request=nil;
-        if(error){if(connectionRefused(error)){if(!current.wakeAttempted)[self wake:current];else[self retryOpen:current];}else[self fail:current code:NetworkFailure];return;}
+        if(error){
+            if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
+            if(connectionRefused(error)){if(!current.wakeAttempted)[self wake:current];else[self retryOpen:current];}
+            else if(current.documentContext&&current.documentDeadline.timeIntervalSinceNow>0){
+                // A previous selection can still be in the capture slot when
+                // Word starts a new verb. The service rejects mismatched
+                // Native data; wait briefly for this activation's capture
+                // rather than abandoning the whole edit or trusting the old
+                // document by name.
+                current.documentContext=nil;current.awaitingDocument=YES;lastCaptureState=CaptureRejected;[self documentReady];
+            }else[self fail:current code:NetworkFailure];return;
+        }
         id ticket=json[@"ticket"],url=json[@"editorUrl"];
         NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
         if(![ticket isKindOfClass:NSString.class]||[ticket length]!=64||[ticket rangeOfCharacterFromSet:invalid].location!=NSNotFound||![url isKindOfClass:NSString.class]||![url isEqualToString:[@"equationlab://word-edit/" stringByAppendingString:ticket]]){[self fail:current code:InvalidReply];return;}
         for(ProbeEditState* other in self.edits.allValues)if(other!=current&&[other.ticket isEqualToString:ticket]){[self fail:current code:InvalidReply];return;}
-        current.ticket=ticket;current.openNative=nil;current.documentContext=nil;
+        current.ticket=ticket;current.openNative=nil;
+        if([current.documentContext[@"identity"] isKindOfClass:NSString.class]&&!bridge_probe::bindEditDocument(current.sessionId,[current.documentContext[@"identity"] UTF8String])){[self fail:current code:InvalidReply];return;}
+        [self rememberDocument:current];
+        if(current.documentContext){NSMutableDictionary* binding=[current.documentContext mutableCopy];[binding removeObjectForKey:@"ooxml"];current.bindingContext=binding;}
+        current.documentContext=nil;
+        // A later Word activation can arrive while native-open is in flight.
+        // Erase this now-known ticket, but never publish its stale URL over
+        // the newer document/selection. Already delivered editors retain
+        // ownership until the App confirms a draft switch.
+        if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         if(self.launch){if(!self.launch([url UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
         else {
             launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=weak;if(!active||![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
@@ -203,33 +508,57 @@ static ProbeEditorTransport* transport=nil;
     }];
 }
 - (void)poll:(ProbeEditState*)state {
-    if(![self active:state])return;if(state.expires.timeIntervalSinceNow<=0){[self fail:state code:Expired];return;}
+    if(![self active:state]||state.request)return;if(state.expires.timeIntervalSinceNow<=0){[self fail:state code:Expired];return;}
     __weak ProbeEditState* weak=state;
     state.request=[self request:@"/api/native-poll" body:@{@"ticket":state.ticket} reply:^(NSDictionary* json,NSError* error){
         ProbeEditState* current=weak;if(!current||![self active:current])return;current.request=nil;
         if(error){if(++current.failures<=3)[self schedule:current];else[self fail:current code:NetworkFailure];return;}current.failures=0;
         id status=json[@"state"];
-        if([status isEqual:@"editing"]){[self schedule:current];return;}
-        if([status isEqual:@"navigate"]){id index=json[@"index"];if(![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]){[self fail:current code:InvalidReply];return;}EquationLabSetNavigationTarget([index intValue]);[self fail:current code:0];return;}
-        if([status isEqual:@"cancelled"]){[self fail:current code:0];return;}
+        if([status isEqual:@"editing"]){
+            if(current.reopenRequested){current.reopenRequested=NO;NSString* url=[@"equationlab://word-edit/" stringByAppendingString:current.ticket];if(self.launch)self.launch(url.UTF8String,self.launchContext);else launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError*){});}
+            [self schedule:current];return;
+        }
+        if([status isEqual:@"navigate"]){id index=json[@"index"];if(![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]){[self fail:current code:InvalidReply];return;}if(!current.reopenRequested)EquationLabSetNavigationTarget([index intValue]);bridge_probe::completeEdit(current.sessionId,nullptr,0,false,current.reopenRequested);return;}
+        if([status isEqual:@"cancelled"]){bridge_probe::completeEdit(current.sessionId,nullptr,0,false,current.reopenRequested);return;}
         if(![status isEqual:@"complete"]){[self fail:current code:InvalidReply];return;}
         id source=json[@"native"],preview=json[@"pdf"],width=json[@"width"],height=json[@"height"];
         const NSUInteger maxB64=((MaxBlob+2)/3)*4;
-        if(![source isKindOfClass:NSString.class]||[source length]>maxB64||![preview isKindOfClass:NSString.class]||[preview length]>maxB64||![width isKindOfClass:NSNumber.class]||![height isKindOfClass:NSNumber.class]){[self fail:current code:InvalidReply];return;}
+        if(![source isKindOfClass:NSString.class]||[source length]>maxB64||![preview isKindOfClass:NSString.class]||[preview length]>maxB64||![width isKindOfClass:NSNumber.class]||![height isKindOfClass:NSNumber.class]){[self failResult:current code:InvalidReply];return;}
         double w=[width doubleValue],h=[height doubleValue];
-        if(w<1||h<1||w>INT32_MAX||h>INT32_MAX||w!=static_cast<std::int32_t>(w)||h!=static_cast<std::int32_t>(h)){[self fail:current code:InvalidReply];return;}
+        if(w<1||h<1||w>INT32_MAX||h>INT32_MAX||w!=static_cast<std::int32_t>(w)||h!=static_cast<std::int32_t>(h)){[self failResult:current code:InvalidReply];return;}
         NSData* native=[[NSData alloc] initWithBase64EncodedString:source options:0];NSData* pdf=[[NSData alloc] initWithBase64EncodedString:preview options:0];
-        if(!nativeValid(native)||!pdf.length||pdf.length>MaxBlob){[self fail:current code:InvalidReply];return;}
+        if(!nativeValid(native)||!pdf.length||pdf.length>MaxBlob){[self failResult:current code:InvalidReply];return;}
         CGDataProviderRef provider=CGDataProviderCreateWithCFData((__bridge CFDataRef)pdf);CGPDFDocumentRef document=provider?CGPDFDocumentCreateWithProvider(provider):nullptr;
         bool validPdf=document&&CGPDFDocumentGetNumberOfPages(document)==1;
         if(document)CGPDFDocumentRelease(document);if(provider)CGDataProviderRelease(provider);
-        if(!validPdf){[self fail:current code:InvalidReply];return;}
+        if(!validPdf){[self failResult:current code:InvalidReply];return;}
+        id targetValue=json[@"target"];
+        if(targetValue&&![targetValue isKindOfClass:NSDictionary.class]){[self failResult:current code:InvalidReply];return;}
+        NSDictionary* target=targetValue;
+        if(target){
+            id index=target[@"index"],expected=target[@"expectedNativeSha256"],identity=target[@"documentIdentity"];
+            NSCharacterSet* badDigest=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+            NSDictionary* binding=current.bindingContext;
+            if(![target isKindOfClass:NSDictionary.class]||![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]||![expected isKindOfClass:NSString.class]||[expected length]!=64||[expected rangeOfCharacterFromSet:badDigest].location!=NSNotFound||![identity isKindOfClass:NSString.class]||![identity isEqual:binding[@"identity"]]||![binding[@"snapshot"] isKindOfClass:NSNumber.class]||[binding[@"snapshot"] intValue]<=0||self.backgroundSave){
+                [self failResult:current code:InvalidReply];return;
+            }
+            ProbeBackgroundSave* save=[ProbeBackgroundSave new];save.ticket=current.ticket;save.session=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(current.sessionId)];save.native=native;save.pdf=pdf;save.extent={static_cast<std::int32_t>(w),static_cast<std::int32_t>(h)};save.index=[index intValue];save.expectedDigest=expected;save.binding=binding;self.backgroundSave=save;
+            // Release the previous object's edit ownership. Its data is never
+            // applied to the target; only the target's subsequent real DoVerb
+            // is allowed to supply a client site for the prepared save.
+            auto hr=bridge_probe::completeEdit(current.sessionId,nullptr,0,false);
+            if(hr!=bridge_probe::Ok){[self ackBackground:save ok:NO];return;}
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(self.backgroundSave==save)[self ackBackground:save ok:NO];});
+            return;
+        }
+        self.applying=YES;
         auto hr=bridge_probe::setSessionPreview(current.sessionId,static_cast<const std::uint8_t*>(pdf.bytes),pdf.length,{static_cast<std::int32_t>(w),static_cast<std::int32_t>(h)});
         // completeEdit synchronously runs the client's SaveObject contract.
         // Capture its identity first: successful completion cleans edit state.
         NSString* ackTicket=current.ticket;
         NSString* ackSession=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(current.sessionId)];
-        if(hr==bridge_probe::Ok)hr=bridge_probe::completeEdit(current.sessionId,static_cast<const std::uint8_t*>(native.bytes),native.length,true);
+        if(hr==bridge_probe::Ok)hr=bridge_probe::completeEdit(current.sessionId,static_cast<const std::uint8_t*>(native.bytes),native.length,true,current.reopenRequested);
+        self.applying=NO;
         [self request:@"/api/native-ack" body:@{@"ticket":ackTicket,@"session":ackSession,@"ok":@(hr==bridge_probe::Ok)} reply:^(NSDictionary*,NSError*){}];
         if(hr!=bridge_probe::Ok)[self fail:current code:ApplyFailure];
     }];
@@ -241,35 +570,99 @@ namespace {
 HResult openTransport(std::uint64_t id,const std::uint8_t* data,std::size_t size,void*){
     if(!NSThread.isMainThread)return WrongThread;
     if(!transport||!data||size<29||size>MaxBlob)return InvalidArgument;
-    if(transport.edits.count>=16)return Unexpected;
+    if(transport.edits.count>=16&&!transport.edits[@(id)])return Unexpected;
     NSData* native=[NSData dataWithBytes:data length:size];if(!nativeValid(native))return StorageHeaderError;
     [transport begin:id native:native];return Ok;
 }
 void cancelTransport(std::uint64_t id,void*){if(NSThread.isMainThread)[transport cleanup:id];}
+void forgetTransportOwner(std::uint64_t id,void*){
+    auto forget=^{if(id)[transport forgetOwner:id];else{documentCapturedAt=nil;[transport invalidateDocuments];}};
+    if(NSThread.isMainThread)forget();else dispatch_async(dispatch_get_main_queue(),forget);
+}
+void writtenTransportOwner(std::uint64_t id,const std::uint8_t* data,std::size_t size,void*){
+    if(!NSThread.isMainThread)return;
+    NSDictionary* binding=transport.ownerCaptureBindings[@(id)];if(!binding)return;
+    [transport rememberCaptureOwner:id context:binding digest:nativeDigest([NSData dataWithBytes:data length:size])];
+}
 }
 HResult installEditorTransport(){
     if(!NSThread.isMainThread)return WrongThread;
     if(!transport)transport=[ProbeEditorTransport new];
-    setEditorHooks(openTransport,nullptr);setEditorCancelHook(cancelTransport);return Ok;
+    setEditorHooks(openTransport,nullptr);setEditorCancelHook(cancelTransport);setEditorOwnerForgetHook(forgetTransportOwner);setEditorOwnerWrittenHook(writtenTransportOwner);return Ok;
 }
 HResult installEditorTransportForTesting(std::uint16_t port,LaunchEditorUrl launch,void* context,std::uint32_t interval){
     if(inWord()||!port||!launch||interval<1||interval>60000)return InvalidArgument;
-    if(editorTransportActive())return Unexpected;
+    if(editorTransportActive()||transport.backgroundSave)return Unexpected;
     auto hr=installEditorTransport();if(hr!=Ok)return hr;
     transport.baseURL=[NSString stringWithFormat:@"http://127.0.0.1:%u",port];transport.launch=launch;transport.launchContext=context;transport.interval=interval;lastError=0;return Ok;
 }
-std::uint32_t editorTransportActive(){return static_cast<std::uint32_t>(transport.edits.count);}
+std::uint32_t editorTransportActive(){
+    auto count=static_cast<std::uint32_t>(transport.edits.count);
+    // A direct target commit deliberately has no second HTTP edit state.
+    // Still expose its synchronous activation/save as active so VBA's
+    // selection handlers cannot re-enter WordOpenXML from SaveObject.
+    return count?count:(transport.applying||transport.backgroundSave.claimed?1:0);
+}
 std::uint32_t editorTransportLastError(){return lastError.load();}
 }
+void EquationLabDocumentContextDidCapture(){documentCapturedAt=NSDate.date;if(transport){++transport.captureSerial;[transport documentReady];}}
+void EquationLabDocumentContextDidClear(){documentCapturedAt=nil;if(transport){[transport invalidateDocuments];[transport.ownerCaptureBindings removeAllObjects];[transport.ownerCaptureOrder removeAllObjects];for(ProbeEditState* state in transport.edits.allValues)if(state.awaitingDocument&&state.requiresDocumentCapture){lastCaptureState=CaptureSuperseded;[transport fail:state code:InvalidReply];}}}
 extern "C" __attribute__((visibility("default")))
 bridge_probe::HResult MathTypeBridgeInstallTransportForTesting(std::uint16_t port,bridge_probe::LaunchEditorUrl launch,void* context,std::uint32_t interval){return bridge_probe::installEditorTransportForTesting(port,launch,context,interval);}
 extern "C" __attribute__((visibility("default")))
 std::uint32_t MathTypeBridgeTransportActive(){return bridge_probe::editorTransportActive();}
 extern "C" __attribute__((visibility("default")))
+std::uint32_t MathTypeBridgeDocumentCaptureState(){return lastCaptureState.load();}
+extern "C" __attribute__((visibility("default")))
 std::uint32_t MathTypeBridgeDocumentCaptureAllowed(){
     if(!NSThread.isMainThread)return 0;
-    if(transport.edits.count!=1)return 0;
-    return ((ProbeEditState*)transport.edits.allValues.firstObject).awaitingDocument?1:0;
+    // The user can select another equation while the old editor is still
+    // open. Freeze THAT selection too. Only synchronous SaveObject callbacks
+    // must avoid re-entering WordOpenXML during a persistence operation.
+    return transport&&!transport.applying&&!transport.backgroundSave.claimed?1:0;
 }
+// VBA uses integer commands only. Take is one-shot and never claims inside
+// SaveObject; getters refer exclusively to that same latest activation.
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(transport.ownerCaptureBindings.count||transport.edits.count)?1:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeTakeDocumentCaptureRequest(){return NSThread.isMainThread?[transport takeCaptureRequest]:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return NSThread.isMainThread&&transport.captureRequest.claimed?transport.captureRequest.token:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureSnapshot(){return NSThread.isMainThread&&transport.captureRequest.claimed?[transport.captureRequest.binding[@"snapshot"] intValue]:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureIndex(){return NSThread.isMainThread&&transport.captureRequest.claimed?[transport.captureRequest.binding[@"index"] intValue]+1:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureIdentity(){return NSThread.isMainThread&&transport.captureRequest.claimed?[[transport.captureRequest.binding[@"identity"] componentsSeparatedByString:@":"].lastObject intValue]:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeFinishDocumentCaptureRequest(){return NSThread.isMainThread?[transport finishCaptureRequest:YES]:-1;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeFailDocumentCaptureRequest(){return NSThread.isMainThread?[transport finishCaptureRequest:NO]:-1;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeTakeBackgroundSave(){
+    if(!NSThread.isMainThread||!transport||transport.edits.count)return 0;
+    ProbeBackgroundSave* save=transport.backgroundSave;if(!save||save.claimed)return 0;
+    save.claimed=YES;return [save.binding[@"snapshot"] intValue];
+}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundSaveIndex(){return NSThread.isMainThread&&transport.backgroundSave.claimed?transport.backgroundSave.index+1:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeFailBackgroundSave(){if(!NSThread.isMainThread)return -1;if(transport.backgroundSave)[transport ackBackground:transport.backgroundSave ok:NO];return 0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundSaveActivationFinished(){return MathTypeBridgeFailBackgroundSave();}
+extern "C" __attribute__((visibility("default")))
+bridge_probe::HResult MathTypeBridgeSetTransportDocumentForTesting(const char* json){
+    if(inWord()||!NSThread.isMainThread||!transport.launch)return bridge_probe::InvalidArgument;
+    if(!json){transport.testDocumentContext=nil;return bridge_probe::Ok;}
+    NSData* bytes=[[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];id context=[NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+    if(![context isKindOfClass:NSDictionary.class])return bridge_probe::InvalidArgument;transport.testDocumentContext=context;EquationLabDocumentContextDidCapture();return bridge_probe::Ok;
+}
+extern "C" __attribute__((visibility("default")))
+std::uint64_t MathTypeBridgeLastOwnerIdentityForTesting(){return inWord()?0:transport.lastOwnerIdentity;}
+extern "C" __attribute__((visibility("default")))
+bridge_probe::HResult MathTypeBridgeClearTransportDocumentsForTesting(){if(inWord()||!NSThread.isMainThread||!transport.launch)return bridge_probe::InvalidArgument;EquationLabDocumentContextDidClear();return bridge_probe::Ok;}
+extern "C" __attribute__((visibility("default")))
+bridge_probe::HResult MathTypeBridgeAgeTransportCaptureForTesting(double age){if(inWord()||!NSThread.isMainThread||!transport.launch||age<0||age>60)return bridge_probe::InvalidArgument;documentCapturedAt=[NSDate dateWithTimeIntervalSinceNow:-age];return bridge_probe::Ok;}
 extern "C" __attribute__((visibility("default")))
 std::uint32_t MathTypeBridgeTransportLastError(){return bridge_probe::editorTransportLastError();}

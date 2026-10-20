@@ -26,35 +26,30 @@ test('A busy New action is blocked; Word completion waits for the native window 
  const completion=vm.runInContext('finishWordSave()',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(element('word-session-actions').hidden,true);
 });
 
-test('Rapid sidebar clicks stay in the Word handoff until the new document ticket is read',async()=>{
- const calls=[],selected=[],cancelledTimers=[];let nextTimer=1;
- const element=()=>({hidden:false,textContent:''});
- const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:'a'.repeat(64),timer:42,revision:0,validationRequested:true,validationPending:true,valid:true,idleWaiters:new Set(),
-  source:{hasDocumentContext:true,objects:[{index:0},{index:1},{index:2}]},selected:{index:0},controls(){},message(){},wordSessionChanged:()=>false,
-  selectObject(index){selected.push(index);context.selected=context.source.objects[index];},native:async(action,payload)=>{calls.push({action,payload});return action==='wordSessionRead'?{hasDocumentContext:true,activeIndex:1,objects:[{index:0},{index:1},{index:2}]}:{};},
-  syncSidebar:async()=>{},renderObjects(){},validate:async()=>{},loadWordThumbnails(){},$:element,clearTimeout:id=>cancelledTimers.push(id),setTimeout:()=>nextTimer++});
- const dispatch=source.slice(source.indexOf('window.nativeSelectObject=async'),source.indexOf(';window.nativeFavorite='))+ ';';
- const open=source.slice(source.indexOf('window.nativeOpenWordSession=async'),source.indexOf('async function loadWordThumbnails'));
- const perform=source.split('\n').find(line=>line.startsWith('async function perform('));
- vm.runInContext(perform+'\n'+dispatch+'\n'+open,context);
- assert.equal(await context.window.nativeSelectObject(1),true);
- assert.equal(context.busy,false);assert.equal(context.wordNavigating,true);
- await context.window.nativeSelectObject(2);await context.window.nativeSelectObject(0);
- assert.deepEqual(selected,[],'do not select from a document whose temporary stage has been deleted');
- assert.deepEqual(calls.map(c=>c.action),['wordSessionNavigate']);assert.ok(cancelledTimers.includes(42));
- assert.equal(context.valid,false);assert.equal(context.validationRequested,false);
- assert.equal(await context.window.nativeOpenWordSession('b'.repeat(64)),true);
- assert.equal(context.wordNavigating,false);assert.equal(context.wordTicket,'b'.repeat(64));assert.deepEqual(selected,[1]);
- assert.deepEqual(calls.map(c=>c.action),['wordSessionNavigate','wordSessionRead']);
+test('Rapid sidebar browsing changes only the local selection and retains the Word save owner',async()=>{
+ const calls=[],selected=[];let sidebar=0;
+ const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordTicket:'a'.repeat(64),
+  source:{hasDocumentContext:true,activeIndex:0,path:'immutable-snapshot.docx',objects:[{index:0},{index:1},{index:2}]},selected:{index:0},
+  message(){},wordSessionChanged:()=>false,native:async action=>calls.push(action),syncSidebar:async()=>{sidebar++;},
+  selectObject(index){selected.push(index);context.selected=context.source.objects[index];}});
+ const dispatch=source.slice(source.indexOf('window.nativeSelectObject=async'),source.indexOf(';window.nativeFavorite='))+';';
+ vm.runInContext(dispatch,context);
+ for(const index of [1,2,0])assert.equal(await context.window.nativeSelectObject(index),true);
+ assert.deepEqual(selected,[1,2,0]);assert.deepEqual(calls,[]);assert.equal(sidebar,3);
+ assert.equal(context.wordNavigating,false);assert.equal(context.wordTicket,'a'.repeat(64));assert.equal(context.source.activeIndex,0);
+ context.wordSessionChanged=()=>true;await context.window.nativeSelectObject(2);assert.equal(context.selected.index,0,'unsaved changes stay in their original formula');
 });
 
-test('A lost navigation reply discards the stale stage instead of enabling standalone editing',async()=>{
- const calls=[];let resets=0;
- const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:'a'.repeat(64),timer:42,revision:0,validationRequested:true,validationPending:true,valid:true,idleWaiters:new Set(),
-  source:{hasDocumentContext:true,objects:[{index:0},{index:1}]},selected:{index:0},controls(){},message(){},wordSessionChanged:()=>false,selectObject(){throw Error('stale selection');},
-  native:async action=>{calls.push(action);if(action==='wordSessionNavigate')throw Error('reply lost');return {};},syncSidebar:async()=>{},resetNewFormula(){resets++;},clearTimeout(){},setTimeout(){throw Error('navigation already failed');}});
- const dispatch=source.slice(source.indexOf('window.nativeSelectObject=async'),source.indexOf(';window.nativeFavorite='))+';';
- const perform=source.split('\n').find(line=>line.startsWith('async function perform('));vm.runInContext(perform+'\n'+dispatch,context);
- assert.equal(await context.window.nativeSelectObject(1),false);assert.deepEqual(calls,['wordSessionNavigate','wordSessionCancel']);
- assert.equal(context.wordNavigating,false);assert.equal(context.wordTicket,null);assert.equal(context.source,null);assert.equal(context.selected,null);assert.equal(resets,1);
+test('Cross-formula save refuses an untrusted document target while retaining its editable draft',async()=>{
+ const calls=[],elements=new Map();const element=id=>{if(!elements.has(id))elements.set(id,{querySelectorAll:()=>[]});return elements.get(id);};
+ const context=vm.createContext({window:{desktopTypographyPatch:()=>null},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:'a'.repeat(64),mode:'rebuild',editingRuler:undefined,
+  source:{hasDocumentContext:true,activeIndex:0,objects:[{index:0},{index:1}]},selected:{index:1,nativeSha256:'target-hash'},mf:{value:'important edited formula'},
+  $:element,controls(){},message(){},changed(){},ensureValid:async()=>{},syncSidebar:async()=>{},setTimeout,clearTimeout,
+  resetNewFormula(){context.source=null;context.selected=null;context.mf.value='';},
+  native:async action=>{calls.push(action);throw Error('reply lost');}});
+ const bind=source.slice(source.indexOf('async function bindSelectedWordFormula()'),source.indexOf('window.nativeCommitWordSession='));
+ vm.runInContext(bind,context);
+ await assert.rejects(vm.runInContext('bindSelectedWordFormula()',context),/可靠的 Word 文档信息/);
+ assert.deepEqual(calls,[]);assert.equal(context.wordNavigating,false);assert.equal(context.wordTicket,'a'.repeat(64));
+ assert.equal(context.selected.index,1);assert.equal(context.mf.value,'important edited formula');
 });

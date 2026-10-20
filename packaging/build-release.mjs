@@ -11,6 +11,7 @@ import {buildWorkbenchAssets} from './workbench-assets.mjs';
 import {pruneDependencies} from './prune-dependencies.mjs';
 import {buildAutomaticPackage} from './word-native-installer/build-automatic-pkg.mjs';
 import {writeUpdateManifest} from './update-manifest.mjs';
+import {buildMathLiveEditor} from './mathlive-editor.mjs';
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const config = JSON.parse(await readFile(join(root,'packaging','release.json'),'utf8'));
@@ -114,20 +115,15 @@ try {
   report.buildTools={npmVersion:run(bundledNode,[npmCli,'--version']).trim(),npmSource:process.env.EQUATIONLAB_NODE_RUNTIME_CACHE?'local build tool':'verified Node distribution'};
   const npmEnvironment=Object.fromEntries(Object.entries(process.env).filter(([key])=>!/^npm_config_/i.test(key)&&!['NODE_PATH','NODE_OPTIONS'].includes(key)));
   run(bundledNode,[npmCli,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--update-notifier=false','--userconfig',join(temp,'user.npmrc'),'--globalconfig',join(temp,'global.npmrc'),'--cache',join(temp,'npm-cache'),'--registry','https://registry.npmjs.org'],{cwd:engine,stdio:'inherit',env:{...npmEnvironment,PATH:`${join(runtimeSource,'bin')}:/usr/bin:/bin:/usr/sbin:/sbin`}});
-  for(const directory of ['src','addin'])await cp(join(root,directory),join(engine,directory),{recursive:true,dereference:false});
+  await cp(join(root,'src'),join(engine,'src'),{recursive:true,dereference:false});
   await mkdir(join(resources,'licenses'),{recursive:true});
   for(const file of ['LICENSE','THIRD_PARTY_NOTICES.md'])await copyFile(join(root,file),join(resources,'licenses',file));
   await cp(join(root,'assets','licenses'),join(resources,'licenses'),{recursive:true,dereference:false});
   await cp(join(root,'assets','fonts'),join(engine,'fonts'),{recursive:true,dereference:false});
   await writeFile(join(engine,'src','version.mjs'),`// Generated from the application release version.\nexport const APP_VERSION=${JSON.stringify(version)};\n`);
-  const addinManifestPath=join(engine,'addin','manifest.xml'),addinManifest=await readFile(addinManifestPath,'utf8');
-  const officeVersion=addinManifest.match(/<Version>\d+\.\d+\.\d+\.(\d+)<\/Version>/);
-  if(!officeVersion)throw Error('The Office manifest version field is missing.');
-  report.officeManifestVersion=`${version.match(/^\d+\.\d+\.\d+/)[0]}.${officeVersion[1]}`;
-  await writeFile(addinManifestPath,addinManifest.replace(/<Version>\d+\.\d+\.\d+\.\d+<\/Version>/,`<Version>${report.officeManifestVersion}</Version>`));
   await mkdir(join(resources,'web','vendor'),{recursive:true});
   for(const file of await readdir(join(root,'desktop')))if(/\.(html|css|js)$/.test(file))await copyFile(join(root,'desktop',file),join(resources,'web',file));
-  await copyFile(join(engine,'node_modules','mathlive','mathlive.min.js'),join(resources,'web','vendor','mathlive.min.js'));
+  report.mathliveEditor=await buildMathLiveEditor({root,mathliveDirectory:join(engine,'node_modules','mathlive'),output:join(resources,'web','vendor','mathlive.min.js')});
   await cp(join(engine,'node_modules','mathlive','fonts'),join(resources,'web','vendor','fonts'),{recursive:true});
   const {buildTemplatePreviews}=await import('../scripts/build/build-template-previews.mjs');
   report.templatePreviews=await buildTemplatePreviews(join(resources,'template-previews'));
@@ -137,7 +133,6 @@ try {
   await writeFile(join(resources, 'dependency-pruning.json'), JSON.stringify(pruning, null, 2)+'\n');
   report.dependencyPruning = {...pruning, removed: undefined};
   await mkdir(join(resources,'installer'),{recursive:true});
-  await copyFile(join(root,'packaging','install-word-plugin.mjs'),join(resources,'installer','install-word-plugin.mjs'));
   await copyFile(join(root,'packaging','word-service.mjs'),join(resources,'installer','word-service.mjs'));
   await copyFile(join(root,'packaging','word-native-installer','installer.mjs'),join(resources,'installer','word-native-installer.mjs'));
   await mkdir(join(resources,'installer','word-native-installer'),{recursive:true});
@@ -180,7 +175,7 @@ try {
 <key>CFBundleShortVersionString</key><string>${xml(version)}</string><key>CFBundleVersion</key><string>${xml(build)}</string>
 <key>LSMinimumSystemVersion</key><string>${xml(config.minimumMacOS)}</string><key>NSPrincipalClass</key><string>NSApplication</string>
 <key>NSHighResolutionCapable</key><true/><key>EquationLabNode</key><string>runtime/bin/node</string>
-<key>NSAppDataUsageDescription</key><string>安装和检查 Equation Lab Word 插件的固定顶栏与公式编辑组件。</string>
+<key>NSAppDataUsageDescription</key><string>安装和检查 Equation Lab Word 插件的原生功能区与公式编辑组件。</string>
 <key>CFBundleURLTypes</key><array><dict><key>CFBundleURLName</key><string>app.equationlab.word-edit</string><key>CFBundleURLSchemes</key><array><string>equationlab</string></array><key>CFBundleTypeRole</key><string>Editor</string></dict></array>
 </dict></plist>\n`;
   await writeFile(join(contents,'Info.plist'),plist);

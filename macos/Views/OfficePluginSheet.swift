@@ -49,7 +49,7 @@ struct OfficePluginSheet: View {
         }
         .padding(26).frame(width: 620)
         .disabled(bridge.installationRunning)
-        .onAppear { bridge.refreshOfficePluginStatus(); bridge.verifyWordPlugin() }
+        .onAppear { bridge.verifyWordPlugin() }
         .alert(bridge.t("Office 插件"), isPresented: Binding(get: { !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {
             Button(bridge.t("好"), role: .cancel) { bridge.installationMessage = "" }
         } message: { Text(bridge.t(bridge.installationMessage)) }

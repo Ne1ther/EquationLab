@@ -138,6 +138,10 @@ Object.assign(glyphs,{lBrack:'⟦',rBrack:'⟧',llbracket:'⟦',rrbracket:'⟧',
 export const supportedGlyphs=Object.freeze({...glyphs});
 const nativeMathGlyphs=new Set(['∬','∭','∐','∮','∯','∰','∲','∳',...Object.values(glyphs).filter(c=>!originalNativeGlyphs.has(c))]);
 const nativeGreekGlyphs=new Set(['ϰ','ϱ','ϵ']);
+// BMP script letters fit MTEF's 16-bit character field. Persist their actual
+// outline font in the equation rather than substituting only in the preview.
+const scriptLetters={B:'ℬ',E:'ℰ',F:'ℱ',H:'ℋ',I:'ℐ',L:'ℒ',M:'ℳ',R:'ℛ',e:'ℯ',g:'ℊ',o:'ℴ'};
+for(const value of Object.values(scriptLetters))nativeMathGlyphs.add(value);
 // Actual CoreText checks against the shipping macOS Symbol face show these
 // existing commands have no glyph. Author their real native font explicitly;
 // a renderer-only fallback would leave Word's saved object inconsistent.
@@ -197,16 +201,16 @@ export function latexAst(input) {
     return d;
   }
   function environment(){
-    const env=textGroup(),supported=new Set(['matrix','pmatrix','bmatrix','Bmatrix','vmatrix','Vmatrix','cases','aligned','gathered','array']);
+    const inputEnv=textGroup(),env=({align:'aligned','align*':'aligned',gather:'gathered','gather*':'gathered',split:'aligned'})[inputEnv]??inputEnv,supported=new Set(['matrix','pmatrix','bmatrix','Bmatrix','vmatrix','Vmatrix','cases','aligned','gathered','array']);
     if(!supported.has(env))throw Error(`Unsupported LaTeX environment ${env}`);
     const columnSpec=env==='array'?textGroup():null,columns=columnSpec?.replace(/\|/g,'');
     if(columnSpec&&(!/^[lcr|]+$/.test(columnSpec)||!(/^(l+|c+|r+)$/.test(columns))||columnSpec.includes('||')))throw Error('Only uniformly aligned arrays with single solid partition lines are supported');
     const rows=[],rowRules=[];let row=[];
-    while(true){white();if(!row.length&&text.startsWith('\\hline',p)&&!/[A-Za-z]/.test(text[p+6]||'')){control();if(rowRules[rows.length])throw Error('Repeated horizontal rules are unsupported');rowRules[rows.length]=1;white();if(text.startsWith('\\end',p)){control();if(textGroup()!==env)throw Error(`Mismatched environment ${env}`);break;}}
+    while(true){white();if(!row.length&&text.startsWith('\\hline',p)&&!/[A-Za-z]/.test(text[p+6]||'')){control();if(rowRules[rows.length])throw Error('Repeated horizontal rules are unsupported');rowRules[rows.length]=1;white();if(text.startsWith('\\end',p)){control();if(textGroup()!==inputEnv)throw Error(`Mismatched environment ${inputEnv}`);break;}}
       row.push(seq(null,{env,cell:true}));white();
       if(text[p]==='&'){p++;continue;}
       if(text.startsWith('\\\\',p)){p+=2;rows.push(row);row=[];white();if(text[p]==='[')throw Error('Custom matrix row spacing is unsupported');continue;}
-      if(text.startsWith('\\end',p)&&!/[A-Za-z]/.test(text[p+4]||'')){control();if(textGroup()!==env)throw Error(`Mismatched environment ${env}`);if(row.length>1||!emptyNode(row[0])||!rows.length)rows.push(row);break;}
+      if(text.startsWith('\\end',p)&&!/[A-Za-z]/.test(text[p+4]||'')){control();if(textGroup()!==inputEnv)throw Error(`Mismatched environment ${inputEnv}`);if(row.length>1||!emptyNode(row[0])||!rows.length)rows.push(row);break;}
       throw Error(`Unclosed environment ${env}`);
     }
     const cols=Math.max(...rows.map(r=>r.length));
@@ -283,6 +287,10 @@ export function latexAst(input) {
         return {kind:'fence',left,right:delimiter(),body};
       }
       if(command==='begin')return environment();
+      if(command==='mathcal'||command==='mathscr'){
+        const letters=textGroup();
+        return seqNode([...letters].map(value=>{if(!scriptLetters[value])throw Error(`Script letter ${value} has no supported native character`);return {kind:'char',value:scriptLetters[value]};}));
+      }
       if(command==='text'||command==='textrm')return {kind:'text',value:textGroup()};
       if(['mathrm','mathbf','mathit','boldsymbol','mathsf','mathtt'].includes(command))return {kind:'style',style:command,body:group()};
       if(command==='operatorname'){let limits=false;if(text[p]==='*'){p++;limits=true;}const value=textGroup();if(!/^[A-Za-z ]+$/.test(value))throw Error('Operator name must contain Latin letters/spaces');return limits?{kind:'limit',value}:{kind:'function',value};}
@@ -335,14 +343,16 @@ export function latexAst(input) {
     return out;
   }
   function seq(stop,opts={}){
-    if(++depth>100)throw Error('LaTeX nesting limit');const items=[];let closed=!stop;
+    if(++depth>100)throw Error('LaTeX nesting limit');let items=[];const rows=[];let closed=!stop;
     while(p<text.length){white();if(p===text.length)break;
       if(stop&&text[p]===stop){p++;closed=true;break;}
       if(opts.fence&&/^\\(?:mright|right)(?![A-Za-z])/.test(text.slice(p)))break;
       if(opts.cell&&(text[p]==='&'||text.startsWith('\\\\',p)||/^\\end(?![A-Za-z])/.test(text.slice(p))))break;
+      if(!opts.cell&&text.startsWith('\\\\',p)){p+=2;rows.push([seqNode(bindOperators(items))]);items=[];continue;}
       if(text[p]==='}')throw Error('Unexpected closing group');items.push(postfix(atom()));
     }
     depth--;if(!closed)throw Error('Unclosed group');if(opts.fence&&!/^\\(?:mright|right)(?![A-Za-z])/.test(text.slice(p)))throw Error('Unclosed fence');
+    if(rows.length){rows.push([seqNode(bindOperators(items))]);if(rows.length>31)throw Error('Multiline equations support at most 31 rows');return seqNode([{kind:'matrix',env:'gathered',rows,cols:1}]);}
     return seqNode(bindOperators(items));
   }
   const result=seq();white();if(p!==text.length)throw Error('Unexpected trailing LaTeX');return result;
@@ -373,7 +383,7 @@ function sourceContext(parsed){
   return {fonts,styles,preferenceStyles,extras,explicit(style,value){
     if(typeof style==='string')style=combineStyle(null,style);
     const symbolic=!/^[\x20-\x7e]$/.test(value)&&!reverseSpaces[value];
-    let family=style.family==='math'?'STIX Two Math':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman';
+    let family=style.family==='math'?'STIX Two Math':style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman';
     let font=fonts.findIndex(f=>f.name.toLowerCase()===family.toLowerCase())+1;
     if(!font){
       const encoding=family==='Symbol'?3:parsed.records.some(n=>n.type===19&&n.name==='WinAllBasicCodePages')?5:1;
@@ -401,7 +411,7 @@ function authoredTypeface(ctx,value,style){
 function emit(n,ctx,style){
   if(n.kind==='seq')return cat(...n.items.map(x=>cat(emit(x,ctx,style),['bigop','custombigop','expandedintegral','limit','limitbox','hbrace','arrow'].includes(x.kind)||x.kind==='sqrt'&&x.index||x.kind==='fraction'&&x.small?[inheritedSize(ctx)]:[])));
   if(n.kind==='char')return charRecord(n.value,{typeface:authoredTypeface(ctx,n.value,style)});
-  if(n.kind==='text')return cat(...[...n.value].map(c=>charRecord(c,{typeface:1})));
+  if(n.kind==='text')return cat(...[...n.value].map(c=>charRecord(c,{typeface:/[^\x00-\u024f]/.test(n.value)?ctx.explicit({family:'textUnicode',bits:0},c):1})));
   if(n.kind==='style')return emit(n.body,ctx,combineStyle(style,n.style));
   if(n.kind==='function')return cat(...[...n.value].map((c,i)=>charRecord(c,{typeface:2,options:i===0?2:0})));
   if(n.kind==='fraction')return tmpl(11,[slot(n.num,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style),slot(n.den,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style)],n.variation??(n.small?1:0));
@@ -624,6 +634,8 @@ function glyphLatex(n){
   if(reverseSpaces[c])return reverseSpaces[c];
   if(c==='−')return '-';
   if(reverseGlyphs[c])return reverseGlyphs[c];
+  const script=Object.entries(scriptLetters).find(([,value])=>value===c);
+  if(script)return `\\mathcal{${script[0]}}`;
   if(Object.values(bigOperators).some(op=>op.value===c))return c;
   if(greekLetters.has(c))return c;
   if(/[{}%$#&_]/.test(c))return '\\'+c;
@@ -651,6 +663,7 @@ function characterStyle(n,ctx){
   const family=font?ctx.fonts[font-1]?.name:undefined;
   if(font&&!family)previewError(`Missing font definition ${font}`);
   if(family==='STIX Two Math'&&(style===0&&n.code>=128||style===2&&nativeGreekGlyphs.has(String.fromCharCode(n.code))))return null;
+  if(family==='Arial Unicode MS'&&style===0)return 'text';
   // Editable LaTeX describes content and broad styles; exact family names stay
   // in MTEF and are rendered separately through CoreText, never inferred from
   // the MathLive input field's default math font.
@@ -667,7 +680,8 @@ function renderChar(n,ctx){
   if(n.options&0xc0)previewError('Unparsed/bad input character styling is unsupported');
   if(n.options&8)previewError('Nudged characters cannot be faithfully represented');
   if(n.code===undefined)previewError('Character has no MTCode mapping');
-  let text=ctx.fontToken?ctx.fontToken(n,reverseSpaces[String.fromCharCode(n.code)]||''):glyphLatex(n);const style=ctx.fontToken?null:characterStyle(n,ctx);
+  const style=ctx.fontToken?null:characterStyle(n,ctx);
+  let text=ctx.fontToken?ctx.fontToken(n,reverseSpaces[String.fromCharCode(n.code)]||''):style==='text'&&!reverseSpaces[String.fromCharCode(n.code)]?'':glyphLatex(n);
   if(reverseSpaces[String.fromCharCode(n.code)]){}
   else if(style==='text')text=`\\text{${escapedText(String.fromCharCode(n.code))}}`;
   else if(style&&style!=='function'){for(const command of (Array.isArray(style)?[...style].reverse():[style]))text=`\\${command}{${text}}`;}

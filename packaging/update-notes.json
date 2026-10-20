@@ -1,5 +1,5 @@
 {
-  "version": "0.6.0",
-  "zh": "• 新增文档公式列表、编号格式预设、自定义输入与实时预览。\n• 修正求和、积分、根号、减号和边缘裁切，提升公式预览清晰度。\n• 完善 Word 公式切换、原位置回存及编号引用更新。\n• 修正 Word 跳转后部分公式留白，新增 30 公式 Word / PDF 演示。",
-  "en": "• Browse document equations and use numbering presets, custom formats, and live previews.\n• Correct sums, integrals, radicals, minus signs, and clipped edges; improve preview clarity.\n• Improve Word equation navigation, saving in place, and numbering and reference updates.\n• Refresh blank Word previews after navigation and add a 30-equation Word/PDF demo."
+  "version": "0.6.1",
+  "zh": "公式列表在 App 内切换，保存时后台写回目标公式。修复取消或保存后列表丢失、失效会话无法编辑或关闭、多行公式和根号接头重叠。统一 Word 按钮与双击打开，改善冷启动、Dock 重开和编号显示。移除旧 Word 内嵌侧栏。",
+  "en": "Browse equations in the app and save to the selected formula in the background. Fix lost lists after cancelling or saving, stale sessions blocking edits or closing, multiline equations, and overlapping radical strokes. Unify opening from Word and by double-click, improve cold launch, Dock reopening and numbering details, and remove the old Word task pane."
 }

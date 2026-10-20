@@ -1,4 +1,4 @@
-import {readFile,writeFile,realpath} from 'node:fs/promises';
+import {readFile,writeFile,realpath,stat} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {isMainModule} from './cli-entry.mjs';
 import {createInterface} from 'node:readline';
@@ -12,10 +12,49 @@ import {readTypography} from './typography-native.mjs';
 import {previewNumberFormat} from './layout.mjs';
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
+// Word stages immutable snapshots. Parse each snapshot once, including while
+// individual sidebar thumbnails are arriving, and reuse identical snapshots
+// across OLE activations. Recheck file identity before every reuse.
+const documentCache=new Map(),documentFiles=new Map();let documentBytes=0;
+async function readDocument(path){
+ const info=await stat(path,{bigint:true}),identity=[info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
+ const previous=documentFiles.get(path);
+ if(previous?.identity===identity&&documentCache.has(previous.key))return documentCache.get(previous.key).parsed;
+ const bytes=await readFile(path),key=hash(bytes);
+ let entry=documentCache.get(key);
+ if(!entry){
+  entry={bytes:bytes.length,parsed:inspectDocx(bytes)};documentCache.set(key,entry);documentBytes+=entry.bytes;
+  try{await entry.parsed;}catch(error){documentCache.delete(key);documentBytes-=entry.bytes;throw error;}
+ }
+ documentFiles.delete(path);documentFiles.set(path,{identity,key});
+ while(documentFiles.size>32)documentFiles.delete(documentFiles.keys().next().value);
+ while(documentCache.size>4||documentBytes>32*1024*1024){const first=documentCache.keys().next().value;documentBytes-=documentCache.get(first).bytes;documentCache.delete(first);}
+ return entry.parsed;
+}
+// A thumbnail is identified by ALL native bytes, including fonts, sizes,
+// spacing and rulers. Never reuse Word's stale image or cache document paths.
+const thumbnailCache=new Map();let thumbnailBytes=0;
+function cacheThumbnail(key,image){
+ const old=thumbnailCache.get(key);if(old)thumbnailBytes-=old.length;
+ thumbnailCache.delete(key);thumbnailCache.set(key,image);thumbnailBytes+=image.length;
+ while(thumbnailCache.size>256||thumbnailBytes>8_000_000){const first=thumbnailCache.keys().next().value;thumbnailBytes-=thumbnailCache.get(first).length;thumbnailCache.delete(first);}
+ return image;
+}
 
 async function wordSession(path,payload){
  if(!/^[a-f0-9]{64}$/.test(payload.ticket||''))throw Error('无效的 Word 编辑会话');
  const response=await fetch('http://127.0.0.1:37952/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)}),result=await response.json();if(!response.ok)throw Error(result.error||'Word 会话服务不可用');return result;
+}
+function checkedWordSource(session,ticket){
+ if(session.ticket!==ticket||typeof session.path!=='string'||typeof session.native!=='string'||typeof session.session!=='string')throw Error('Word 会话源数据无效');
+}
+async function readWordSession(ticket){
+ const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
+ const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}}),activeIndex=session.document?.index??0;
+ const selected=result.objects[activeIndex],native=Buffer.from(session.native,'base64');
+ try{if(!selected||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
+ const documentIdentity=session.document?.identity??null;
+ return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordTicket:ticket};
 }
 
 export async function desktopRequest(request) {
@@ -41,7 +80,7 @@ export async function desktopRequest(request) {
   else throw Error('未知图像格式');
   await writeFile(payload.output,bytes);return {path:payload.output,bytes:bytes.length};
  }
- if(action==='wordSessionRead'){const session=await wordSession('native-read',{ticket:payload.ticket});const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}});return {...result,activePath:session.path,activeIndex:session.document?.index??0,documentName:session.document?.name??null,hasDocumentContext:!!session.document,wordTicket:payload.ticket};}
+ if(action==='wordSessionRead')return readWordSession(payload.ticket);
  if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
  if(action==='wordSessionThumbnails'){
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
@@ -53,18 +92,27 @@ export async function desktopRequest(request) {
  if(action==='wordSessionStatus')return wordSession('native-status',{ticket:payload.ticket});
  if(action==='wordSessionSave'){
   const session=await wordSession('native-read',{ticket:payload.ticket});
-  if(session.ticket!==payload.ticket||typeof session.path!=='string'||typeof session.native!=='string'||typeof session.session!=='string')throw Error('Word 会话源数据无效');
+  checkedWordSource(session,payload.ticket);
   const sourcePath=await realpath(session.path),inputPath=await realpath(payload.input);
   if(inputPath!==sourcePath)throw Error('编辑源文件不属于当前 Word 会话');
   if(!['characters','rebuild'].includes(payload.mode))throw Error('未知的 Word 原生编辑模式');
   const {objects}=await inspectDocx(await readFile(sourcePath));
   if(objects.length!==1||payload.index!==undefined&&payload.index!==0)throw Error('Word 编辑会话必须只包含一个原生公式');
-  const o=objects[0];if(o.parseError)throw Error(o.parseError);
-  const original=inspectOle(o.ole).native,expected=Buffer.from(session.native,'base64');
+  const owner=objects[0];if(owner.parseError)throw Error(owner.parseError);
+  const original=inspectOle(owner.ole).native,expected=Buffer.from(session.native,'base64');
   let same;try{same=expected.length>0&&expected.toString('base64')===session.native&&original.equals(expected);}finally{original.fill(0);expected.fill(0);}
   if(!same)throw Error('Word 会话源公式已变化，已阻止写回');
+  let o=owner,target;
+  if(payload.target!==undefined){
+   const value=payload.target;
+   if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Word 保存目标无效');
+   if(!session.document?.identity||session.document.identity!==value.documentIdentity)throw Error('Word 保存目标不属于当前文档');
+   const document=await readDocument(session.document.path);o=document.objects[value.index];
+   if(!o||o.part!=='word/document.xml'||o.parseError||o.nativeSha256!==value.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
+   target={index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:session.document.identity};
+  }
   const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex),ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),p=await nativePdf(ole);
-  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p});
+  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p,...target?{target}:{}});
   return {...result,...session.acknowledgement?{acknowledgement:true}:{}};
  }
  if(action==='validate') {
@@ -73,17 +121,18 @@ export async function desktopRequest(request) {
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg};
  }
  if(action==='inspect') {
-  const buffer=await readFile(payload.path),{objects,zip}=await inspectDocx(buffer);
+  const {objects,zip}=await readDocument(payload.path);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
   const thumbnails=new Map();let thumbnailQueue=Promise.resolve();
   const thumbnail=o=>{
+   if(thumbnailCache.has(o.nativeSha256))return Promise.resolve(thumbnailCache.get(o.nativeSha256));
    if(thumbnails.has(o.nativeSha256))return thumbnails.get(o.nativeSha256);
    const pending=thumbnailQueue.then(async()=>{
     const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
     const png=rendered.png;
-    return 'data:image/png;base64,'+png.toString('base64');
+    return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+png.toString('base64'));
    });
    thumbnailQueue=pending.catch(()=>{});thumbnails.set(o.nativeSha256,pending);return pending;
   };
@@ -93,7 +142,7 @@ export async function desktopRequest(request) {
    // Word's cached OLE image can be tiny or retain an old layout. Supported
    // formulas get a fresh native thumbnail; defer that work on session open.
    if(!o.parseError&&!o.previewError&&o.nativeSha256){
-    if(payload.thumbnails===false)image=null;
+    if(payload.thumbnails===false)image=thumbnailCache.get(o.nativeSha256)??null;
     else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);}catch{/* Preserve the stored preview if the native renderer cannot display it. */}}
    }
    return {index:o.index,part:o.part,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
@@ -143,16 +192,24 @@ export async function desktopRequest(request) {
 
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
-  await warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n'));
+  let rendering=warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n'));
+  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','typography-default','numberingPreview']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.
   for await(const line of createInterface({input:process.stdin,crlfDelay:Infinity})){
-   let id;const start=performance.now();let result;
-   try{if(Buffer.byteLength(line)>5_000_000)throw Error('请求过大');const request=JSON.parse(line);id=request.id;if(typeof id!=='string'||id.length>100)throw Error('无效的请求标识');result={ok:true,data:await desktopRequest(request)};}
-   catch(error){result={ok:false,error:error.message};}
-   process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start})+'\n');
+   if(inflight.size>=32)await Promise.race(inflight);
+   let id,request;const start=performance.now();
+   try{if(Buffer.byteLength(line)>5_000_000)throw Error('请求过大');request=JSON.parse(line);id=request.id;if(typeof id!=='string'||id.length>100)throw Error('无效的请求标识');}
+   catch(error){process.stdout.write(JSON.stringify({id,ok:false,error:error.message,elapsedMs:performance.now()-start})+'\n');continue;}
+   const run=async()=>{let result;try{result={ok:true,data:await desktopRequest(request)};}catch(error){result={ok:false,error:error.message};}process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start})+'\n');};
+   // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
+   // Rendering and filesystem mutations retain their original serial order.
+   const task=control.has(request.action)?run():rendering.then(run);
+   if(!control.has(request.action))rendering=task.catch(()=>{});
+   inflight.add(task);task.finally(()=>inflight.delete(task));
   }
+  await Promise.all(inflight);
  }else try{let s='';for await(const c of process.stdin){s+=c;if(s.length>5_000_000)throw Error('请求过大');}const data=await desktopRequest(JSON.parse(s));process.stdout.write(JSON.stringify({ok:true,data}));}
  catch(error){process.stdout.write(JSON.stringify({ok:false,error:error.message}));process.exitCode=1;}
 }

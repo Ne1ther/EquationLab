@@ -8,6 +8,7 @@ import {SVGmover,SVGmunder,SVGmunderover} from 'mathjax-full/js/output/svg/Wrapp
 import {SVGmrow} from 'mathjax-full/js/output/svg/Wrappers/mrow.js';
 import {SVGmo} from 'mathjax-full/js/output/svg/Wrappers/mo.js';
 import {nativeDimension32} from './native-dimensions.mjs';
+import {radicalContour} from './radical-contour.mjs';
 import {readFileSync} from 'node:fs';
 const {tables}=JSON.parse(readFileSync(new URL('./native-spacing-tables.json',import.meta.url)));
 const {jstat,integralOverlays,jointGeometry}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
@@ -37,6 +38,13 @@ export function createNativeLayout(prefs,full,nativeFaces){
  const full32=Math.trunc(full*32),space=prefs?.spaces??[],G=(id)=>space[id]&&!space[id].unsupported?nativeDimension32(space[id],full32,{relative:![16,17,22].includes(id)}):undefined;
  const P=(id,ratio=1)=>{const g=G(id);return g===undefined?undefined:Math.trunc(g*Math.trunc(full32*ratio)/full32)/(32*full);};
  const Q=value=>Math.ceil(value*full*32)/(32*full);
+ const boundaryGap=(a,b,ratio)=>{
+  if(!a||!b)return 0;
+  const ef=tables[ratio<.9?1:0]?.[a-1]?.[b-1]??1,coefficient={2:16,3:22,4:27,5:100,6:200,7:8}[ef];if(!coefficient)return 0;
+  const baseAdvance=(nativeFaces.find(f=>f.font===prefs.styles[1]?.font)?.glyphs?.[32]?.advance??250)*full32/1000;
+  const advance=Math.trunc(baseAdvance*Math.trunc(full32*ratio)/full32),scaled=Math.trunc(advance*coefficient*4/100),factor=G([a,b].some(c=>c===5||c===6)?16:17)??3200;
+  return Q((Math.trunc(factor*scaled/100)>>5)/(32*full));
+ };
  const metric=nativeFaces.find(f=>f.font===prefs?.styles[1]?.font)?.metrics??nativeFaces[0]?.metrics;
  const M0=(metric?.ascent??750)/1000,M1=(metric?.descent??250)/1000;
  const factory=new SVGWrapperFactory();
@@ -86,18 +94,25 @@ export function createNativeLayout(prefs,full,nativeFaces){
    return {n,t,w,top,bottom,over,gap:P(21,ratio)??0,extraX,extraY,indexX,indexY};
   }
   computeBBox(bbox,recompute){const p=this.nativeGeometry();bbox.h=p.top+p.extraY; bbox.d=-p.bottom; bbox.w=p.extraX+p.w+p.gap+p.n.w*p.n.rscale+p.over;this.setChildPWidths(recompute);}
-  toSVG(parent){const p=this.nativeGeometry(),SVG=this.standardSVGnode(parent),surd=this.childNodes[this.surd],base=this.childNodes[this.base],sbox=surd.getBBox();surd.toSVG(SVG);const sx=p.w/sbox.w,sy=(p.top-p.bottom)/(sbox.h+sbox.d);this.adaptor.setAttribute(surd.element,'transform','translate('+this.fixed(p.extraX)+' '+this.fixed(p.bottom+sbox.d*sy)+') scale('+sx+' '+sy+')');
+  toSVG(parent){const p=this.nativeGeometry(),SVG=this.standardSVGnode(parent),base=this.childNodes[this.base],contour=radicalContour({width:p.w+p.gap+p.n.w*p.n.rscale+p.over,height:p.top-p.bottom,stemWidth:p.w,rule:p.t});
+   // The old stretched font cap and separate rectangle disagreed at tall
+   // heights. One closed outline joins the hook, stem and requested rule.
+   const radical=this.adaptor.append(SVG,this.svg('g',{'data-equation-radical':'continuous','data-rule':this.fixed(p.t),transform:'translate('+this.fixed(p.extraX)+' '+this.fixed(p.top)+') scale('+contour.scaleX*1000+' '+(-contour.scaleY*1000)+')'}));
+   this.adaptor.append(radical,this.svg('path',{d:contour.d}));
    // An inferred mrow reuses its parent element. Isolate the radicand so its
    // placement cannot translate the radical, overbar and index as well.
    const BASE=this.adaptor.append(SVG,this.svg('g'));base.toSVG(BASE);base.place(p.extraX+p.w+p.gap,0);
-   this.adaptor.append(SVG,this.svg('rect',{width:this.fixed(p.n.w*p.n.rscale+p.gap+p.over),height:this.fixed(p.t),x:this.fixed(p.extraX+p.w),y:this.fixed(p.top-p.t)}));
    if(this.root){const index=this.childNodes[this.root];index.toSVG(SVG);index.place(p.indexX,p.indexY);}
   }
  };}
  class Table extends SVGmtable{
   setLineThickness(t,style,properties){const attrs=super.setLineThickness(t,style,properties);delete attrs['stroke-thickness'];Object.assign(attrs,{fill:'none','stroke-width':this.fixed(t)});if(style==='dashed')attrs['stroke-dasharray']=this.fixed(2*t);if(style==='dotted'){attrs['stroke-linecap']='round';attrs['stroke-dasharray']='0,'+this.fixed(2*t);}return attrs;}
   updateHDW(cell,i,j,align,H,D,W,M){const result=super.updateHDW(cell,i,j,align,H,D,W,M),r=nativeRatio(this.node);H[j]=Math.max(H[j],M0*r);D[j]=Math.max(D[j],M1*r);return result;}
-  constructor(...args){super(...args);const r=nativeRatio(this.node),pile=this.node.getProperty('elPile'),rowSpace=P(pile?(r<.9?8:0):1,r);if(rowSpace!==undefined)this.rSpace=this.rSpace.map(()=>rowSpace-(M0+M1)*r);if(!pile&&P(2,r)!==undefined)this.cSpace=this.cSpace.map(()=>P(2,r));const thickness=P(27,r);if(thickness!==undefined){this.cLines=this.cLines.map(x=>x?Math.max(0,thickness):0);this.rLines=this.rLines.map(x=>x?Math.max(0,thickness):0);if(this.frame)this.fLine=Math.max(0,thickness);}}
+  constructor(...args){super(...args);const r=nativeRatio(this.node),pile=this.node.getProperty('elPile'),rowSpace=P(pile?(r<.9?8:0):1,r);if(rowSpace!==undefined)this.rSpace=this.rSpace.map(()=>rowSpace-(M0+M1)*r);if(!pile&&P(2,r)!==undefined)this.cSpace=this.cSpace.map(()=>P(2,r));
+   // A relation-aligned pile becomes two MathML cells. Its relation still
+   // needs the native boundary gap that a single-line equation receives.
+   if(pile&&this.numCols===2)this.cSpace=this.cSpace.map(()=>boundaryGap(2,6,r));
+   const thickness=P(27,r);if(thickness!==undefined){this.cLines=this.cLines.map(x=>x?Math.max(0,thickness):0);this.rLines=this.rLines.map(x=>x?Math.max(0,thickness):0);if(this.frame)this.fLine=Math.max(0,thickness);}}
  }
  function scriptClass(Base){return class extends Base{
   getBaseWidth(){return super.getBaseWidth()+(P(5,nativeRatio(this.baseChild.node))??0);}
@@ -183,7 +198,7 @@ export function createNativeLayout(prefs,full,nativeFaces){
    if(node.kind==='mrow'||node.kind==='inferredMrow'){
     const children=node.childNodes.filter(c=>c.kind!=='mspace'),classes=children.map(tokenClass);
     for(let i=0;i<classes.length;i++)if(classes[i]===5&&(!i||[4,5,6,7,9].includes(classes[i-1])||[6,8,9].includes(classes[i+1])))classes[i]=4;
-    children.forEach((child,i)=>{let gap=0;const a=classes[i-1],b=classes[i];if(i&&a&&b){const ratio=nativeRatio(child),ef=tables[ratio<.9?1:0]?.[a-1]?.[b-1]??1,coefficient={2:16,3:22,4:27,5:100,6:200,7:8}[ef];if(coefficient){const baseAdvance=(nativeFaces.find(f=>f.font===prefs.styles[1]?.font)?.glyphs?.[32]?.advance??250)*full32/1000;const advance=Math.trunc(baseAdvance*Math.trunc(full32*ratio)/full32),scaled=Math.trunc(advance*coefficient*4/100),factor=G([a,b].some(c=>c===5||c===6)?16:17)??3200;gap=Q((Math.trunc(factor*scaled/100)>>5)/(32*full));}}
+    children.forEach((child,i)=>{const gap=i?boundaryGap(classes[i-1],classes[i],nativeRatio(child)):0;
      child.setProperty('elGap',gap);const width=P(18,nativeRatio(child));if(width&&child.getProperty('equationNativeSize'))child.setProperty('elCharWidth',width);
     });
    }

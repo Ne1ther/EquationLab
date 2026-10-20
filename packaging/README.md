@@ -3,9 +3,9 @@
 版本与运行时配置在 `packaging/release.json`。先执行 `npm ci`，使用现有脚本构建：
 
 ```sh
-EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.12" \
+EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/native-word-probe/releases/0.0.18" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --version 0.6.0 --build 49 --app-only --no-dmg --output dist/0.6.0-build49
+./scripts/package_release.sh --version 0.6.1 --build 54 --app-only --no-dmg --output dist/0.6.1-build55
 ```
 
 安装包包含 App、独立 Node 运行时、生产依赖、字体、预览资源、Word 模板与辅助组件。运行路径相对 App 定位；无需用户安装开发工具。
@@ -14,6 +14,6 @@ Word 模板须在真实 Word 中导入全部模块、编译、保存，并通过
 
 安装器从 Word 设置中检测 Startup 位置，只管理本产品记录的文件。安装前检查 Word 和 App 已退出；安装后验证用户安装记录、后台服务和新 Word 进程的加载记录。
 
-完整发布上传 `Equation-Lab-0.6.0.pkg`、`EquationLab-update.json`、`SHA256SUMS.txt`。更新密钥只保存在本地，公共验证密钥在 `updater/UpdateTrust.swift`；不要把私钥放进 Git 或 App。
+完整发布上传 `Equation-Lab-0.6.1.pkg`、`EquationLab-update.json`、`SHA256SUMS.txt`。更新密钥只保存在本地，公共验证密钥在 `updater/UpdateTrust.swift`；不要把私钥放进 Git 或 App。
 
 源码导出使用 `node packaging/export-source.mjs --review --output dist/source-review`，输出目录须不存在。主仓库保留源码、文档和演示，安装包放 GitHub Releases。

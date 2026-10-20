@@ -93,8 +93,13 @@ test('Enlarging the symbol does not enlarge the gap to unchanged limit text',asy
 });
 
 test('A radical keeps its own stroke size when it contains an enlarged operator',async()=>{
- const thickness=svg=>{const dom=new DOMParser().parseFromString(svg,'image/svg+xml'),root=Array.from(dom.getElementsByTagName('g')).find(n=>n.getAttribute('data-mml-node')==='msqrt');return Number(Array.from(root.childNodes).find(n=>n.nodeType===1&&n.tagName==='rect').getAttribute('height'));};
- const plain=await renderNative(makeOle('\\sqrt{x}'),{raster:false}),sum=await renderNative(makeOle('\\sqrt{\\sum_{i=1}^{n}x_i^2}'),{raster:false});assert.equal(thickness(sum.svg),thickness(plain.svg),'an enlarged radicand must not thicken the radical');
+ const thickness=async svg=>{
+  const dom=new DOMParser().parseFromString(svg,'image/svg+xml'),serialize=new XMLSerializer(),root=Array.from(dom.getElementsByTagName('g')).find(n=>n.getAttribute('data-mml-node')==='msqrt'),radical=Array.from(root.childNodes).find(n=>n.nodeType===1),body=`<g transform="scale(1,-1)">${serialize.serializeToString(radical)}</g>`;
+  const [left,top,right,bottom]=vectorInkBounds(vectorPdfRequest(`<svg viewBox="-5000 -5000 10000 10000">${body}</svg>`,1,1)),scale=.4,width=right-left+100,height=bottom-top+100;
+  const {data,info}=await sharp(Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="${left-50} ${top-50} ${width} ${height}" width="${Math.ceil(width*scale)}" height="${Math.ceil(height*scale)}">${body}</svg>`)).ensureAlpha().raw().toBuffer({resolveWithObject:true});
+  let rows=0;const x=Math.round((right-left-50)*scale);for(let y=0;y<info.height;y++)if(data[(y*info.width+x)*4+3]>127)rows++;assert.ok(rows>0);return rows;
+ };
+ const plain=await renderNative(makeOle('\\sqrt{x}'),{raster:false}),sum=await renderNative(makeOle('\\sqrt{\\sum_{i=1}^{n}x_i^2}'),{raster:false});assert.equal(await thickness(sum.svg),await thickness(plain.svg),'an enlarged radicand must not thicken the actual exported radical ink');
 });
 
 test('Empty root templates retain a readable radical without writing fake placeholder glyphs',async()=>{

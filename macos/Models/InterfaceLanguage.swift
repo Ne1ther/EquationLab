@@ -44,6 +44,17 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         ("工作台状态读取失败：", "Could not read editor state: ")
     ]
     private static let englishStrings: [String: String] = [
+        "当前公式还有未保存的修改":"This equation has unsaved changes",
+        "当前公式尚不能保存":"This equation cannot be saved yet",
+        "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。":"Keep editing this equation, or discard these changes and open the equation you just activated.",
+        "可以继续编辑，或放弃本次修改并返回 Word。原公式会保留。":"Keep editing, or discard these changes and return to Word. The original equation will be kept.",
+        "继续编辑当前公式":"Keep editing",
+        "放弃修改并打开":"Discard and open",
+        "放弃修改并返回 Word":"Discard and return to Word",
+        "已保留当前编辑；刚才打开的 Word 公式未修改。":"Kept your current edits. The other Word equation was not changed.",
+        "Word 中的选择已经变化。请先保存或取消当前编辑，再回到 Word 打开目标公式。":"The selection in Word has changed. Save or cancel this edit, then open the target equation from Word.",
+        "上次保存仍在等待 Word 确认，请先完成保存后再打开其他公式。":"Waiting for Word to confirm the previous save. Finish it before opening another equation.",
+        "已载入当前公式；未能读取文档列表，请回到 Word 重新打开。":"Loaded the current equation. The document list was unavailable; reopen the equation from Word.",
         "下载文件超出发布记录的大小，请重新检查更新。":"The download exceeds its published size. Please check for updates again.",
         "正在检查更新…":"Checking for updates…",
         "已经是最新版本":"You’re up to date",
@@ -258,7 +269,7 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         "原生间距":"Native spacing", "30 项原版间距可分别定义；预览尚未完全复现所有间距。":"Edit the 30 native spacing values. Preview support varies by setting.", "矩阵与多行":"Matrices and multiline", "浏览矩阵与对齐模板":"Browse matrix and alignment templates", "选择模板后，在画布中逐格编辑；Tab 前往下一个位置。":"Choose a template and edit each cell. Tab moves to the next placeholder.",
         "Word 编排":"Word layout", "公式位置":"Placement", "编号格式":"Number format", "章":"Chapter", "节":"Section", "行内":"Inline", "独立居中":"Display, centered", "右侧编号":"Number on right", "左侧编号":"Number on left", "#C 为章、#S 为节、#E 为公式。编号与引用使用 Word 域。":"#C is chapter, #S section and #E equation. Numbers and references use Word fields.",
         "应用到文档全部独立公式":"Apply to all display equations", "另存编排后的 Word 副本…":"Save a Word layout copy…", "复制与导出":"Copy and export", "复制 LaTeX":"Copy LaTeX", "复制公式图片":"Copy equation image", "导出 MathType Word…":"Export MathType Word…", "查看兼容性说明…":"Compatibility notes…",
-        "尚未连接 Word 服务":"Word service not connected", "尚未安装 Word 插件":"Word add-in not installed", "尚未安装 Word 顶栏与侧栏":"Word add-in not installed", "Word 插件服务已就绪":"Word service ready", "Word 服务暂不可用":"Word service unavailable", "本机证书无效，请重新安装插件":"Local certificate invalid; reinstall the add-in", "Word 服务端口被占用，请关闭旧版后重试":"Word service port is busy; close the previous version", "Word 顶栏后台服务已就绪":"Word background service ready", "顶栏服务已就绪；更新插件后可关闭 App 使用":"Word service ready; update the add-in for background use", "Word 顶栏服务未连接，请安装或修复":"Word service disconnected; install or repair",
+        "尚未安装 Word 插件":"Word add-in not installed",
         "正在安装…":"Installing…", "安装 Word 插件…":"Install Word add-in…", "检查连接":"Check connection", "Word 插件安装":"Word add-in installation", "公式仍在载入，请稍后关闭窗口。":"The equation is loading. Please wait before closing.",
         "打开文档":"Open document", "打开 Word…":"Open Word…", "打开 Word 文档":"Open Word document", "文档公式":"Document equations", "当前文档的公式":"Document equations", "这里会列出 Word 文档中的 MathType 公式。":"MathType equations from your Word document appear here.", "新公式与收藏":"New equations and favorites", "新建":"New", "收藏":"Favorites", "收藏公式":"Save favorite", "收藏当前公式":"Save current equation", "收藏常用公式后，可在这里快速插入。":"Save equations to insert them quickly here.", "空白公式":"Blank equation", "独立公式":"Standalone equation", "未打开 Word 文档":"No Word document open", "打开含 MathType 公式的 Word 文档，或从空白公式开始。":"Open a Word document with MathType equations, or start with a blank equation.",
         "工具类型":"Tools", "符号":"Symbols", "模板":"Templates", "全部模板":"All templates", "常用结构":"Common", "积分与求和":"Calculus", "矩阵":"Matrices", "希腊字母":"Greek", "运算与关系":"Operators", "标记与函数":"Accents and functions", "分式":"Fraction", "上标":"Superscript", "下标":"Subscript", "根号":"Square root", "n次根":"Nth root", "圆括号":"Parentheses", "方括号":"Brackets", "绝对值":"Absolute value", "积分":"Integral", "二重积分":"Double integral", "求和":"Sum", "乘积":"Product", "极限":"Limit", "行列式":"Determinant", "分段":"Cases", "对齐":"Aligned", "上划线":"Overline", "帽子":"Hat", "向量":"Vector", "点":"Dot",

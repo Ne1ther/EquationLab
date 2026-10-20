@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.0 安装包](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.0/Equation-Lab-0.6.0.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.1 安装包](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.1/Equation-Lab-0.6.1.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -20,7 +20,7 @@
 
 更新在 **Equation Lab → 检查更新…**，也可以开启每日检查和自动下载。
 
-![Equation Lab 工作台](docs/preview/workbench-0.6.0.png)
+![Equation Lab 工作台](docs/preview/workbench-0.6.1.jpg)
 
 ## 试一份文档
 

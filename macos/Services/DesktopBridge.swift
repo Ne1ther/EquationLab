@@ -70,23 +70,31 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published var showCommands = false
     @Published var showCompatibility = false
     @Published var showOfficePlugins = false
-    @Published var wordTaskPaneInstalled = false
-    @Published var wordBackgroundInstalled = false
     @Published var installationMessage = ""
     @Published var installationRunning = false
-    @Published var officeServiceStatus = "尚未连接 Word 服务"
     @Published var nativeWordStatus = "尚未安装 Word 插件"
     @Published var wordApplicationPath = ""
     @Published var wordApplicationVersion = ""
     @Published var wordOfficeAccessRequired = false
     var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
+    var lastWordPluginVerification: (date: Date, wordPID: pid_t?)?
     var wordTicket: String?
     private var editorReady = false
     private var wordSessionDelivered = false
     private var wordOpenStarted: CFAbsoluteTime?
+    private var pendingWordTickets: [String] = []
+    private var deliveringWordTicket: String?
+    private var revealEditorWhenAttached = false
+    private var wordPresentationGeneration = 0
+    private var focusEventSequence = 0
+    private func recordWindowEvent(_ event: String, reason: String) {
+        focusEventSequence += 1
+        EditorLifecycleLog.logger.info("window_event sequence=\(self.focusEventSequence) event=\(event, privacy: .public) reason=\(reason, privacy: .public)")
+    }
     private var nativeService: Process?
-    private var serviceOutput = Data()
+    private var installedServiceKickstartRequested = false
+    var hasWordSessionOrRequest: Bool { wordSessionActive || deliveringWordTicket != nil || !pendingWordTickets.isEmpty }
     func bundledNodeURL() -> URL? {
         guard let path = Bundle.main.object(forInfoDictionaryKey: "EquationLabNode") as? String else { return nil }
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : Bundle.main.resourceURL?.appendingPathComponent(path)
@@ -95,84 +103,36 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         let record = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Equation Lab/word-service-install.json")
         if let data = try? Data(contentsOf: record), let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
            state["schema"] as? String == "equationlab.word-service-install.v1", state["app"] as? String == Bundle.main.bundlePath {
-            // The installed launchd agent owns both listeners. Starting another
-            // app-owned child here can race bootstrap and break exit behavior.
-            DispatchQueue.global(qos: .utility).async { [weak self] in
+            // The installed launchd agent owns the native transport. Avoid a
+            // redundant kickstart when the app returns to the foreground.
+            guard !installedServiceKickstartRequested else { return }
+            installedServiceKickstartRequested = true
+            DispatchQueue.global(qos: .utility).async {
                 let process = Process(); process.executableURL = URL(fileURLWithPath: "/bin/launchctl")
                 process.arguments = ["kickstart", "gui/\(getuid())/app.equationlab.word-service"]
                 process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
                 do { try process.run(); process.waitUntilExit() } catch {}
-                DispatchQueue.main.async { self?.refreshOfficePluginStatus() }
             }
             return
         }
         guard nativeService?.isRunning != true else { return }
         nativeService = nil
-        // The helper validates and reuses a compatible external native service,
-        // then independently starts HTTPS. It never evicts an occupied port.
+        // The helper validates and reuses a compatible external native service.
+        // It never evicts an occupied port.
         startNativeService()
     }
     private func startNativeService() {
         guard nativeService == nil, let root = Bundle.main.resourceURL?.appendingPathComponent("engine"), let node = bundledNodeURL() else { return }
         let process = Process(); process.executableURL = node; process.arguments = [root.appendingPathComponent("src/app-services.mjs").path]; process.currentDirectoryURL = root
         var environment = ProcessInfo.processInfo.environment
-        environment.removeValue(forKey: "MATHTYPE_BRIDGE_PORT")
-        for key in ["EQUATIONLAB_TLS_CERT", "EQUATIONLAB_TLS_KEY", "EQUATIONLAB_HOST_TRACE"] { environment.removeValue(forKey: key) }; process.environment = environment
-        let output = Pipe(), errors = Pipe()
-        process.standardOutput = output; process.standardError = errors
-        serviceOutput.removeAll(keepingCapacity: true)
-        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
-            DispatchQueue.main.async { self?.receiveServiceStatus(data) }
-        }
-        errors.fileHandleForReading.readabilityHandler = { [weak self] handle in
-            let data = handle.availableData
-            guard !data.isEmpty else { handle.readabilityHandler = nil; return }
-            DispatchQueue.main.async {
-                if let message = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines), !message.isEmpty {
-                    self?.officeServiceStatus = String(message.prefix(240))
-                }
-            }
-        }
+        environment.removeValue(forKey: "EQUATIONLAB_HOST_TRACE")
+        environment["EQUATIONLAB_NATIVE_PORT"] = "37952"
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
         do { try process.run(); nativeService = process }
-        catch { officeServiceStatus = "本机服务未能启动：\(error.localizedDescription)" }
-    }
-    private func receiveServiceStatus(_ data: Data) {
-        serviceOutput.append(data)
-        // This protocol contains service readiness only, never Word session data.
-        if serviceOutput.count > 65536 { serviceOutput.removeAll(); return }
-        while let lineEnd = serviceOutput.firstIndex(of: 10) {
-            let line = serviceOutput[..<lineEnd]
-            serviceOutput.removeSubrange(...lineEnd)
-            guard let value = try? JSONSerialization.jsonObject(with: Data(line)) as? [String: Any], value["app"] as? String == "Equation Lab" else { continue }
-            switch value["office"] as? String {
-            case "ready": officeServiceStatus = "Word 插件服务已就绪"
-            case "not-installed": officeServiceStatus = "尚未安装 Word 插件"
-            case "certificate-invalid": officeServiceStatus = "本机证书无效，请重新安装插件"
-            case "port-occupied": officeServiceStatus = "Word 服务端口被占用，请关闭旧版后重试"
-            case "unavailable": officeServiceStatus = "Word 服务暂不可用"
-            default: break
-            }
-        }
+        catch { nativeWordStatus = "本机服务未能启动：\(error.localizedDescription)" }
     }
     func stopOwnedNativeService() { if nativeService?.isRunning == true { nativeService?.terminate() }; nativeService = nil }
-    func refreshOfficePluginStatus() {
-        let support = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Equation Lab")
-        wordTaskPaneInstalled = FileManager.default.fileExists(atPath: support.appendingPathComponent("word-plugin-install.json").path)
-        wordBackgroundInstalled = FileManager.default.fileExists(atPath: support.appendingPathComponent("word-service-install.json").path)
-        guard wordTaskPaneInstalled else { officeServiceStatus = "尚未安装 Word 顶栏与侧栏"; return }
-        var request = URLRequest(url: URL(string: "https://localhost:37951/api/health")!)
-        request.timeoutInterval = 3
-        URLSession.shared.dataTask(with: request) { [weak self] data, response, _ in
-            let health = data.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
-            let ready = (response as? HTTPURLResponse)?.statusCode == 200 && health?["app"] as? String == "Equation Lab" && health?["tls"] as? Bool == true && health?["version"] as? String == Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String
-            DispatchQueue.main.async {
-                guard let self else { return }
-                self.officeServiceStatus = ready ? (self.wordBackgroundInstalled ? "Word 顶栏后台服务已就绪" : "顶栏服务已就绪；更新插件后可关闭 App 使用") : "Word 顶栏服务未连接，请安装或修复"
-            }
-        }.resume()
-    }
     func restartOwnedNativeService() {
         guard let process = nativeService else { ensureNativeService(); return }
         nativeService = nil
@@ -198,32 +158,72 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         guard url.scheme == "equationlab", url.host == "word-edit", url.query == nil, url.fragment == nil else { return }
         let ticket = String(url.path.dropFirst())
         guard ticket.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return }
-        guard wordTicket == nil || wordTicket == ticket else { return }
-        if wordTicket == ticket { return }
-        wordOpenStarted = CFAbsoluteTimeGetCurrent()
-        wordTicket = ticket; wordSessionActive = true; wordSessionDelivered = false
+        guard deliveringWordTicket != ticket, !pendingWordTickets.contains(ticket) else { return }
+        // Only the most recent not-yet-opened selection matters. Release
+        // superseded requests instead of replaying every click through Word.
+        for obsolete in pendingWordTickets { cancelUndeliveredWordTicket(obsolete) }
+        pendingWordTickets = [ticket]
         if editorReady { deliverWordSession() }
     }
-    private func showEditorWindow() { editorWindow?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+    func showEditorWindow(reason: String = "user") {
+        revealEditorWhenAttached = true
+        guard let editorWindow else { recordWindowEvent("reveal_pending", reason: reason); return }
+        revealEditorWhenAttached = false
+        guard !editorWindow.isVisible || !editorWindow.isKeyWindow || !NSApp.isActive else { recordWindowEvent("reveal_unchanged", reason: reason); return }
+        recordWindowEvent("reveal", reason: reason)
+        if editorWindow.isMiniaturized { editorWindow.deminiaturize(nil) }
+        editorWindow.makeKeyAndOrderFront(nil)
+        if !NSApp.isActive { NSApp.activate() }
+    }
+    func editorWindowDidAttach() { if revealEditorWhenAttached { showEditorWindow(reason: "window-attached") } }
     private func deliverWordSession() {
-        guard !wordSessionDelivered, let ticket = wordTicket, let web = webView else { return }
-        wordSessionDelivered = true
+        guard editorReady, deliveringWordTicket == nil, !pendingWordTickets.isEmpty, let web = webView else { return }
+        let ticket = pendingWordTickets.removeFirst()
+        let presentationGeneration = wordPresentationGeneration
+        deliveringWordTicket = ticket
+        wordOpenStarted = CFAbsoluteTimeGetCurrent()
+        recordWindowEvent("word_delivery_begin", reason: "word-activation")
         web.callAsyncJavaScript("return await window.nativeOpenWordSession(ticket)", arguments: ["ticket": ticket], in: nil, in: .page) { [weak self] result in
             guard let self else { return }
+            self.deliveringWordTicket = nil
+            guard presentationGeneration == self.wordPresentationGeneration else {
+                self.recordWindowEvent("word_delivery_ignored", reason: "editor-ended")
+                self.cancelUndeliveredWordTicket(ticket); self.deliverWordSession(); return
+            }
+            var reveal = false
             if case .success(let ready) = result, ready as? Bool == true {
+                self.wordTicket = ticket; self.wordSessionActive = true; self.wordSessionDelivered = true
+                reveal = true
                 if let started = self.wordOpenStarted {
                     let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1000
                     EditorLifecycleLog.logger.info("word_editor_ready ms=\(elapsed, format: .fixed(precision: 1))")
                 }
-            } else { self.wordSessionDelivered = false }
-            self.showEditorWindow()
+            } else if case .failure(let error) = result {
+                // A WebKit failure must release the newly-created Word request.
+                // Never cancel the older ticket whose unsaved edits remain open.
+                self.cancelUndeliveredWordTicket(ticket)
+                self.state.message = "未能打开 Word 公式：\(error.localizedDescription)"; self.state.messageError = true
+            }
+            self.recordWindowEvent("word_delivery_end", reason: reveal ? "accepted" : "rejected")
+            if self.pendingWordTickets.isEmpty && (reveal || self.wordSessionActive) { self.showEditorWindow(reason: "word-delivered") }
+            self.deliverWordSession()
         }
     }
+    private func cancelUndeliveredWordTicket(_ ticket: String) {
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:37952/api/native-cancel")!)
+        request.httpMethod = "POST"; request.timeoutInterval = 3
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.httpBody = try? JSONSerialization.data(withJSONObject: ["ticket": ticket])
+        URLSession.shared.dataTask(with: request).resume()
+    }
     func returnToWord(hideEditor: Bool = true) {
+        recordWindowEvent("word_return", reason: hideEditor ? "session-ended" : "handoff")
+        let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first
+        if let word, !word.isActive, NSApp.isActive { NSApp.yieldActivation(to: word) }
         if hideEditor { editorWindow?.orderOut(nil) }
         // Retain the window and engine so the next OLE activation is warm.
-        if let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first {
-            word.activate(options: [])
+        if let word {
+            if !word.isActive { word.activate(options: []) }
         }
         if hideEditor { EditorLifecycleLog.logger.info("word_editor_hidden") }
         else { EditorLifecycleLog.logger.info("word_navigation_handoff") }
@@ -231,12 +231,26 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { editorReady = true; (webView as? EquationWKWebView)?.recordLifecycle("loaded"); (webView as? EquationWKWebView)?.syncAppearance(); syncInterfaceLanguage(); deliverWordSession() }
     func invoke(_ function: String, argument: Int? = nil) { webView?.evaluateJavaScript("window.\(function)?.(\(argument.map(String.init) ?? ""))", completionHandler: nil) }
     func prepareToClose(_ completion: @escaping (Bool) -> Void) {
-        guard let webView, editorReady, wordSessionDelivered else {
+        recordWindowEvent("close_requested", reason: wordSessionActive ? "word-session" : "standalone")
+        guard hasWordSessionOrRequest else { completion(true); return }
+        guard let webView, editorReady else {
+            if !wordSessionActive {
+                // No draft was delivered yet. A loading request can be ended
+                // without trapping an unresponsive or not-yet-created editor.
+                wordPresentationGeneration += 1
+                if let ticket = deliveringWordTicket { cancelUndeliveredWordTicket(ticket) }
+                for ticket in pendingWordTickets { cancelUndeliveredWordTicket(ticket) }
+                pendingWordTickets.removeAll()
+                completion(true); return
+            }
             state.message = "公式仍在载入，请稍后关闭窗口。"; state.messageError = true; completion(false); return
         }
         webView.callAsyncJavaScript("return await window.nativePrepareToClose()", arguments: [:], in: nil, in: .page) { [weak self] result in
             switch result {
-            case .success(let value): completion(value as? Bool == true)
+            case .success(let value):
+                let accepted = value as? Bool == true
+                self?.recordWindowEvent("close_result", reason: accepted ? "accepted" : "kept-draft")
+                completion(accepted)
             case .failure(let error):
                 self?.state.message = "保存未完成：\(error.localizedDescription)"; self?.state.messageError = true; completion(false)
             }
@@ -301,14 +315,35 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         var payload = body["payload"] as? [String: Any] ?? [:]
         if action == "state" {
             if let active = payload["wordSession"] as? Bool {
-                if active { wordSessionActive = true }
+                if active {
+                    wordSessionActive = true; wordSessionDelivered = true
+                    if let ticket = payload["wordTicket"] as? String { wordTicket = ticket }
+                }
                 else if payload["wordSessionEnded"] as? Bool == true {
                     let wasActive = wordSessionActive
+                    wordPresentationGeneration += 1
                     wordSessionActive = false; wordTicket = nil; wordSessionDelivered = false
-                    if wasActive { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
+                    if wasActive && payload["wordSessionSwitching"] as? Bool != true { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
                 }
             }
             reply(id, ["ok": true, "data": [:]]); return
+        }
+        if action == "wordSessionWillSave" {
+            // The native owner completes in the background. Keep the editor
+            // visible until acknowledgement, then return to Word once.
+            reply(id, ["ok": true, "data": [:]]); return
+        }
+        if action == "confirmWordSessionSwitch" {
+            showEditorWindow()
+            let alert = NSAlert()
+            let closing = payload["closing"] as? Bool == true
+            alert.messageText = t(closing ? "当前公式尚不能保存" : "当前公式还有未保存的修改")
+            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            alert.addButton(withTitle: t("继续编辑当前公式"))
+            alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : "放弃修改并打开"))
+            let answer: NSApplication.ModalResponse
+            answer = alert.runModal()
+            reply(id, ["ok": true, "data": ["discard": answer == .alertSecondButtonReturn]]); return
         }
         if action == "open" {
             let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "docx")!]; panel.allowsMultipleSelection = false
@@ -360,81 +395,6 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     func stopEngine() { engine.stop() }
     func webView(_ webView: WKWebView, decidePolicyFor navigationAction: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         if navigationAction.request.url?.isFileURL == true { decisionHandler(.allow) } else { decisionHandler(.cancel) }
-    }
-    func installWordTaskPane() {
-        guard !installationRunning else { return }
-        guard let node = bundledNodeURL(), let root = Bundle.main.resourceURL else { installationMessage = "找不到安装器所需的本地运行环境。"; return }
-        let installer = root.appendingPathComponent("installer/install-word-plugin.mjs")
-        guard FileManager.default.fileExists(atPath: installer.path) else { installationMessage = "此构建未包含 Word 插件安装器。请使用完整安装包。"; return }
-        let alert = NSAlert()
-        alert.messageText = "安装 Word 顶栏与侧栏"
-        alert.informativeText = "会安装 Word 功能区、侧栏和本机后台服务。关闭 Equation Lab 后仍可使用 Word 按钮；服务会在登录时启动。首次安装会请求信任仅用于 localhost 的证书。完成后请重开 Word，并从“开始 → 加载项”选择 Equation Lab。"
-        alert.addButton(withTitle: "安装"); alert.addButton(withTitle: "取消")
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let panel = NSOpenPanel()
-        panel.title = "Word 顶栏与侧栏"
-        panel.message = "选择 Word 的 Documents 文件夹。若位置未打开，按 ⌘⇧G 并粘贴下方路径。"
-        panel.prompt = "安装到此文件夹"
-        panel.canChooseDirectories = true; panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false; panel.canCreateDirectories = false
-        let wordDirectory = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Containers/com.microsoft.Word/Data/Documents", isDirectory: true)
-        panel.directoryURL = wordDirectory
-        let pathLabel = NSTextField(wrappingLabelWithString: wordDirectory.path)
-        pathLabel.isSelectable = true
-        pathLabel.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
-        pathLabel.textColor = .secondaryLabelColor
-        pathLabel.frame = NSRect(x: 0, y: 0, width: 620, height: 36)
-        panel.accessoryView = pathLabel
-        guard panel.runModal() == .OK, let directory = panel.url else { return }
-        installationRunning = true
-        let previousService = nativeService
-        stopOwnedNativeService()
-        let appPath = Bundle.main.bundlePath
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            previousService?.waitUntilExit()
-            let process = Process(); process.executableURL = node
-            process.arguments = [installer.path, "--app", appPath, "--wef-directory", directory.path]
-            let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
-            var success = false, message = ""
-            do {
-                try process.run()
-                let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
-                let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                success = result?["ok"] as? Bool == true
-                message = success ? "Word 顶栏、侧栏和后台服务已安装。请完全退出并重新打开 Word，从“开始 → 加载项”选择 Equation Lab。以后关闭 App 也可使用按钮。" : result?["error"] as? String ?? "安装器未返回有效结果。"
-            } catch { message = error.localizedDescription }
-            DispatchQueue.main.async {
-                self?.installationRunning = false; self?.installationMessage = message
-                self?.ensureNativeService()
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2) { self?.refreshOfficePluginStatus() }
-            }
-        }
-    }
-
-    func uninstallWordTaskPane() {
-        guard !installationRunning, let node = bundledNodeURL(), let resources = Bundle.main.resourceURL else { return }
-        let panel = NSOpenPanel(); panel.title = "移除 Word 顶栏与侧栏"
-        panel.message = "确认 Word 的 Documents 文件夹，以移除 Equation Lab 加载项和后台服务。"
-        panel.canChooseDirectories = true; panel.canChooseFiles = false
-        panel.directoryURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Containers/com.microsoft.Word/Data/Documents")
-        guard panel.runModal() == .OK, let directory = panel.url else { return }
-        installationRunning = true
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            let process = Process(); process.executableURL = node
-            process.arguments = [resources.appendingPathComponent("installer/install-word-plugin.mjs").path, "--remove", "--wef-directory", directory.path]
-            let output = Pipe(); process.standardOutput = output; process.standardError = FileHandle.nullDevice
-            let message: String
-            do {
-                try process.run(); let data = output.fileHandleForReading.readDataToEndOfFile(); process.waitUntilExit()
-                let result = try JSONSerialization.jsonObject(with: data) as? [String: Any]
-                message = result?["ok"] as? Bool == true ? "Word 顶栏、侧栏和后台服务已移除。重开 Word 后生效。" : result?["error"] as? String ?? "移除未完成。"
-            } catch { message = error.localizedDescription }
-            DispatchQueue.main.async {
-                self?.installationRunning = false; self?.installationMessage = message
-                self?.ensureNativeService(); self?.refreshOfficePluginStatus()
-            }
-        }
     }
 }
 

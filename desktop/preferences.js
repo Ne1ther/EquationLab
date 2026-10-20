@@ -1,5 +1,18 @@
 /* Native preferences are independent of MathLive's editing font. */
 (()=>{
+ function decodedPreviewSwap(image,visibility,makeImage=()=>new Image()){
+  let generation=0,displayed='';
+  return async url=>{
+   const current=++generation;
+   if(!url){displayed='';image.removeAttribute('src');visibility(false);return;}
+   if(url===displayed){visibility(true);return;}
+   const next=makeImage();next.decoding='async';next.src=url;
+   try{await next.decode();}
+   catch{if(current===generation){displayed='';image.removeAttribute('src');visibility(false);}return;}
+   if(current!==generation)return;
+   image.src=url;displayed=url;visibility(true);
+  };
+ }
  let base=null,defaults=null,descriptors=null,factory=null,original=null;
  let importedText;
  try{defaults=JSON.parse(localStorage.getItem('equationlab.native-defaults')||'null');}catch{}
@@ -46,6 +59,7 @@
  }
  function load(profile,preset=null){render(profile,preset);original=snapshot();}
  window.desktopTypographyLoad=profile=>load(profile);
+ window.desktopTypographyRestorePatch=patch=>{if(base)load(base,patch);};
  window.desktopImportPreferences=async()=>{
   const result=await native('preferencesImport');if(!result)return;
   importedText=result.originalText;
@@ -61,7 +75,13 @@
   for(const row of document.querySelectorAll('.preference-dimension')){const input=row.querySelector('input');if(input.disabled)continue;const value=input.value,unit=row.querySelector('select').value;if(value!==row.dataset.originalValue||unit!==row.dataset.originalUnit)patch[row.dataset.kind][row.dataset.id]={unit,value};}
   for(const key of Object.keys(patch))if(!Object.keys(patch[key]).length)delete patch[key];return Object.keys(patch).length?patch:null;
  };
- window.desktopFontPreview=svg=>{const figure=$('desktop-font-preview');figure.hidden=!svg;const empty=$('word-preview-placeholder');if(empty)empty.hidden=!!svg;if(svg)$('desktop-font-preview-image').src='data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(svg)));};
+ const swapPreview=decodedPreviewSwap($('desktop-font-preview-image'),visible=>{
+  $('desktop-font-preview').hidden=!visible;
+  const empty=$('word-preview-placeholder');
+  if(empty){empty.hidden=visible;empty.textContent=mf.value.trim()?$('status-detail').textContent:(window.workbenchEnglish?'Enter an equation to preview its font and size.':'输入公式后，查看实际字体与字号。');}
+  requestWorkbenchSync();
+ });
+ window.desktopFontPreview=svg=>swapPreview(svg?'data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(svg))):null);
  window.desktopTypographyNew=()=>{if(factory)load(factory,defaults);};
  $('desktop-reset-fonts').onclick=()=>{render(base,original);changed();};
  $('desktop-factory-fonts').onclick=()=>perform(async()=>{if(selected)throw Error('请先新建公式；已有公式可恢复其原始设置');if(!factory)throw Error('原厂偏好尚未载入');render(factory);changed();message('当前新公式已恢复原厂 Times+Symbol 12 偏好；已保存的自定义默认未改动。如需以后使用此设置，请再点“设为新公式默认”。');});

@@ -8,6 +8,17 @@ import {makeNewOle} from '../src/new-formula.mjs';
 import {inspectOle,oleLatex,characters} from '../src/native.mjs';
 import {renderNative} from '../src/font-renderer.mjs';
 
+test('Editor control requests bypass rendering warmup and queued previews',async()=>{
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
+ let out='',errors='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>errors+=s);
+ const finished=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+ for(let i=0;i<8;i++)child.stdin.write(JSON.stringify({id:'preview-'+i,action:'validate',payload:{latex:'x^'+(i+1)}})+'\n');
+ child.stdin.end(JSON.stringify({id:'control',action:'typography-default'})+'\n');
+ assert.equal(await finished,0,errors);const replies=out.trim().split('\n').map(s=>JSON.parse(s));
+ assert.ok(replies.every(r=>r.ok),out);assert.equal(replies[0].id,'control','cancel/status/open use the same control path and must not queue behind rendering');
+ assert.equal(replies.length,9);
+});
+
 test('Persistent worker frames split requests, recovers from invalid input, drains at EOF and matches direct validation',async()=>{
  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
  let out='',errors='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>errors+=s);
@@ -19,10 +30,10 @@ test('Persistent worker frames split requests, recovers from invalid input, drai
  child.stdin.end(JSON.stringify({...request,id:'last',payload:{latex:'\\frac{a}{b}'}})+'\n');
  assert.equal(await finished,0,errors);
  const results=out.trim().split('\n').map(s=>JSON.parse(s));assert.equal(results.length,4);
- assert.deepEqual(results.map(r=>r.ok),[true,false,false,true]);
- assert.equal(results[0].id,'first');assert.equal(results[2].id,'rejected');assert.equal(results[3].id,'last');
- assert.deepEqual(results[0].data,await desktopRequest(request));
- assert.deepEqual(results[3].data,await desktopRequest({action:'validate',payload:{latex:'\\frac{a}{b}'}}));
+ const byId=new Map(results.map(r=>[r.id,r]));
+ assert.deepEqual(['first',undefined,'rejected','last'].map(id=>byId.get(id).ok),[true,false,false,true]);
+ assert.deepEqual(byId.get('first').data,await desktopRequest(request));
+ assert.deepEqual(byId.get('last').data,await desktopRequest({action:'validate',payload:{latex:'\\frac{a}{b}'}}));
  assert.ok(results.every(r=>Number.isFinite(r.elapsedMs)));
 });
 

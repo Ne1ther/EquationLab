@@ -1,6 +1,6 @@
 # Word 启动记录
 
-原生组件 0.0.12 导出 `int32_t MathTypeBridgeWriteStartupReceipt()`。Word 加载模板并完成原生类注册后调用它，安装器据此检查插件是否在新的 Word 进程中加载。
+原生组件导出 `int32_t MathTypeBridgeWriteStartupReceipt()`。Word 加载模板并完成原生类注册后调用它，安装器据此检查插件是否在新的 Word 进程中加载。
 
 实现位于 `src/startup_receipt.mm`，要求真实 Word 进程、主线程和注册状态 `1`。组件从自身路径定位相邻的 Startup 目录，读取 `EquationLabInstallContext.json`，核对安装 ID、模板构建号、安装时间、组件版本和模板哈希。
 

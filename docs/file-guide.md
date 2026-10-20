@@ -20,6 +20,7 @@
 | `src/new-formula.mjs` | 创建带默认字体与结构的原生公式 / New native equations |
 | `src/native.mjs` | 读取、修改和写回 Equation Native 数据 / Native equation data |
 | `src/native-layout.mjs` | 原生结构到渲染布局的转换 / Native layout conversion |
+| `src/radical-contour.mjs` | 根号的连续矢量轮廓 / Radical vector outlines |
 | `src/native-dimensions.mjs` | 字号和距离的单位换算 / Native dimensions |
 | `src/font-renderer.mjs` | 使用实际字体轮廓生成预览 / Font-based previews |
 | `src/vector-pdf.mjs` | 矢量路径、裁切和 PDF 输出 / Vector export |
@@ -32,7 +33,6 @@
 | `src/desktop-rpc.mjs` | 原生 App 与引擎之间的命令接口 / App-to-engine commands |
 | `src/app-services.mjs / src/server.mjs` | 本机后台服务和 Word 通信 / Local services |
 | `src/cli.mjs / src/cli-entry.mjs` | 命令行入口与路径识别 / CLI entry points |
-| `src/selection.mjs` | 公式选择与编辑差异处理 / Selection handling |
 | `src/eqp.mjs` | 公式偏好文件的读写 / Preference files |
 | `src/version.mjs` | 引擎版本 / Engine version |
 | `src/*-catalog.json` | 符号、字母和模板目录 / Catalog data |
@@ -56,6 +56,7 @@
 | `desktop/index.html / desktop/style.css / desktop/native.css` | 画布页面、基础样式与原生窗口样式 / Canvas markup and styles |
 | `desktop/editable-macros.js / desktop/catalog-macros.js` | 模板结构与可编辑参数的适配 / Editable template adapters |
 | `desktop/editor-viewport.js` | 公式画布的缩放与视口 / Editor viewport |
+| `desktop/radical-rendering.js` | 编辑区根号的绘制适配 / Editor radical rendering |
 | `desktop/preferences.js / desktop/localization.js` | 偏好设置与画布翻译 / Preferences and localization |
 | `font-metrics/main.swift` | CoreText 字体轮廓与图形输出 / Font and graphics helper |
 
@@ -70,18 +71,20 @@
 | `native-word-probe/automatic-loader/EquationLabRibbon.bas` | 插入、编辑、编号、引用等功能区命令 / Ribbon commands |
 | `native-word-probe/src/` | 原生 OLE 对象、编辑通信及宿主检查 / Native Word component |
 | `native-word-probe/Info.plist` | 原生 Word 组件的版本与基本信息 / Component metadata |
-| `addin/` | Office 网页任务面板、命令和功能区图标 / Office web add-in resources |
+| `word-ribbon/` | 原生 Word 功能区命令元数据与图标 / Native Word Ribbon metadata and icons |
 
 ## 构建与发布 / Build and release
 
 | 文件或目录 / Path | 做什么 / Purpose |
 | --- | --- |
-| `scripts/build_and_run.sh` | 构建并运行开发 App / Development app |
+| `scripts/build_and_run.sh` | 构建开发 App；`--word-test` 用免管理员密码的完整副本联调 Word / Development app and user-scoped Word testing |
+| `scripts/build/word-test.mjs` | 组装、部署和核对本地 Word 测试副本 / Local Word test bundle and deployment checks |
 | `scripts/package_release.sh` | 构建独立 App 和完整安装包 / Release entry point |
 | `scripts/build/build-word-demo.mjs` | 生成公开的 30 公式演示 / Demo generator |
-| `scripts/build/` | 生成模板预览、渲染资源与功能区图标 / Build-time resources |
+| `scripts/build/` | 生成模板预览、渲染资源和演示文档 / Build-time resources |
 | `packaging/release.json / packaging/update-notes.json` | 发布版本、构建号和中英文更新内容 / Release settings and notes |
 | `packaging/build-release.mjs` | 组装 App、运行时、依赖和 PKG / App and package builder |
+| `packaging/mathlive-editor.mjs` | 校验 MathLive 版本并构建编辑区适配 / Pinned editor build |
 | `packaging/word-native-installer/` | 原生插件产物校验、安装、修复与卸载 / Plugin installer |
 | `packaging/word-service.mjs` | 用户后台服务的安装与管理 / User background service |
 | `packaging/workbench-assets.mjs` | 复制画布、字体、图标和预览资源 / Workbench assets |

@@ -1,6 +1,6 @@
 # 安装与使用
 
-[下载 Equation Lab 0.6.0](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.0/Equation-Lab-0.6.0.pkg)
+[下载 Equation Lab 0.6.1](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.1/Equation-Lab-0.6.1.pkg)
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
@@ -26,4 +26,4 @@
 
 ---
 
-Save your documents and quit Word and Equation Lab, then open the [0.6.0 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.0/Equation-Lab-0.6.0.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.
+Save your documents and quit Word and Equation Lab, then open the [0.6.1 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.1/Equation-Lab-0.6.1.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.

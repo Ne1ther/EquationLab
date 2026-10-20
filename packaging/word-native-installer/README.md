@@ -8,7 +8,7 @@
 
 ```sh
 node --test packaging/word-native-installer/installer.test.mjs
-node --test tests/word-installer-cli.test.mjs
+node --test tests/word-automatic-install.test.mjs tests/word-service.test.mjs
 ```
 
 完整命令与发布文件见[打包说明](../README.md)。实际验收包括安装器完成、用户安装记录、后台服务、新 Word 进程加载，以及双击公式编辑回存。

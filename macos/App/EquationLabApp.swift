@@ -46,8 +46,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApp.setActivationPolicy(.regular)
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        bridge?.showEditorWindow(reason: "dock-reopen")
+        return false
+    }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let bridge, bridge.wordSessionActive else { bridge?.stopEngine(); bridge?.stopOwnedNativeService(); return .terminateNow }
+        guard let bridge, bridge.hasWordSessionOrRequest else { bridge?.stopEngine(); bridge?.stopOwnedNativeService(); return .terminateNow }
         bridge.prepareToClose { [weak self] saved in
             if saved { self?.bridge?.stopEngine(); self?.bridge?.stopOwnedNativeService() }
             sender.reply(toApplicationShouldTerminate: saved)

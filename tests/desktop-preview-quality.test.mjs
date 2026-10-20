@@ -20,3 +20,15 @@ test('Sidebar thumbnails replace a stale low-resolution Word image with fresh na
   assert.ok((await sharp(image).stats()).channels[0].min<10,'the original white placeholder was replaced by formula ink');
  }finally{await rm(directory,{recursive:true,force:true});}
 });
+
+test('Reopening reuses only fresh thumbnails with exactly matching native data',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'equationlab-preview-cache-'));
+ try{
+  const path=join(directory,'first.docx'),other=join(directory,'other.docx');
+  await writeFile(path,await createDocx([{latex:'x+317'}]));
+  const rendered=await desktopRequest({action:'inspect',payload:{path,thumbnailIndices:[0]}});
+  const reopened=await desktopRequest({action:'inspect',payload:{path,thumbnails:false}});assert.equal(reopened.objects[0].image,rendered.objects[0].image);
+  await writeFile(other,await createDocx([{latex:'x+318'}]));
+  assert.equal((await desktopRequest({action:'inspect',payload:{path:other,thumbnails:false}})).objects[0].image,null,'changed native bytes cannot reuse an old preview');
+ }finally{await rm(directory,{recursive:true,force:true});}
+});

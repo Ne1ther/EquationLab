@@ -1,4 +1,4 @@
-import {randomBytes} from 'node:crypto';
+import {randomBytes,createHash} from 'node:crypto';
 import {mkdtemp,chmod,writeFile,rm,lstat} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
@@ -11,6 +11,21 @@ const MAX_SESSIONS=16,TTL=20*60*1000,MAX_UINT64=18446744073709551615n;
 const sessions=new Map();
 // Small terminal receipts contain no formula, PDF or private file path.
 const receipts=new Map();
+const documentSnapshots=new Map();let snapshotBytes=0;
+async function snapshot(value){
+ const key=createHash('sha256').update(value.ooxml).digest('hex');
+ let cached=documentSnapshots.get(key);
+ if(!cached){
+  const bytes=await fromFlatOpc(value.ooxml);
+  try{
+   const {objects}=await inspectDocx(bytes);
+   cached={bytes,objects:objects.map(o=>({part:o.part,error:o.parseError,nativeSha256:o.nativeSha256})),count:objects.filter(o=>o.part==='word/document.xml').length};
+  }catch(error){bytes.fill(0);throw error;}
+  documentSnapshots.set(key,cached);snapshotBytes+=bytes.length;
+  while(documentSnapshots.size>4||snapshotBytes>32*1024*1024){const oldest=documentSnapshots.keys().next().value,item=documentSnapshots.get(oldest);documentSnapshots.delete(oldest);snapshotBytes-=item.bytes.length;if(item!==cached)item.bytes.fill(0);}
+ }
+ return cached;
+}
 let sequence=Promise.resolve(),queued=0;
 const operations=new Set(['native-open','native-poll','native-read','native-complete','native-cancel','native-ack','native-status','native-navigate']);
 
@@ -30,7 +45,8 @@ function request(operation,body){
  if(!operations.has(operation))throw Error('Unknown native session operation');
  if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid native session request');
  body={...body};
- const allowed=operation==='native-open'?['session','native','acknowledgement','document']:operation==='native-complete'?['ticket','session','native','pdf','width','height']:operation==='native-ack'?['ticket','session','ok']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
+ for(const key of ['document','target'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
+ const allowed=operation==='native-open'?['session','native','acknowledgement','document']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target']:operation==='native-ack'?['ticket','session','ok']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
  if(operation==='native-open')uint64(body.session);
  else{
@@ -132,9 +148,26 @@ async function stage(entry){
 
 async function documentContext(value,native){
  if(value===undefined)return null;
- if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['ooxml','index','name'].includes(k))||typeof value.ooxml!=='string'||value.ooxml.length>30_000_000||!Number.isInteger(value.index)||value.index<0||value.index>10000||typeof value.name!=='string'||value.name.length>512)throw Error('Invalid Word document context');
- const bytes=await fromFlatOpc(value.ooxml);
- try{const {objects}=await inspectDocx(bytes),selected=objects[value.index];if(!selected||selected.part!=='word/document.xml'||selected.parseError||!inspectOle(selected.ole).native.equals(native))throw Error('Word document context does not match the activated equation');return {bytes,index:value.index,name:value.name,count:objects.filter(o=>o.part==='word/document.xml').length,path:null};}catch(error){bytes.fill(0);throw error;}
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['ooxml','index','name','identity','snapshot'].includes(k))||typeof value.ooxml!=='string'||value.ooxml.length>30_000_000||!Number.isInteger(value.index)||value.index<0||value.index>10000||typeof value.name!=='string'||value.name.length>512)throw Error('Invalid Word document context');
+ if(value.identity!==undefined&&(typeof value.identity!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value.identity)))throw Error('Invalid Word document identity');
+ if(value.snapshot!==undefined&&!(Number.isSafeInteger(value.snapshot)&&value.snapshot>0)&&!(typeof value.snapshot==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value.snapshot)))throw Error('Invalid Word document snapshot');
+ const cached=await snapshot(value),selected=cached.objects[value.index];
+ if(!selected||selected.part!=='word/document.xml'||selected.error||selected.nativeSha256!==createHash('sha256').update(native).digest('hex'))throw Error('Word document context does not match the activated equation');
+ return {bytes:Buffer.from(cached.bytes),objects:cached.objects,index:value.index,name:value.name,count:cached.count,identity:value.identity??null,snapshot:value.snapshot??null,path:null};
+}
+
+// This status is deliberately limited to protocol state and counters. It has no
+// document title, path, formula bytes or ticket and can be retained in QA logs.
+function contextStatus(document){
+ return document?{state:'available',reason:document.identity?'captured':'legacy-capture',identity:document.identity,snapshot:document.snapshot,count:document.count,index:document.index}:{state:'missing',reason:'not-captured',identity:null,snapshot:null,count:0,index:null};
+}
+function saveTarget(value,document){
+ if(value===undefined)return null;
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Invalid Word save target');
+ if(!document?.identity||value.documentIdentity!==document.identity)throw Error('Word save target document does not match the editing session');
+ const selected=document.objects[value.index];
+ if(value.index>=document.count||!selected||selected.part!=='word/document.xml'||selected.error||selected.nativeSha256!==value.expectedNativeSha256)throw Error('Word save target equation does not match the document snapshot');
+ return {index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:document.identity};
 }
 
 /** In-memory, local native editing sessions. No networking or logging occurs.
@@ -170,19 +203,19 @@ export async function nativeSessionOperation(path,body){
    do{ticket=randomBytes(32).toString('hex');}while(sessions.has(ticket));
    const entry={ticket,session:body.session,document,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
    sessions.set(ticket,entry);arm(entry);
-   return {ticket,editorUrl:'equationlab://word-edit/'+ticket};
+   return {ticket,editorUrl:'equationlab://word-edit/'+ticket,documentContext:contextStatus(document)};
   }
   const entry=current(body);
   if(operation==='native-poll'){
    if(entry.state==='editing')return {state:'editing'};
-   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
+   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height,...entry.result.target?{target:entry.result.target}:{}}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
    await discard(entry);if(receipts.has(body.ticket))receipts.get(body.ticket).state='delivered';return result;
   }
   editing(entry);
   if(operation==='native-read'){
    const path=await stage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name}}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(entry.document),...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name,identity:entry.document.identity,snapshot:entry.document.snapshot}}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
   }
   if(operation==='native-navigate'){
    if(!entry.document||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');
@@ -194,11 +227,11 @@ export async function nativeSessionOperation(path,body){
   }
   let native,pdf;
   try{
-   const width=extent(body.width),height=extent(body.height);
+   const width=extent(body.width),height=extent(body.height),target=saveTarget(body.target,entry.document);
    native=nativeBlob(body.native);pdf=pdfBlob(body.pdf);
    await removeStage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height};entry.state='complete';
+   entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height,target};entry.state='complete';
    if(entry.acknowledgement)receipts.set(entry.ticket,{session:entry.session,state:'queued',expires:Date.now()+60000});
    native=null;pdf=null;return {ok:true,checked:true,state:'complete'};
   }finally{native?.fill(0);pdf?.fill(0);}

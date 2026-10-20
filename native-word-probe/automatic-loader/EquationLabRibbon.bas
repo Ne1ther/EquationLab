@@ -5,7 +5,7 @@ Option Explicit
 Public Sub ELRibbonAction(ByVal control As IRibbonControl)
     On Error GoTo Failed
     Select Case control.Tag
-        Case "open-pane": NativeTool "Open"
+        Case "open-pane": OpenDocumentEditor
         Case "insert-inline": InsertEquation "Inline"
         Case "insert-display": InsertEquation "Display"
         Case "insert-right": InsertEquation "Right"
@@ -136,6 +136,26 @@ Private Sub EditEquation()
     equations(1).OLEFormat.Activate
 End Sub
 
+Private Sub OpenDocumentEditor()
+    RequireDocument
+    Dim chosen As InlineShape, equation As InlineShape
+    If Selection.InlineShapes.Count = 1 Then
+        If IsEquation(Selection.InlineShapes(1)) Then Set chosen = Selection.InlineShapes(1)
+    End If
+    If chosen Is Nothing Then
+        For Each equation In ActiveDocument.InlineShapes
+            If IsEquation(equation) Then Set chosen = equation: Exit For
+        Next
+    End If
+    If chosen Is Nothing Then
+        NativeTool "Open"
+        Exit Sub
+    End If
+    ELInvalidateDocumentSnapshot
+    ELCaptureEquation chosen
+    chosen.OLEFormat.Activate
+End Sub
+
 Private Sub NavigateEquation(ByVal forward As Boolean)
     RequireDocument
     Dim equation As InlineShape, chosen As InlineShape, position As Long
@@ -159,22 +179,7 @@ Private Sub NavigateEquation(ByVal forward As Boolean)
 End Sub
 
 Private Sub BrowseEquations()
-    RequireDocument
-    Dim equation As InlineShape, list As String, count As Long, answer As String, index As Long
-    For Each equation In ActiveDocument.InlineShapes
-        If IsEquation(equation) Then count = count + 1: list = list & CStr(count) & ".  Position " & CStr(equation.Range.Start) & vbCrLf
-    Next
-    If count = 0 Then MsgBox "No MathType equations were found in the document body.", vbInformation, "Equation Lab": Exit Sub
-    answer = InputBox(list & vbCrLf & "Enter the equation number to select.", "Equation Lab", "1")
-    If answer = "" Then Exit Sub
-    If Not IsNumeric(answer) Then Exit Sub
-    If CDbl(answer) <> Fix(CDbl(answer)) Or CDbl(answer) < 1 Or CDbl(answer) > count Then Exit Sub
-    For Each equation In ActiveDocument.InlineShapes
-        If IsEquation(equation) Then
-            index = index + 1
-            If index = CLng(answer) Then equation.Range.Select: Exit Sub
-        End If
-    Next
+    OpenDocumentEditor
 End Sub
 
 Private Sub InsertSymbol()
