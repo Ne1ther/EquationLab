@@ -1,5 +1,12 @@
 MathfieldElement.fontsDirectory='vendor/fonts';MathfieldElement.soundsDirectory=null;
 const $=id=>document.getElementById(id),mf=$('formula');mf.mathVirtualKeyboardPolicy='manual';mf.smartFence=true;mf.maxMatrixCols=31;mf.environmentPopoverPolicy='off';
+function nativeSelectAllForKeyboard(){
+ const active=document.activeElement;
+ if(active===mf){mf.executeCommand('selectAll');return true;}
+ if(active instanceof HTMLTextAreaElement||active instanceof HTMLInputElement){active.select();return true;}
+ return false;
+}
+window.nativeSelectAllForKeyboard=nativeSelectAllForKeyboard;
 const editorMacros={
  eltab:{def:'\\hspace{1em}',args:0,expand:false,captureSelection:true},
  sfrac:{def:'{}^{#1}\\! /\\! {}_{#2}',args:2,expand:false},
@@ -19,7 +26,7 @@ mf.macros={...mf.macros,...window.prepareEquationMacros({...editorMacros,...wind
 window.installEquationMacroEditing(mf);
 const pending=new Map();let sequence=0,revision=0,timer,valid=false,busy=false,source=null,selected=null,mode='rebuild';
 var editorViewport;
-let wordTicket=null,wordSaveQueued=false,wordNavigating=false,wordNavigationTimer;const idleWaiters=new Set();
+let wordTicket=null,wordSaveQueued=false,wordOutcomeUnknown=false,wordNavigating=false,wordNavigationTimer;const idleWaiters=new Set();
 let wordCommitRunning=null;
 let editingRuler,editorHistory=[],editorHistoryIndex=-1,restoringHistory=false;
 function rulerPatch(){return editingRuler===undefined?{}:{ruler:editingRuler};}
@@ -43,7 +50,7 @@ function status(title,detail,error=false,bytes=''){$('status-title').textContent
 let validationRunning=null,validationRequested=false,validationPending=false,validatedFormulaKey=null;
 function formulaKey(){return JSON.stringify([mf.value,editingRuler,source?.path??null,selected?.index??null,selected?.nativeSha256??null,selected?.error??null,mode,[...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])]);}
 function exportAvailable(){return valid||validationPending&&validatedFormulaKey!==null&&formulaKey()===validatedFormulaKey;}
-function controls(){const blocked=busy||wordNavigating||!exportAvailable();for(const id of ['export','save-edit','word-session-save','copy-png'])$(id).disabled=blocked;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy||wordNavigating;requestWorkbenchSync();}
+function controls(){const blocked=busy||wordNavigating||!exportAvailable();for(const id of ['export','save-edit','copy-png'])$(id).disabled=blocked;$('word-session-save').disabled=blocked||wordOutcomeUnknown;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy||wordNavigating;requestWorkbenchSync();}
 async function ensureValid(){clearTimeout(timer);if(!valid)await validate();if(!valid)throw Error('请先完成原生数据检查');}
 async function validate(){
  if(wordNavigating)return;
@@ -101,10 +108,11 @@ let favorites;try{favorites=JSON.parse(localStorage.getItem('equationlab.favorit
 function renderFavorites(){$('favorites').replaceChildren();for(const value of favorites){const b=document.createElement('button');b.className='favorite';b.textContent=value;b.title=value;b.onclick=()=>{if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return;}window.nativeNew();mf.value=value;changed();};$('favorites').append(b);}}
 $('add-favorite').onclick=()=>{if(!mf.value.trim())return;favorites=[mf.value,...favorites.filter(v=>v!==mf.value)].slice(0,20);localStorage.setItem('equationlab.favorites',JSON.stringify(favorites));renderFavorites();message('已收藏当前公式');};renderFavorites();validate();
 
-function syncSidebar(ended=false,navigating=false,switching=false,endedWordTicket=null){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,...endedWordTicket?{endedWordTicket}:{},objects:(source?.objects||[]).map(o=>({id:o.index,label:`${o.index+1}. ${o.latex||'暂不支持的结构'}`,detail:o.error?'只读 · '+o.progId:'原生 MathType · '+o.application})),favorites,selected:selected?.index??null}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
+function syncSidebar(ended=false,navigating=false,switching=false,endedWordTicket=null){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordSessionIsInsertion:source?.insertion===true,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,...endedWordTicket?{endedWordTicket}:{},objects:(source?.objects||[]).map(o=>({id:o.index,label:`${o.index+1}. ${o.latex||'暂不支持的结构'}`,detail:o.error?'只读 · '+o.progId:'原生 MathType · '+o.application})),favorites,selected:selected?.index??null}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
 window.nativeSelectObject=async index=>{
  if(busy||wordNavigating||!source?.objects[index]||selected?.index===index)return;
  if(!wordTicket){selectObject(index);return;}
+ if(source.insertion){message('请先完成或取消新公式，再切换文档中的公式。');return;}
  if(!source.hasDocumentContext){message('当前 Word 插件未提供文档列表，请更新插件后重新打开公式。',true);return;}
  if(wordSessionChanged()){message('当前公式有修改，请先保存回 Word，再打开其他公式。',true);return;}
  // Browse locally; bind to the selected object's Word client site on save.
@@ -129,6 +137,7 @@ $('arrange').onclick=()=>perform(async()=>{if(!source||!selected)throw Error('�
 window.nativeOpenWordSession=async ticket=>{
  const timingStart=performance.now();
  if(!/^[a-f0-9]{64}$/.test(ticket))throw Error('无效的 Word 编辑会话');
+ if(wordOutcomeUnknown){if(ticket!==wordTicket)await native('wordSessionCancel',{ticket}).catch(()=>{});message('上次 Word 结果仍未确认。请先结束当前会话并检查 Word，再打开新的编辑会话。',true);return false;}
  const generation=window.wordSessionGeneration??0;
  try{await waitForEditorIdle();}catch(error){await native('wordSessionCancel',{ticket}).catch(()=>{});message(error.message,true);return false;}
  if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
@@ -154,15 +163,19 @@ window.nativeOpenWordSession=async ticket=>{
   if(wordTicket&&wordTicket!==ticket&&!wordNavigating)await native('wordSessionCancel',{ticket:wordTicket}).catch(error=>{if(!/Unknown or expired native session/.test(error.message))throw error;});
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   clearTimeout(timer);revision++;validationRequested=false;clearTimeout(wordNavigationTimer);
-  wordNavigating=false;wordSaveQueued=false;wordTicket=ticket;source=r;
-  const sidebarSync=r.objects.length?selectObject(r.activeIndex??0,{scheduleValidation:false}):renderObjects();
+  wordNavigating=false;wordSaveQueued=false;wordOutcomeUnknown=false;wordTicket=ticket;source=r;
+  let sidebarSync;
+  if(r.insertion){
+   selected=null;mode='rebuild';editingRuler=undefined;mf.value='';mf.readOnly=false;$('latex').readOnly=false;
+   loadObjectLayout({layout:r.insertionLayout});window.desktopTypographyNew?.();window.resetEditorHistory?.();renderModes();changed(false);sidebarSync=renderObjects();
+  }else sidebarSync=r.objects.length?selectObject(r.activeIndex??0,{scheduleValidation:false}):renderObjects();
   if(draft){mf.value=draft.latex;mode=draft.mode;editingRuler=draft.ruler;renderModes();window.desktopTypographyRestorePatch?.(draft.typography);for(const input of $('character-editor').querySelectorAll('input'))if(Object.hasOwn(draft.replacements,input.dataset.offset))input.value=draft.replacements[input.dataset.offset];}
  $('word-session-actions').hidden=false;$('export').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
- $('title').textContent='编辑 Word 中的原生公式';$('subtitle').textContent='关闭窗口会自动保存回原位置；也可以点取消放弃修改。';
+ $('title').textContent=r.insertion?'新建 Word 公式':'编辑 Word 中的原生公式';$('subtitle').textContent=r.insertion?'输入或粘贴公式，完成后插入 Word；取消不会修改文档。':'编辑后点击更新公式；也可以取消并保留 Word 原公式。';
  const prepareFinished=performance.now();await sidebarSync;const sidebarFinished=performance.now();await validate();const validatedAt=performance.now();
  if(generation!==(window.wordSessionGeneration??0))return false;
  try{window.webkit.messageHandlers.native.postMessage({action:'wordOpenTiming',payload:{readMs:readFinished-readStarted,prepareMs:prepareFinished-readFinished,sidebarMs:sidebarFinished-prepareFinished,validateMs:validatedAt-sidebarFinished,totalMs:validatedAt-timingStart}});}catch{}
- setTimeout(()=>loadWordThumbnails(ticket,r),0);message(r.hasDocumentContext?'已载入 Word 文档中的 '+r.objects.length+' 个公式。':'已载入当前公式；未能读取文档列表，请回到 Word 重新打开。');
+ setTimeout(()=>loadWordThumbnails(ticket,r),0);message(r.insertion?'输入或粘贴公式，完成后插入 Word。':r.hasDocumentContext?'已载入 Word 文档中的 '+r.objects.length+' 个公式。':'已载入当前公式；未能读取文档列表，请回到 Word 重新打开。');
  }catch(e){await native('wordSessionCancel',{ticket}).catch(()=>{});throw e;}
  },true);
 };
@@ -181,49 +194,64 @@ async function loadWordThumbnails(ticket,document){
 async function bindSelectedWordFormula(){
  // Kept as a validation boundary for callers. The original Word owner now
  // applies an explicitly identified document target without reopening the App.
- if(!wordTicket||!selected)throw Error('Word 编辑会话已经结束，输入内容已保留。请重新打开目标公式。');
+ if(!wordTicket||!selected&&!source?.insertion)throw Error('Word 编辑会话已经结束，输入内容已保留。请重新打开目标公式。');
+ if(source?.insertion)return;
  if(selected.index!==(source.activeIndex??selected.index)&&(!source.hasDocumentContext||!source.documentIdentity))throw Error('没有读取到可靠的 Word 文档信息。输入内容已保留，请从 Word 重新打开目标公式。');
 }
 window.nativeCommitWordSession=()=>{
  if(wordCommitRunning)return wordCommitRunning;
+ if(wordOutcomeUnknown){message(source?.insertion?'Word 插入结果无法确认。请检查 Word 并结束当前会话后，再决定是否重新插入。':'Word 更新结果无法确认。请检查 Word 并结束当前会话后，再决定下一步。',true);return Promise.resolve(false);}
  const commitGeneration=window.wordSessionGeneration??0;
  wordCommitRunning=(async()=>{
  return perform(async()=>{
  const generation=window.wordSessionGeneration??0,ticket=wordTicket,target=selected;
  const current=()=>generation===(window.wordSessionGeneration??0)&&wordTicket===ticket&&selected===target;
- if(wordSaveQueued){await waitForWordSave();await finishWordSave();return;}
+ if(wordSaveQueued){const outcome=await waitForWordSave();if(outcome==='unconfirmed')return false;await finishWordSave();return;}
  await bindSelectedWordFormula();clearTimeout(timer);await ensureValid();
  if(!current())return false;
- if(!wordTicket||!valid||!selected||selected.error)throw Error('当前公式尚不能保存。请修正标出的内容，或点“取消”保留 Word 原公式。');
+ if(!wordTicket||!valid||!source?.insertion&&(!selected||selected.error))throw Error('当前公式尚不能保存。请修正标出的内容，或点“取消”保留 Word 原公式。');
  const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));
- const destination=selected.index===(source.activeIndex??selected.index)?undefined:{index:selected.index,expectedNativeSha256:selected.nativeSha256,documentIdentity:source.documentIdentity};
+ const destination=source.insertion||selected.index===(source.activeIndex??selected.index)?undefined:{index:selected.index,expectedNativeSha256:selected.nativeSha256,documentIdentity:source.documentIdentity};
  window.wordSaveInFlight=true;
- const result=await native('wordSessionSave',{ticket,input:source.activePath??source.path,target:destination,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});
+ const result=source.insertion?await native('wordSessionInsert',{ticket,input:source.activePath??source.path,latex:mf.value,layout:{...source.insertionLayout,...wordLayout()},typography:window.desktopTypographyPatch?.(),...rulerPatch()}):await native('wordSessionSave',{ticket,input:source.activePath??source.path,target:destination,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});
  if(!current())return false;
- if(result.acknowledgement){wordSaveQueued=true;mf.readOnly=true;$('latex').readOnly=true;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=true;await waitForWordSave();}
+ if(result.acknowledgement){wordSaveQueued=true;mf.readOnly=true;$('latex').readOnly=true;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=true;const outcome=await waitForWordSave();if(outcome==='unconfirmed')return false;}
  if(!current())return false;
  await finishWordSave();
  });
  })().catch(error=>{if(commitGeneration===(window.wordSessionGeneration??0))message(error.message,true);return false;});
  return wordCommitRunning.finally(()=>{window.wordSaveInFlight=false;wordCommitRunning=null;});
 };
-async function finishWordSave(){const endedTicket=wordTicket;wordTicket=null;wordSaveQueued=false;await syncSidebar(true,false,false,endedTicket);if(wordTicket)return;resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已保存回 Word 原生公式。');}
-async function waitForWordSave(){
- message('正在保存回 Word…');const deadline=Date.now()+20000,ticket=wordTicket,generation=window.wordSessionGeneration??0;
- while(Date.now()<deadline){
-  if(wordTicket!==ticket||generation!==(window.wordSessionGeneration??0))throw Error('本次编辑已结束。');
-  let result;
-  try{result=await native('wordSessionStatus',{ticket});}catch{await new Promise(resolve=>setTimeout(resolve,250));continue;}
-  if(wordTicket!==ticket||generation!==(window.wordSessionGeneration??0))throw Error('本次编辑已结束。');
-  if(result.state==='committed')return;
-  if(result.state==='failed'){wordSaveQueued=false;renderModes();throw Error('Word 未能完成保存，输入内容已保留。请复制需要保留的内容，或结束本次编辑后重新打开公式。');}
-  await new Promise(resolve=>setTimeout(resolve,250));
- }
- wordSaveQueued=false;renderModes();throw Error('尚未收到 Word 的保存确认，编辑内容已保留。请检查 Word；可以继续保留或结束本次编辑。');
+async function finishWordSave(){const endedTicket=wordTicket;wordTicket=null;wordSaveQueued=false;wordOutcomeUnknown=false;await syncSidebar(true,false,false,endedTicket);if(wordTicket)return;resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已保存回 Word 原生公式。');}
+function releaseWordSaveLock(){wordSaveQueued=false;const readOnly=mode==='characters'||!!selected?.error;mf.readOnly=readOnly;$('latex').readOnly=readOnly;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=!!selected?.error;}
+function markWordOutcomeUnknown(ticket,generation){
+ if(wordTicket!==ticket||generation!==(window.wordSessionGeneration??0))return;
+ wordSaveQueued=false;wordOutcomeUnknown=true;mf.readOnly=true;$('latex').readOnly=true;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=true;controls();
+ message(source?.insertion?'Word 是否已插入无法确认。草稿已保留；请先检查 Word，结束此会话前不要再次插入。':'Word 是否已完成更新无法确认。草稿已保留；请先检查 Word，再决定下一步。',true);
 }
-function wordSessionChanged(){return !selected||mf.value!==selected.editorBaseline||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||[...$('character-editor').querySelectorAll('input')].some(input=>input.value!==(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char));}
+async function waitForWordSave(){
+ message('正在保存回 Word…');const ticket=wordTicket,generation=window.wordSessionGeneration??0,deadline=Date.now()+60000;let nextNotice=Date.now()+20000,pollDelay=250,timeoutId;const timedOut={timeout:true};
+ const deadlineReached=new Promise(resolve=>{timeoutId=setTimeout(()=>resolve(timedOut),Math.max(0,deadline-Date.now()));});
+ while(true){
+  if(wordTicket!==ticket||generation!==(window.wordSessionGeneration??0)){clearTimeout(timeoutId);throw Error('本次编辑已结束。');}
+  const pending=Promise.resolve().then(()=>native('wordSessionStatus',{ticket})).then(result=>({result}),error=>({error}));
+  const response=await Promise.race([pending,deadlineReached]);
+  if(response===timedOut){markWordOutcomeUnknown(ticket,generation);return 'unconfirmed';}
+  if(wordTicket!==ticket||generation!==(window.wordSessionGeneration??0)){clearTimeout(timeoutId);throw Error('本次编辑已结束。');}
+  if(response.result?.state==='committed'){clearTimeout(timeoutId);return 'committed';}
+  if(response.result?.state==='failed'){clearTimeout(timeoutId);releaseWordSaveLock();throw Error('Word 未能完成保存，输入内容已保留。可复制后重新打开 Word 公式，或取消当前编辑。');}
+  if(response.result?.state==='unconfirmed'){clearTimeout(timeoutId);markWordOutcomeUnknown(ticket,generation);return 'unconfirmed';}
+  if(Date.now()>=nextNotice){message('仍在等待 Word 确认保存；编辑内容会继续保留。');nextNotice=Date.now()+20000;}
+  const remaining=deadline-Date.now();if(remaining<=0){clearTimeout(timeoutId);markWordOutcomeUnknown(ticket,generation);return 'unconfirmed';}
+  const pause=await Promise.race([new Promise(resolve=>setTimeout(resolve,Math.min(pollDelay,remaining))),deadlineReached]);
+  if(pause===timedOut){markWordOutcomeUnknown(ticket,generation);return 'unconfirmed';}
+  pollDelay=Math.min(1000,Math.ceil(pollDelay*1.5));
+ }
+}
+function wordSessionChanged(){if(source?.insertion)return !!mf.value.trim();return !selected||mf.value!==selected.editorBaseline||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||[...$('character-editor').querySelectorAll('input')].some(input=>input.value!==(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char));}
 window.nativePrepareToClose=async()=>{
- if(wordCommitRunning){const saved=await wordCommitRunning;if(saved||!wordTicket)return saved;const answer=await native('confirmWordSessionSwitch',{closing:true});return answer.discard?await window.nativeCancelWordSession():false;}
+ if(wordOutcomeUnknown)return await window.nativeCancelWordSession();
+ if(wordCommitRunning){const saved=await wordCommitRunning;if(saved||!wordTicket)return saved;if(wordOutcomeUnknown)return await window.nativeCancelWordSession();const answer=await native('confirmWordSessionSwitch',{closing:true});return answer.discard?await window.nativeCancelWordSession():false;}
  try{await waitForEditorIdle(3000);}catch(e){const answer=await native('confirmWordSessionSwitch',{closing:true});return answer.discard?await window.nativeCancelWordSession():false;}
  if(wordNavigating){const answer=await native('confirmWordSessionSwitch',{closing:true});return answer.discard?await window.nativeCancelWordSession():false;}
  if(!wordTicket)return true;
@@ -232,7 +260,16 @@ window.nativePrepareToClose=async()=>{
  if(!saved&&wordTicket){const answer=await native('confirmWordSessionSwitch',{closing:true});if(answer.discard)return await window.nativeCancelWordSession();}
  return saved;
 };
-window.nativeCancelWordSession=async()=>{if(window.wordSaveInFlight||wordSaveQueued){message('Word 正在完成保存，请稍候。确认结果前会保留编辑内容。');return false;}const ticket=wordTicket;const generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;clearTimeout(wordNavigationTimer);wordNavigating=false;wordTicket=null;wordSaveQueued=false;if(ticket)native('wordSessionCancel',{ticket}).catch(()=>{});await syncSidebar(true,false,false,ticket);if(generation===(window.wordSessionGeneration??0)&&!wordTicket){resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已结束本次编辑。');controls();}return true;};
+window.nativeCancelWordSession=async()=>{
+ if(wordOutcomeUnknown){
+  const isInsertion=source?.insertion===true,ticket=wordTicket,generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;clearTimeout(wordNavigationTimer);wordNavigating=false;wordTicket=null;wordSaveQueued=false;wordOutcomeUnknown=false;source=null;selected=null;mode='rebuild';mf.readOnly=false;$('latex').readOnly=false;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;$('title').textContent='新建公式';$('eyebrow').textContent='FORMULA EDITOR';$('subtitle').textContent=isInsertion?'请先检查 Word 中的插入结果，再决定是否开始新的插入。':'请先检查 Word 中的更新结果，再决定下一步。';$('word-session-actions').hidden=true;$('export').hidden=false;
+  await syncSidebar(true,false,false,ticket);
+  if(generation===(window.wordSessionGeneration??0)&&!wordTicket){changed();message(isInsertion?'已结束未确认的 Word 会话；公式草稿仍保留。请先检查 Word，再决定是否重新插入。':'已结束未确认的 Word 会话；公式草稿仍保留。请先检查 Word 中的更新结果。');controls();}
+  return true;
+ }
+ if(window.wordSaveInFlight||wordSaveQueued){message('Word 正在完成保存，请稍候。确认结果前会保留编辑内容。');return false;}
+ const ticket=wordTicket;const generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;clearTimeout(wordNavigationTimer);wordNavigating=false;wordTicket=null;wordSaveQueued=false;if(ticket)native('wordSessionCancel',{ticket}).catch(()=>{});await syncSidebar(true,false,false,ticket);if(generation===(window.wordSessionGeneration??0)&&!wordTicket){resetNewFormula();$('word-session-actions').hidden=true;$('export').hidden=false;message('已结束本次编辑。');controls();}return true;
+};
 $('word-session-save').onclick=window.nativeCommitWordSession;$('word-session-cancel').onclick=window.nativeCancelWordSession;
 
 // The native workbench owns navigation, palettes and inspectors. The existing
@@ -270,7 +307,7 @@ function publishWorkbenchState(){
   fonts:workbenchFields('desktop-fonts','font'),sizes:workbenchFields('desktop-sizes','sizes'),extraSizes:workbenchFields('desktop-extra-sizes','extraSizes'),spaces:workbenchFields('desktop-spaces','spaces'),layout,
   numbering:selected?{hasDocumentContext:!!source.hasDocumentContext||!wordTicket,actualNumber:selected.layout?.numberText||null,chapter:selected.layout?.chapter??null,section:selected.layout?.section??null,equation:selected.layout?.equation??null,bookmark:selected.layout?.bookmarkName??null,referenceCount:selected.layout?.referenceCount??null,position:selected.index+1,total:source.objects.length,format:selected.layout?.numberFormat??null,mode:selected.layout?.mode??'unknown'}:null,
   statusTitle:$('status-title').textContent,statusDetail:$('status-detail').textContent,statusError:$('native-status').classList.contains('error'),matrix:matrixContext(),
-  message:$('message').textContent,messageError:$('message').classList.contains('error'),valid,canExport:!wordNavigating&&exportAvailable(),busy:busy||wordNavigating,mode:selected?mode:'rebuild',readOnly:!!mf.readOnly||busy||wordNavigating,
+  message:$('message').textContent,messageError:$('message').classList.contains('error'),valid,canExport:!wordNavigating&&exportAvailable(),wordOutcomeUnknown,busy:busy||wordNavigating,mode:selected?mode:'rebuild',readOnly:!!mf.readOnly||busy||wordNavigating,
   canSaveEdit:!$('save-edit').hidden,canArrange:!$('arrange-source').hidden,canFactoryReset:!$('desktop-factory-fonts').disabled,arrangeAll:$('arrange-all').checked,zoom:workbenchZoom,effectiveZoom:editorViewport.effectiveZoom,keyboardVisible:!!window.mathVirtualKeyboard?.visible,ruler:editingRuler??[]
  };
  const delta={};for(const [key,value]of Object.entries(state)){const encoded=JSON.stringify(value);if(encoded!==workbenchLastFields.get(key)){workbenchLastFields.set(key,encoded);delta[key]=value;}}

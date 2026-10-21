@@ -101,6 +101,7 @@ export function numberDocx(options={},initializeContext=false) {
 }
 
 function parseXml(text) {
+  text=text.replace(/^\uFEFF/,'');
   const errors=[];
   const doc = new DOMParser({onError:(level,msg)=>{if(level==='error'||level==='fatalError') errors.push(msg);}}).parseFromString(text,'application/xml');
   if(errors.length) throw Error(errors.join('; ')); return doc;
@@ -143,11 +144,21 @@ function bookmarkNumberFormat(bookmark){
 }
 
 export async function inspectDocx(buffer) {
-  const zip = await JSZip.loadAsync(buffer), doc = parseXml(await zip.file('word/document.xml').async('string'));
+  const zip = await JSZip.loadAsync(buffer);
+  const rootRelationships=zip.file('_rels/.rels');
+  if(!rootRelationships)throw Error('Word document is missing its package relationships');
+  const root=parseXml(await rootRelationships.async('string'));
+  const documentRelationships=Array.from(root.getElementsByTagNameNS(NS.rels,'Relationship')).filter(r=>r.getAttribute('Type')===`${NS.r}/officeDocument`);
+  if(documentRelationships.length!==1||documentRelationships[0].getAttribute('TargetMode')==='External')throw Error('Word document has an invalid main document relationship');
+  const mainTarget=documentRelationships[0].getAttribute('Target');
+  if(!mainTarget||/^[a-z][a-z\d+.-]*:/i.test(mainTarget)||mainTarget.startsWith('//'))throw Error('Word document main part must be an internal package path');
+  const mainPart=partPath(mainTarget,'_root.xml');
+  if(!zip.file(mainPart))throw Error('Word document main part is missing');
+  const doc=parseXml(await zip.file(mainPart).async('string'));
   const objects = [];
-  const parts=Object.keys(zip.files).filter(p=>/^word\/(document|header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p)).sort((a,b)=>a==='word/document.xml'?-1:b==='word/document.xml'?1:0);
+  const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
   for (const part of parts) {
-  const partDoc=part==='word/document.xml'?doc:parseXml(await zip.file(part).async('string'));
+  const partDoc=part===mainPart?doc:parseXml(await zip.file(part).async('string'));
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
@@ -176,10 +187,10 @@ export async function inspectDocx(buffer) {
       layout.referenceCount=references.get(layout.bookmarkName)??0;
     }
     let typography,typographyError;try{typography=readTypography(ole);}catch(error){typographyError=error.message;}
-    objects.push({index:objects.length,path,part,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
+    objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
   }
   }
-  return {zip,doc,objects};
+  return {zip,doc,mainPart,objects};
 }
 
 export async function editDocx(buffer,index,replacements,options={}) {
@@ -202,7 +213,7 @@ export async function arrangeDocx(buffer,{indices,layout={}}={}) {
   let first=true;
   for(const index of [...targets].sort((a,b)=>a-b)) {
     const o=objects[index];if(!o)throw Error('公式不存在');
-    if(layout.mode?.startsWith('numbered-')&&o.part!=='word/document.xml')throw Error('章节编号目前只支持正文，脚注、尾注和页眉页脚请单独设置');
+    if(layout.mode?.startsWith('numbered-')&&!o.mainDocument)throw Error('章节编号目前只支持正文，脚注、尾注和页眉页脚请单独设置');
     const run=o.element.parentNode.parentNode,p=run.parentNode;
     if(run.localName!=='r'||p.localName!=='p')throw Error('此公式包含特殊包装，暂不能更改段落编排');
     if(Array.from(run.childNodes).some(n=>n.nodeType===1&&!['rPr','object'].includes(n.localName)))throw Error('公式与正文处于同一段落，请先在 Word 中分段，以保留正文');

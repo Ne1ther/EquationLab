@@ -7,15 +7,17 @@ const source=await readFile(new URL('../desktop/editor-viewport.js',import.meta.
 function viewport(){
  let width=100,height=40,font=29,selected=0,mutation;
  const frames=[],events=()=>({handlers:{},addEventListener(name,fn){this.handlers[name]=fn;}});
+ const pageEvents=events(),documentEvents=events();
  const rail={...events(),hidden:true,clientWidth:576,scrollLeft:0,firstElementChild:{style:{}}};
  const content={...events(),clientWidth:600,scrollLeft:0,get scrollWidth(){return Math.max(600,width*font/29);},querySelector:()=>({getBoundingClientRect:()=>({width:width*font/29,height:height*font/29})})};
  const wrap={...events(),clientHeight:250,parentElement:{querySelector:()=>rail}};
  const field={value:'x',closest:()=>wrap,shadowRoot:{querySelector:()=>content},style:{setProperty(_key,value){font=parseFloat(value);}}};
- const context=vm.createContext({window:{},getComputedStyle:()=>({paddingTop:'0',paddingBottom:'0',paddingLeft:'0',paddingRight:'0'}),requestAnimationFrame:fn=>frames.push(fn),ResizeObserver:class{observe(){}},MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},document:{fonts:{ready:Promise.resolve()}}});
+ const document=Object.assign(documentEvents,{hidden:false,fonts:{ready:Promise.resolve()}});
+ const context=vm.createContext({window:pageEvents,getComputedStyle:()=>({paddingTop:'0',paddingBottom:'0',paddingLeft:'0',paddingRight:'0'}),requestAnimationFrame:fn=>frames.push(fn),ResizeObserver:class{observe(){}},MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},document});
  vm.runInContext(source,context);
  const controller=context.window.createEquationViewport(field,{getZoom:()=>selected,onScaleChange(){}});
  function flush(){let count=0;while(frames.length){assert.ok(++count<10,'sizing must settle without a continuous frame loop');frames.shift()();}}
- return {rail,content,controller,field,flush,get zoom(){return controller.effectiveZoom;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
+ return {rail,content,controller,field,document,window:pageEvents,flush,get zoom(){return controller.effectiveZoom;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
 }
 
 test('Fit sizing responds to MathLive content rendered after the input frame, then restores short formulas',()=>{
@@ -33,4 +35,16 @@ test('The frame scrollbar mirrors the formula overflow and caret scrolling in bo
  v.rail.scrollLeft=200;v.rail.handlers.scroll();assert.equal(v.content.scrollLeft,200);
  v.content.scrollLeft=500;v.content.handlers.scroll();assert.equal(v.rail.scrollLeft,500);
  v.select(50);assert.equal(v.rail.hidden,true,'no empty scrollbar for content that fits');
+});
+
+test('Page reveal, resize, and visibility restoration remeasure without changing the formula',()=>{
+ const v=viewport();v.controller.refresh();v.flush();v.render(1000);v.select(75);
+ const originalValue=v.field.value,originalZoom=v.zoom;
+ for(const event of ['pageshow','resize']){
+  v.window.handlers[event]();v.flush();
+  assert.equal(v.field.value,originalValue);assert.equal(v.zoom,originalZoom);
+ }
+ v.document.hidden=true;v.document.handlers.visibilitychange();
+ v.document.hidden=false;v.document.handlers.visibilitychange();v.flush();
+ assert.equal(v.field.value,originalValue);assert.equal(v.zoom,originalZoom);
 });

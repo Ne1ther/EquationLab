@@ -29,7 +29,7 @@
 | `src/document.mjs` | DOCX、嵌入公式、图片和文档编排 / Word documents |
 | `src/layout.mjs` | 公式位置、编号样式和引用域 / Equation placement and numbering |
 | `src/word-numbering.mjs` | 从 Word 文档读取章、节、编号和引用详情 / Document numbering context |
-| `src/word-native-session.mjs` | Word 编辑会话、回存确认、取消和公式切换 / Word edit sessions |
+| `src/word-native-session.mjs` | Word 编辑与空白插入会话、回存确认、取消和公式切换 / Word edit and insertion sessions |
 | `src/desktop-rpc.mjs` | 原生 App 与引擎之间的命令接口 / App-to-engine commands |
 | `src/app-services.mjs / src/server.mjs` | 本机后台服务和 Word 通信 / Local services |
 | `src/cli.mjs / src/cli-entry.mjs` | 命令行入口与路径识别 / CLI entry points |
@@ -47,6 +47,7 @@
 | `macos/Models/WorkbenchState.swift` | 侧栏、检查器和编辑器的共享状态 / Workbench state |
 | `macos/Models/InterfaceLanguage.swift` | 界面语言和翻译 / Interface language |
 | `macos/Services/DesktopBridge.swift` | 画布桥接、窗口复用和返回 Word / Canvas and Word handoff |
+| `macos/Services/WordFocusHandoff.swift` | 编辑器与 Word 之间的前台交接 / Cooperative focus handoff |
 | `macos/Services/EquationEngine.swift` | 启动和调用打包引擎 / Engine process |
 | `macos/Services/WordHostInstallation.swift / macos/Services/WordPluginInstallation.swift` | Word 检测、插件安装、修复及连接检查 / Word installation |
 | `macos/Services/AppUpdater.swift` | 检查新版、下载和打开安装器 / Update UI and downloads |
@@ -66,10 +67,11 @@
 | --- | --- |
 | `native-word-probe/automatic-loader/EquationLabDynamicStartupLoader.bas` | 在 Word Startup 位置加载自带原生组件 / Native component loading |
 | `native-word-probe/automatic-loader/EquationLabEntryPoints.bas` | 自动启动和文档事件初始化 / Startup entry points |
-| `native-word-probe/automatic-loader/EquationLabDocumentContext.bas` | 整篇公式索引、跳转和显示刷新 / Document context and navigation |
+| `native-word-probe/automatic-loader/EquationLabDocumentContext.bas` | 整篇公式捕获、精确范围锚点、插入和后台保存 / Document capture, exact anchors, insertion and background saves |
 | `native-word-probe/automatic-loader/EquationLabWordEvents.cls` | Word 文档、窗口和选择事件 / Word events |
 | `native-word-probe/automatic-loader/EquationLabRibbon.bas` | 插入、编辑、编号、引用等功能区命令 / Ribbon commands |
 | `native-word-probe/src/` | 原生 OLE 对象、编辑通信及宿主检查 / Native Word component |
+| `native-word-probe/src/word_insertion.mm` | 新公式片段的交付、插入结果确认和重试 / New equation delivery and acknowledgements |
 | `native-word-probe/Info.plist` | 原生 Word 组件的版本与基本信息 / Component metadata |
 | `word-ribbon/` | 原生 Word 功能区命令元数据与图标 / Native Word Ribbon metadata and icons |
 

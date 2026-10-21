@@ -1,5 +1,21 @@
 # 版本记录
 
+## 0.6.2 · build67
+
+- 新公式从空白画布开始，完成后才插入；取消不会留下占位公式。
+- “取消”和“完成并插入 / 更新公式”放到编辑区上方，支持 ⌘A 替换整条公式。
+- 修复文档列表偶尔只剩一条、保存后无法重开和隐藏窗口恢复空白的问题；减少重复捕获和窗口切换。
+- 修复冷启动后，从侧栏选择另一条公式保存时超时的问题。
+- 补齐卷积星号、\dots、\displaystyle，以及 cases 行距；保留多行公式和中文标注。
+- 修复行内插入拆开后续正文的问题。
+- 插入结果无法确认时保留草稿、停止重复提交并允许关闭；插入后的排版错误不再误报为未插入。
+
+这次在 Word 16.114、M 系列 Mac 上逐一打开了 30 个公式，也测试了 11 条复杂公式、空白插入、编辑保存和重新打开。
+
+[下载 0.6.2](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.2)
+
+New equations start blank, with Cancel and Done and Insert / Update Equation above the canvas. This release fixes incomplete document lists, cold-start sidebar saves, reopening and hidden-window rendering, reduces repeated document captures, and adds convolution asterisks, \dots, \displaystyle, and cases row spacing. If Word cannot confirm an insertion, the draft stays available and the window can close without repeating it. Tested in Word 16.114 on Apple Silicon with all 30 demo equations, 11 complex formulas, insertion, saving, and reopening.
+
 ## 0.6.1 · build63
 
 - 修复多行公式变成单行、换行被当作反斜杠保存的问题。

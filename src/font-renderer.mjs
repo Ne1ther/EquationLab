@@ -19,7 +19,7 @@ import {createNativeLayout} from './native-layout.mjs';
 
 const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);
 const {mtExtraOperators={}}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
-new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
+new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elrows:'PileRows',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
  const variant=parser.GetArgument(name),size=Number(parser.GetArgument(name)),code=Number.parseInt(parser.GetArgument(name),16),color=parser.GetArgument(name);
  if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>65535||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
  const ch=String.fromCharCode(code),kind=/[A-Za-z\u0370-\u03ff]/.test(ch)?'mi':/[0-9]/.test(ch)?'mn':'mo';
@@ -47,6 +47,9 @@ new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'M
  const positions=parser.GetArgument(name).split(',').filter(Boolean).map(Number),types=parser.GetArgument(name).split(',').filter(Boolean).map(Number),count=Number(parser.GetArgument(name));
  if(!Number.isInteger(count)||count<1||count>256||positions.length!==types.length||positions.length>255||positions.some((p,i)=>!Number.isFinite(p)||p<0||p>32767||i&&p<=positions[i-1])||types.some(t=>!Number.isInteger(t)||t<0||t>4))throw Error('Invalid native ruler');
  const children=Array.from({length:count},()=>parser.create('node','TeXAtom',[parser.ParseArg(name)])),node=parser.create('node','mrow',children);node.setProperty('elRuler',{positions,types});parser.Push(node);
+},PileRows(parser,name){
+ const raw=parser.GetArgument(name),spacing=raw===''?[]:raw.split(',').map(Number);if(spacing.length>30||spacing.some(value=>!Number.isInteger(value)||value < -32768||value>32767))throw Error('Invalid native pile spacing');
+ const node=parser.ParseArg(name);let target;node.walkTree(n=>{if(!target&&n.kind==='mtable')target=n;});if(!target)throw Error('Missing native pile table');target.setProperty('elPile',true);target.setProperty('elExplicitRowSpacing',spacing);parser.Push(node);
 }});
 Configuration.create('equation-native-fonts',{handler:{macro:['equation-native-glyphs']}});
 
@@ -162,11 +165,15 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  const glyphToken=(n,plain)=>{
   if(/\s/.test(String.fromCharCode(n.code)))return plain;
   const state=states.get(n.start);if(!state)throw Error('Missing native glyph state');
-  // Old Equation Lab objects used ASCII '-' in the Symbol face. Render the
-  // mathematical minus without modifying their stored MTEF or text hyphens.
-  const code=n.code===0x2d&&state.font.toLowerCase()==='symbol'?0x2212:n.code;
-  const key=state.font+'\0'+state.style;let index=faceIds.get(key);
-  if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:state.font,style:state.style,characters:[]});}
+  // MTEF's Symbol position for '*' has no Unicode U+002A outline in the
+  // macOS Symbol face. Draw the equivalent mathematical asterisk from the
+  // shipped STIX face for preview only; keep the source MTEF font and bytes.
+  // Old Equation Lab objects also used ASCII '-' in Symbol; render it as a
+  // mathematical minus without changing stored data or text hyphens.
+  const symbol=state.font.toLowerCase()==='symbol',symbolStar=symbol&&n.code===0x2a;
+  const code=symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code,fontName=symbolStar?'STIX Two Math':state.font,fontStyle=state.style;
+  const key=fontName+'\0'+fontStyle;let index=faceIds.get(key);
+  if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:fontName,style:fontStyle,characters:[]});}
   if(!faces[index].characters.includes(code))faces[index].characters.push(code);
   return `\\elglyph{el${index}}{${state.size/full}}{${code.toString(16)}}{${state.color}}`;
  };

@@ -1,5 +1,5 @@
 {
-  "version": "0.6.1",
-  "zh": "修复公式列表丢失、旧会话无法编辑或关闭、多行公式保存和根号接头重叠。公式列表在 App 内切换，保存时后台写回。改善反复打开、冷启动和编号显示，移除旧 Word 内嵌侧栏。补齐安装包中的 Word 顶栏资源。",
-  "en": "Fix lost formula lists, stale sessions blocking edits or closing, multiline saving, and overlapping radical strokes. Switch formulas in the app and save back in the background. Improve reopening, cold launch and numbering details, remove the old Word task pane, and restore missing Word ribbon resources in the installer."
+  "version": "0.6.2",
+  "zh": "新公式从空白编辑区开始，完成后才插入；取消、插入和更新按钮移到画布上方。修复文档公式列表不全、冷启动侧栏保存超时、保存后重开失败和画布恢复空白，减少重复捕获与窗口切换。补齐卷积星号、dots、displaystyle 和 cases 行距，保留多行与中文标注。支持 ⌘A 替换整条公式。插入结果未确认时可保留草稿并关闭，避免卡住或重复插入。",
+  "en": "Start new equations on a blank canvas and insert only when ready. Cancel, Insert and Update now sit above the canvas. Fix incomplete document lists, cold-start sidebar saves, reopening and hidden-canvas rendering; reduce repeated captures and window switching. Add convolution asterisks, dots, displaystyle and cases row spacing, preserve multiline and Chinese annotations, and support Command-A replacement. Unconfirmed insertions keep the draft and allow closing without repeated submission."
 }

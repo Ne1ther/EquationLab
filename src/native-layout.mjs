@@ -108,7 +108,7 @@ export function createNativeLayout(prefs,full,nativeFaces){
  class Table extends SVGmtable{
   setLineThickness(t,style,properties){const attrs=super.setLineThickness(t,style,properties);delete attrs['stroke-thickness'];Object.assign(attrs,{fill:'none','stroke-width':this.fixed(t)});if(style==='dashed')attrs['stroke-dasharray']=this.fixed(2*t);if(style==='dotted'){attrs['stroke-linecap']='round';attrs['stroke-dasharray']='0,'+this.fixed(2*t);}return attrs;}
   updateHDW(cell,i,j,align,H,D,W,M){const result=super.updateHDW(cell,i,j,align,H,D,W,M),r=nativeRatio(this.node);H[j]=Math.max(H[j],M0*r);D[j]=Math.max(D[j],M1*r);return result;}
-  constructor(...args){super(...args);const r=nativeRatio(this.node),pile=this.node.getProperty('elPile'),rowSpace=P(pile?(r<.9?8:0):1,r);if(rowSpace!==undefined)this.rSpace=this.rSpace.map(()=>rowSpace-(M0+M1)*r);if(!pile&&P(2,r)!==undefined)this.cSpace=this.cSpace.map(()=>P(2,r));
+  constructor(...args){super(...args);const r=nativeRatio(this.node),pile=this.node.getProperty('elPile'),rowSpace=P(pile?(r<.9?8:0):1,r);if(rowSpace!==undefined)this.rSpace=this.rSpace.map(()=>rowSpace-(M0+M1)*r);if(!pile&&P(2,r)!==undefined)this.cSpace=this.cSpace.map(()=>P(2,r));const explicitRows=this.node.getProperty('elExplicitRowSpacing');if(Array.isArray(explicitRows)&&explicitRows.length===this.rSpace.length)this.rSpace=this.rSpace.map((value,index)=>value+explicitRows[index]/(32*full));
    // A relation-aligned pile becomes two MathML cells. Its relation still
    // needs the native boundary gap that a single-line equation receives.
    if(pile&&this.numCols===2)this.cSpace=this.cSpace.map(()=>boundaryGap(2,6,r));

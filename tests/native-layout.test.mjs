@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
-import {makeOle,patchRuler} from '../src/native.mjs';
+import {inspectOle,makeOle,oleLatex,patchRuler} from '../src/native.mjs';
+import {makeNewOle} from '../src/new-formula.mjs';
 import {patchTypography} from '../src/typography-native.mjs';
 import {renderNative,nativePdf,nativeRendererStats} from '../src/font-renderer.mjs';
 import {vectorPdfRequest,vectorInkBounds} from '../src/vector-pdf.mjs';
@@ -23,6 +24,41 @@ function childInk(svg,predicate){
  assert.ok(node);const defs=serialize.serializeToString(dom.getElementsByTagName('defs')[0]);
  return Array.from(node.childNodes).filter(n=>n.nodeType===1).map(child=>vectorInkBounds(vectorPdfRequest(`<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="-5000 -5000 10000 10000">${defs}<g transform="scale(1,-1)">${serialize.serializeToString(child)}</g></svg>`,1,1)));
 }
+
+function assertInkInsideViewport(p,label){
+ const {vector,viewBox:[left,top,width,height]}=vectorPdfRequest(p.svg,p.width,p.height),ink=vectorInkBounds({vector});
+ assert.ok(ink,`${label}: native outlines are present`);
+ assert.ok(ink[0]>=left-.2&&ink[1]>=top-.2&&ink[2]<=left+width+.2&&ink[3]<=top+height+.2,`${label}: vector ink exceeds its exported viewport`);
+}
+
+test('Fourier transform and convolution preview accept the native ASCII asterisk without changing source data',async()=>{
+ const latex=String.raw`\hat f(\xi)=\int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx,\qquad (f * g)(t)=\int_{-\infty}^{\infty} f(\tau)g(t-\tau)\,d\tau`,ole=makeNewOle(latex),before=Buffer.from(ole),native=Buffer.from(inspectOle(ole).native);
+ const p=await renderNative(ole,{raster:false});
+ const pdf=Buffer.from((await nativePdf(ole)).pdf,'base64');
+ assert.ok(oleLatex(ole).includes('*'),'the convolution operator remains present in the decoded native content');
+ assert.equal(pdf.subarray(0,5).toString(),'%PDF-','the repaired preview also reaches the vector export path');
+ assert.ok(p.width>250,'the complete Fourier and convolution expression remains horizontally laid out');
+ assertInkInsideViewport(p,'Fourier/convolution');
+ assert.deepEqual(ole,before);assert.deepEqual(inspectOle(ole).native,native);
+ const isolated=await renderNative(makeNewOle('f * g'),{raster:false}),withoutStar=await renderNative(makeNewOle('f g'),{raster:false});
+ assert.ok(isolated.faces.some(face=>face.font==='STIX Two Math'),'the Symbol asterisk uses the bundled math outline for preview');
+ assert.ok(isolated.width>withoutStar.width+5,'the asterisk contributes visible width instead of disappearing');
+});
+
+test('Long integral limits and horizontal equations retain their complete native vector bounds',async()=>{
+ const latex=String.raw`\hat f(\xi)=\int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx,\qquad (f \cdot g)(t)=\int_{-\infty}^{\infty} f(\tau)g(t-\tau)\,d\tau`,ole=makeNewOle(latex),before=Buffer.from(ole),p=await renderNative(ole,{raster:false});
+ assert.ok(p.width>250,'long integral bounds and both transform terms contribute to the equation width');
+ assertInkInsideViewport(p,'long Fourier/convolution equation');
+ assert.deepEqual(ole,before,'preview layout does not rewrite the original MTEF data');
+});
+
+test('Matrix dots and common accents remain visible in native SVG previews',async()=>{
+ const latex=String.raw`\hat{f}+\bar{x}+\dot{y}+\vec{z}+\begin{bmatrix}a&\ddots&0\\0&\ddots&b\end{bmatrix}`,ole=makeNewOle(latex),before=Buffer.from(ole),p=await renderNative(ole,{raster:false}),decoded=oleLatex(ole);
+ assert.match(decoded,/\\ddots/);assert.ok(decoded.includes('\\hat{'));
+ assert.ok(p.height>25,'the bracketed matrix and its dots must keep their vertical extent');
+ assertInkInsideViewport(p,'matrix, dots, and accents');
+ assert.deepEqual(ole,before);
+});
 
 test('Drawn integral contours cover tall bodies and retain the original equation data',async()=>{
  const heights=[];

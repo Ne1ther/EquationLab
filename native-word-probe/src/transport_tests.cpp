@@ -69,6 +69,8 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
     transportActive=active;documentCaptureAllowed=resolve<std::uint32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureAllowed");
     auto count=resolve<std::uint32_t(*)()>(bundle,"MathTypeBridgeLiveObjectCount");auto getClass=resolve<PublicGetClassObject>(bundle,"MathTypeBridgeGetClassObject");
     auto setDocument=resolve<HResult(*)(const char*)>(bundle,"MathTypeBridgeSetTransportDocumentForTesting");
+    auto armActivation=resolve<HResult(*)(const char*)>(bundle,"MathTypeBridgeArmDocumentActivationForTesting");
+    auto activationPending=resolve<std::uint32_t(*)()>(bundle,"MathTypeBridgeActivationAnchorPendingForTesting");
     auto ageDocument=resolve<HResult(*)(double)>(bundle,"MathTypeBridgeAgeTransportCaptureForTesting");
     auto clearDocuments=resolve<HResult(*)()>(bundle,"MathTypeBridgeClearTransportDocumentsForTesting");
     auto ownerIdentity=resolve<std::uint64_t(*)()>(bundle,"MathTypeBridgeLastOwnerIdentityForTesting");
@@ -154,18 +156,22 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
         check(control("no-event-readback").find("\"fullDocumentCount\":30")!=std::string::npos,"no-event initial context was not validated as 30 formulas");
         // Do not call setDocument again: model no new SelectionChange or
         // BeforeDoubleClick capture. Keep the injected capture object but age
-        // its real timestamp so the CLI no-context shortcut cannot mask the
-        // production 0.5-second age gate and 1-second capture timeout.
+        // its real timestamp so the isolated no-event runner has to complete
+        // the explicit request; production no longer falls back at one second.
         check(ageDocument(2)==Ok,"no-event capture age setup");
         const auto before=launches;const auto started=CFAbsoluteTimeGetCurrent();
         test.begin();const bool sameOwner=ownerIdentity()==firstOwner;
         bool answeredCapture=false;
         if(const char* refreshPath=std::getenv("PROBE_NO_EVENT_REFRESH_DOCUMENT")){
             auto take=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeTakeDocumentCaptureRequest");
+            auto requestToken=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureRequestToken");
             std::int32_t token=0;spin([&]{return token||(token=take())>0;});
             check(take()==0,"no-event request was claimed more than once");
+            check(requestToken()==token,"claimed capture request lost its activation token");
             check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureSnapshot")()==1234&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIndex")()==13&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIdentity")()==1,"no-event request lost its verified live document anchor");
-            std::ifstream refreshInput(refreshPath,std::ios::binary);std::string refresh(std::istreambuf_iterator<char>(refreshInput),{});
+            std::ifstream refreshInput(refreshPath,std::ios::binary);std::string refresh(std::istreambuf_iterator<char>(refreshInput),{});auto close=refresh.rfind('}');
+            check(close!=std::string::npos,"requested capture fixture was not a JSON object");refresh.insert(close,",\"captureToken\":"+std::to_string(token));
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode,1.15,false);
             check(setDocument(refresh.c_str())==Ok,"no-event requested live capture response");
             check(launches==before,"capture response opened before request validation/commit");
             check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeFinishDocumentCaptureRequest")()==0,"no-event requested capture did not complete");
@@ -306,8 +312,35 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
     }
     if(controlPort){
         reset();{
-            const char* documentA="{\"index\":12,\"identity\":\"test-doc:1\",\"snapshot\":1234,\"name\":\"same-name.docx\",\"ooxml\":\"verified-context-A\"}";
-            const char* documentB="{\"index\":12,\"identity\":\"other-doc:2\",\"snapshot\":2222,\"name\":\"same-name.docx\",\"ooxml\":\"verified-context-B\"}";
+            const char* documentA="{\"index\":12,\"identity\":\"test-doc:1\",\"snapshot\":1234,\"name\":\"same-name.docx\",\"ooxml\":\"identical-formula\"}";
+            const char* documentB="{\"index\":12,\"identity\":\"other-doc:2\",\"snapshot\":2222,\"name\":\"same-name.docx\",\"ooxml\":\"identical-formula\"}";
+            // Model a double-click whose exact Word selection disappears as
+            // soon as DoVerb enters the native OLE owner. The one-shot hint
+            // must retain A's precise Range coordinates, reject an identical
+            // formula from B, then accept only a fresh A snapshot.
+            check(setDocument(documentA)==Ok,"activation-anchor source context");
+            check(armActivation("{\"identity\":\"test-doc:1\",\"snapshot\":1234,\"index\":12}")==Ok&&activationPending()==1,"one-shot activation hint was not armed");
+            control("context-A");const auto anchorLaunches=launches;
+            TestObject anchored(getClass,api,native,24);anchored.begin();
+            check(activationPending()==0,"native DoVerb did not consume the activation hint exactly once");
+            auto captureToken=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeTakeDocumentCaptureRequest");
+            auto requestToken=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureRequestToken");
+            std::int32_t token=0;spin([&]{return token||(token=captureToken())>0;});
+            check(requestToken()==token&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureSnapshot")()==1234&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIndex")()==13&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIdentity")()==1,"lost-selection request did not retain the exact hinted document/range");
+            auto withToken=[](const char* source,std::int32_t request){std::string value(source);auto end=value.rfind('}');if(end==std::string::npos)return std::string();value.insert(end,",\"captureToken\":"+std::to_string(request));return value;};
+            const auto foreign=withToken(documentB,token);
+            check(setDocument(foreign.c_str())==Ok,"foreign identical-formula capture response");
+            check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeFinishDocumentCaptureRequest")()==-3&&launches==anchorLaunches,"identical formula in another open document satisfied the activation hint");
+            token=0;spin([&]{return token||(token=captureToken())>0;});
+            check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureSnapshot")()==1234&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIndex")()==13&&resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIdentity")()==1,"foreign response replaced the one-shot exact target");
+            const char* freshA="{\"index\":12,\"identity\":\"test-doc:1\",\"snapshot\":1235,\"name\":\"same-name.docx\",\"ooxml\":\"identical-formula\"}";
+            const auto fresh=withToken(freshA,token);
+            check(setDocument(fresh.c_str())==Ok,"fresh exact-target ELCTX4 response");
+            check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeFinishDocumentCaptureRequest")()==0,"fresh exact-target capture after selection loss was rejected");
+            spin([&]{return launches==anchorLaunches+1;});
+            control("cancel-editing");spin([&]{return active()==0;});
+            check(anchored.site.saves==0&&anchored.saved()==anchored.original,"activation capture scenario modified Word storage before an edit");
+            check(setDocument(nullptr)==Ok,"activation-anchor test context cleanup");
             TestObject oldDraft(getClass,api,native,7);oldDraft.begin();auto before=launches;spin([&]{return launches==before+1;});
             auto incoming=std::make_unique<TestObject>(getClass,api,native,25);
             check(setDocument(documentA)==Ok,"rejected incoming context seed");control("context-A");incoming->begin();auto firstOwner=ownerIdentity();before=launches;spin([&]{return launches==before+1;});

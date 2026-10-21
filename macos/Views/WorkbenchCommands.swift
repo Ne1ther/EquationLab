@@ -3,6 +3,9 @@ import SwiftUI
 struct WorkbenchCommands: Commands {
     @ObservedObject var bridge: DesktopBridge
     @ObservedObject var updater: AppUpdater
+    private var wordSessionSaveLabel: String {
+        bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
+    }
     var body: some Commands {
         CommandGroup(after: .appInfo) {
             Button(bridge.t("检查更新…")) { updater.check() }
@@ -12,11 +15,11 @@ struct WorkbenchCommands: Commands {
             Button(bridge.t("打开 Word 文档…")) { bridge.invoke("nativeOpen") }.keyboardShortcut("o").disabled(bridge.wordSessionActive || bridge.state.busy)
         }
         CommandGroup(replacing: .saveItem) {
-            Button(bridge.t(bridge.wordSessionActive ? "保存并返回 Word" : "另存 Word 副本…")) {
+            Button(bridge.t(bridge.wordSessionActive ? wordSessionSaveLabel : "另存 Word 副本…")) {
                 if bridge.wordSessionActive { bridge.invoke("nativeCommitWordSession") }
                 else if bridge.state.canSaveEdit { bridge.action("click", ["id": "save-edit"]) }
                 else { bridge.invoke("nativeExport") }
-            }.keyboardShortcut("s").disabled(!bridge.state.canExport || bridge.state.busy)
+            }.keyboardShortcut("s").disabled(!bridge.state.canExport || bridge.state.busy || bridge.wordSessionActive && bridge.state.wordOutcomeUnknown)
             Button(bridge.t("导出 MathType Word…")) { bridge.invoke("nativeExport") }
                 .keyboardShortcut("s", modifiers: [.command, .shift]).disabled(!bridge.state.canExport || bridge.state.busy || bridge.wordSessionActive)
         }
@@ -112,6 +115,9 @@ struct WorkbenchCommands: Commands {
             Button(bridge.t("移除 Word 插件")) { bridge.uninstallWordPlugin() }.disabled(bridge.installationRunning)
             if bridge.wordSessionActive {
                 Divider()
+                Button(bridge.t(wordSessionSaveLabel)) {
+                    bridge.invoke("nativeCommitWordSession")
+                }.disabled(!bridge.state.canExport || bridge.state.busy || bridge.state.wordOutcomeUnknown)
                 Button(bridge.t("取消当前 Word 编辑")) { bridge.invoke("nativeCancelWordSession") }.disabled(bridge.state.busy)
             }
         }
@@ -127,16 +133,22 @@ struct CommandSearch: View {
     @Environment(\.dismiss) private var dismiss
     @State private var query = ""
     @FocusState private var focused: Bool
-    private let commands: [(String, String, String)] = [
-        ("new", "新建公式", "plus.circle"), ("open", "打开 Word 文档", "folder"),
-        ("save", "另存 Word 副本 / 保存并返回 Word", "square.and.arrow.down"),
-        ("fonts", "字体、样式与字号", "textformat"), ("spacing", "定义 30 项原生间距", "arrow.left.and.right"),
-        ("document", "Word 位置与编号", "doc.text"), ("keyboard", "数学键盘", "keyboard"),
-        ("letters", "全部字母", "character.book.closed.fill"),
-        ("favorite", "收藏当前公式", "star"), ("copyLatex", "复制 LaTeX", "doc.on.doc"),
-        ("copyPNG", "复制公式图片", "photo"), ("office-plugins", "安装 / 管理 Office 插件", "puzzlepiece.extension"), ("install", "安装 / 更新 Word 插件", "puzzlepiece.extension"),
-        ("compatibility", "兼容性说明", "info.circle")
-    ]
+    private var saveCommandLabel: String {
+        guard bridge.wordSessionActive else { return "另存 Word 副本…" }
+        return bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
+    }
+    private var commands: [(String, String, String)] {
+        [
+            ("new", "新建公式", "plus.circle"), ("open", "打开 Word 文档", "folder"),
+            ("save", saveCommandLabel, "square.and.arrow.down"),
+            ("fonts", "字体、样式与字号", "textformat"), ("spacing", "定义 30 项原生间距", "arrow.left.and.right"),
+            ("document", "Word 位置与编号", "doc.text"), ("keyboard", "数学键盘", "keyboard"),
+            ("letters", "全部字母", "character.book.closed.fill"),
+            ("favorite", "收藏当前公式", "star"), ("copyLatex", "复制 LaTeX", "doc.on.doc"),
+            ("copyPNG", "复制公式图片", "photo"), ("office-plugins", "安装 / 管理 Office 插件", "puzzlepiece.extension"), ("install", "安装 / 更新 Word 插件", "puzzlepiece.extension"),
+            ("compatibility", "兼容性说明", "info.circle")
+        ]
+    }
     private var matchingCommands: [(String, String, String)] { commands.filter { query.isEmpty || ("\(bridge.t($0.1)) \($0.1)").localizedCaseInsensitiveContains(query) } }
     private var matchingTemplates: [FormulaTemplate] {
         bridge.state.templates.filter { query.isEmpty || "\(bridge.t($0.category)) \(bridge.t($0.hint)) \($0.label) \($0.latex)".localizedCaseInsensitiveContains(query) }

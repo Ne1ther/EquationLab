@@ -1,10 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {readFile,writeFile,access} from 'node:fs/promises';
+import JSZip from 'jszip';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
 import {nativeSessionOperation as sessionOperation} from '../src/word-native-session.mjs';
 import {createDocx,flatOpc,inspectDocx,hash} from '../src/document.mjs';
-import {makeOle,inspectOle,characters,editCharacters} from '../src/native.mjs';
+import {makeOle,inspectOle,characters,editCharacters,replaceOleLatex} from '../src/native.mjs';
 
 // This process routes RPC HTTP calls directly to an isolated in-memory service.
 // It never connects to the live Word/App service or edits user documents.
@@ -111,6 +112,16 @@ async function openDocument(document,index,{identity='word-process-a:document-1'
 }
 const targetOf=(session,index)=>({index,expectedNativeSha256:session.objects[index].nativeSha256,documentIdentity:session.document.identity});
 
+async function alternateMainPart(document){
+ const zip=await JSZip.loadAsync(document),xml=await zip.file('word/document.xml').async('string'),relationships=await zip.file('word/_rels/document.xml.rels').async('string');
+ const rootRelationships=await zip.file('_rels/.rels').async('string'),contentTypes=await zip.file('[Content_Types].xml').async('string');
+ zip.remove('word/document.xml');zip.remove('word/_rels/document.xml.rels');
+ zip.file('word/document2.xml','\uFEFF'+xml);zip.file('word/_rels/document2.xml.rels','\uFEFF'+relationships);
+ zip.file('_rels/.rels','\uFEFF'+rootRelationships.replace('Target="word/document.xml"','Target="/word/document2.xml"'));
+ zip.file('[Content_Types].xml','\uFEFF'+contentTypes.replace('/word/document.xml','/word/document2.xml'));
+ return zip.generateAsync({type:'nodebuffer'});
+}
+
 test('Document context diagnostics distinguish a verified full snapshot from a genuinely missing capture without guessing from the last document',async()=>{
  const document=await createDocx([{latex:'x^3'},{latex:'y^9'}]),first=await openDocument(document,1);
  const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:first.ticket}});
@@ -131,6 +142,33 @@ test('A sidebar target saves directly from its bound snapshot with one completio
  assert.equal(calls.some(c=>c.operation==='native-navigate'||c.operation==='native-open'),false);
  const result=await sessionOperation('native-poll',{ticket:source.ticket});live.delete(source.ticket);
  assert.deepEqual(result.target,target);assert.equal(result.native,expected.toString('base64'));assert.notEqual(result.native,source.native);
+});
+
+test('Alternate BOM-prefixed main parts populate context, validate target saves, and accept the generated insertion fragment',async()=>{
+ const document=await alternateMainPart(await createDocx([{latex:'x^3'},{latex:'y_2+1'}])),inspected=await inspectDocx(document),ooxml=await flatOpc(document);
+ assert.equal(inspected.mainPart,'word/document2.xml');assert.equal(inspected.objects.length,2);assert.ok(inspected.objects.every(object=>object.mainDocument));
+
+ const identity='word-main-part:target-save',snapshot='snapshot-main-part',openedSession=String(next++),ownerNative=inspectOle(inspected.objects[1].ole).native;
+ const opened=await sessionOperation('native-open',{session:openedSession,native:ownerNative.toString('base64'),document:{ooxml,index:1,name:'alternate-main.docx',identity,snapshot}});live.add(opened.ticket);
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:opened.ticket}});
+ assert.equal(read.activeIndex,1);assert.equal(read.objects.length,2);assert.ok(read.objects.every(object=>object.mainDocument));
+ assert.deepEqual(read.documentContext,{state:'available',reason:'captured',identity,snapshot,count:2,index:1});
+ const target={index:1,expectedNativeSha256:inspected.objects[1].nativeSha256,documentIdentity:identity},latex='alternate_main_target';
+ await desktopRequest({action:'wordSessionSave',payload:{ticket:opened.ticket,input:read.activePath,mode:'rebuild',latex,target}});
+ const saved=await sessionOperation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
+ assert.deepEqual(saved.target,target);assert.equal(saved.native,inspectOle(replaceOleLatex(inspected.objects[1].ole,latex)).native.toString('base64'));
+
+ const insertionSession=String(next++),layout={mode:'inline',numberFormat:'(#E1)',chapter:2,section:1,equation:2};
+ const insertion=await sessionOperation('native-insert-open',{session:insertionSession,acknowledgement:true,document:{ooxml,index:-1,name:'alternate-main.docx',identity:'word-main-part:insert',snapshot},layout});live.add(insertion.ticket);
+ const insertionRead=await desktopRequest({action:'wordSessionRead',payload:{ticket:insertion.ticket}});
+ assert.equal(insertionRead.insertion,true);assert.equal(insertionRead.objects.length,2);assert.ok(insertionRead.objects.every(object=>object.mainDocument));
+ assert.equal(insertionRead.documentContext.count,2);assert.equal(insertionRead.documentContext.index,-1);
+ await desktopRequest({action:'wordSessionInsert',payload:{ticket:insertion.ticket,input:insertionRead.activePath,latex:'new_alternate_main_formula',layout:insertionRead.insertionLayout}});
+ const completion=calls.filter(call=>call.operation==='native-complete').at(-1),fragment=await inspectDocx(Buffer.from(completion.body.docx,'base64'));
+ assert.equal(fragment.objects.length,1);assert.equal(fragment.objects[0].mainDocument,true);
+ const inserted=await sessionOperation('native-poll',{ticket:insertion.ticket});live.delete(insertion.ticket);
+ assert.equal(inserted.state,'complete');assert.equal(inserted.docx,completion.body.docx);
+ assert.deepEqual(await sessionOperation('native-ack',{ticket:insertion.ticket,session:insertionSession,ok:true}),{state:'committed'});
 });
 
 test('Identical document bytes and names do not make different Word document identities interchangeable',async()=>{

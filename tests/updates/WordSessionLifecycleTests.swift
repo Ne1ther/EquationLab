@@ -47,4 +47,42 @@ final class WordSessionLifecycleTests: XCTestCase {
         XCTAssertNil(bridge.wordTicket)
         XCTAssertFalse(bridge.hasWordSessionOrRequest)
     }
+    func testReturnRequestsWordBeforeHidingActiveEditor() {
+        var events: [String] = []
+        WordFocusHandoff.finish(editorIsActive: true, wordIsActive: false,
+            yield: { events.append("yield") }, activate: { events.append("request-word") }, hide: { events.append("hide") })
+        XCTAssertEqual(events, ["yield", "request-word", "hide"])
+    }
+    func testBackgroundCompletionDoesNotStealFocusFromAnotherApp() {
+        var events: [String] = []
+        WordFocusHandoff.finish(editorIsActive: false, wordIsActive: false,
+            yield: { events.append("yield") }, activate: { events.append("request-word") }, hide: { events.append("hide") })
+        XCTAssertEqual(events, ["hide"])
+    }
+    func testAlreadyActiveWordDoesNotReceiveAnotherActivationRequest() {
+        var requests = 0
+        WordFocusHandoff.finish(editorIsActive: false, wordIsActive: true,
+            yield: { requests += 1 }, activate: { requests += 1 }, hide: {})
+        XCTAssertEqual(requests, 0)
+    }
+    func testRejectedTicketCannotRevealPreviousFormulaWindow() {
+        let bridge = DesktopBridge()
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        XCTAssertFalse(bridge.shouldRevealWordDelivery(second, accepted: false))
+        XCTAssertFalse(bridge.shouldRevealWordDelivery(second, accepted: true))
+        XCTAssertTrue(bridge.shouldRevealWordDelivery(first, accepted: true))
+        bridge.openWordURL(URL(string: "equationlab://word-edit/" + second)!)
+        XCTAssertFalse(bridge.shouldRevealWordDelivery(first, accepted: true))
+    }
+    func testRibbonToolIsAppliedOnlyToItsAcceptedFormulaTicket() {
+        let bridge = DesktopBridge()
+        bridge.openWordURL(URL(string: "equationlab://word-edit/" + second + "?tool=spacing")!)
+        XCTAssertEqual(bridge.inspectorTab, .style)
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        bridge.applyReadyWordTool(first)
+        XCTAssertEqual(bridge.inspectorTab, .style)
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": second])
+        bridge.applyReadyWordTool(second)
+        XCTAssertEqual(bridge.inspectorTab, .spacing)
+    }
 }

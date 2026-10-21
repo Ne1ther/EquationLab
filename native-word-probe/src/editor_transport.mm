@@ -16,6 +16,12 @@ BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context);
 void EquationLabConsumeDocumentSelection(NSDictionary* context);
 void EquationLabSetNavigationTarget(std::int32_t index);
 std::int32_t EquationLabNewDocumentToken();
+BOOL EquationLabArmDocumentActivationAnchor(NSDictionary* context);
+NSDictionary* EquationLabTakeDocumentActivationAnchor();
+void EquationLabClearDocumentActivationAnchor();
+BOOL EquationLabActivationAnchorIsPending();
+NSDictionary* EquationLabTakePreCapturedDocumentActivation();
+BOOL EquationLabPreCapturedActivationIsPending();
 
 namespace {
 constexpr NSUInteger MaxBlob=16*1024*1024;
@@ -149,10 +155,18 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 }
 @end
 
+id EquationLabTransportRequest(NSString* path,NSDictionary* body,void(^completion)(NSDictionary*,NSError*)) {
+    return [[ProbeJsonRequest alloc] initWithURL:[NSURL URLWithString:[@"http://127.0.0.1:37952" stringByAppendingString:path]] body:body completion:completion];
+}
+void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
+    launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],completion);
+}
+
 @interface ProbeEditState : NSObject
 @property(nonatomic) std::uint64_t sessionId;
 @property(nonatomic) CFAbsoluteTime started;
 @property(nonatomic,strong) NSString* ticket;
+@property(nonatomic,strong) NSString* toolIntent;
 @property(nonatomic,strong) ProbeJsonRequest* request;
 @property(nonatomic,strong) NSDate* expires;
 @property(nonatomic) NSUInteger failures;
@@ -174,6 +188,9 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic) std::uint64_t activation;
 @property(nonatomic) BOOL captureRequested;
 @property(nonatomic) BOOL requiresDocumentCapture;
+@property(nonatomic) BOOL preCapturedActivation;
+@property(nonatomic,strong) NSDictionary* activationBinding;
+@property(nonatomic) NSUInteger captureAttempts;
 @property(nonatomic,strong) NSDate* wakeDeadline;
 @property(nonatomic) BOOL wakeAttempted;
 @property(nonatomic) BOOL wakePending;
@@ -181,6 +198,11 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @end
 @implementation ProbeEditState
 @end
+static NSString* editorLaunchURL(ProbeEditState* state){
+    NSString* url=[@"equationlab://word-edit/" stringByAppendingString:state.ticket];
+    if([@[@"typography",@"spacing",@"export"] containsObject:state.toolIntent])url=[url stringByAppendingFormat:@"?tool=%@",state.toolIntent];
+    return url;
+}
 
 @interface ProbeBackgroundSave : NSObject
 @property(nonatomic,strong) NSString* ticket;
@@ -311,30 +333,48 @@ static ProbeEditorTransport* transport=nil;
 }
 - (void)requestCapture:(ProbeEditState*)state {
     if(state.captureRequested||state.activation!=self.activation||![self active:state]||!state.awaitingDocument)return;
-    NSDictionary* binding=self.ownerCaptureBindings[@(state.ownerIdentity)];
-    if(!binding||![binding[@"digest"] isEqual:state.openDigest])return;
+    NSDictionary* binding=state.activationBinding?:self.ownerCaptureBindings[@(state.ownerIdentity)];
+    if(state.activationBinding){
+        NSMutableDictionary* activationBinding=[state.activationBinding mutableCopy];
+        activationBinding[@"digest"]=state.openDigest;
+        binding=activationBinding;
+    }
+    if(binding&&![binding[@"digest"] isEqual:state.openDigest])return;
+    if(!binding&&!state.requiresDocumentCapture)return;
+    if(state.captureAttempts>=3){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
     state.captureRequested=YES;state.requiresDocumentCapture=YES;
     ProbeCaptureRequest* request=[ProbeCaptureRequest new];request.state=state;request.binding=binding;request.token=EquationLabNewDocumentToken();request.activation=state.activation;request.epoch=self.documentEpoch;
-    self.captureRequest=request;
+    os_log_info(OS_LOG_DEFAULT,"WordHostCapture request anchored=%d attempt=%lu",binding!=nil,static_cast<unsigned long>(state.captureAttempts));
+    self.captureRequest=request;lastCaptureState=CapturePending;
 }
 - (std::int32_t)takeCaptureRequest {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||request.claimed||self.applying||self.backgroundSave.claimed)return 0;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return 0;}
     if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return 0;}
-    request.claimed=YES;request.serial=self.captureSerial;return request.token;
+    request.claimed=YES;request.serial=self.captureSerial;++state.captureAttempts;return request.token;
 }
 - (std::int32_t)finishCaptureRequest:(BOOL)success {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||!request.claimed||self.applying||self.backgroundSave.claimed)return -1;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return -2;}
     if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return -4;}
-    NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();
-    BOOL matches=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"identity"] isEqual:request.binding[@"identity"]]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&![context[@"snapshot"] isEqual:request.binding[@"snapshot"]]&&[context[@"index"] isKindOfClass:NSNumber.class];
+    NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();NSDictionary* binding=request.binding;
+    BOOL hasBinding=[binding[@"identity"] isKindOfClass:NSString.class]&&[binding[@"snapshot"] isKindOfClass:NSNumber.class]&&[binding[@"index"] isKindOfClass:NSNumber.class]&&[binding[@"digest"] isEqual:state.openDigest];
+    BOOL commonMatch=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"captureToken"] isKindOfClass:NSNumber.class]&&[context[@"captureToken"] intValue]==request.token&&[context[@"identity"] isKindOfClass:NSString.class]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&[context[@"snapshot"] intValue]>0&&[context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] intValue]>=0;
+    BOOL matches=commonMatch&&(!binding||(hasBinding&&[context[@"identity"] isEqual:binding[@"identity"]]&&[context[@"snapshot"] intValue]!=[binding[@"snapshot"] intValue]&&[context[@"index"] isEqual:binding[@"index"]]));
     self.captureRequest=nil;
-    if(!matches){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return -3;}
-    // This context came from the retained live Word Range, not the current
-    // selection. The service must still verify this owner's exact Native SHA.
+    if(!matches){
+        state.captureRequested=NO;
+        if(state.activation==self.activation&&state.captureAttempts<3){[self requestCapture:state];return -3;}
+        lastCaptureState=CaptureRejected;
+        [self fail:state code:InvalidReply];return -3;
+    }
+    // ELCTX4 is created only after this activation's one-shot request. For a
+    // bound owner VBA resolves its retained Document+Range; otherwise it must
+    // resolve the exact current OLE selection. The service still verifies the
+    // opening Native SHA before attaching document-wide context.
+    EquationLabConsumeDocumentSelection(context);
     state.documentContext=context;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;[self openState:state];return 0;
 }
 - (void)scheduleCaptureDeadline:(ProbeEditState*)state {
@@ -399,10 +439,35 @@ static ProbeEditorTransport* transport=nil;
 - (void)begin:(std::uint64_t)sessionId native:(NSData*)native {
     NSAssert(NSThread.isMainThread,@"Native OLE owner must be main thread");
     if([self applyBackground:sessionId native:native])return;
+    // New templates send a fully serialized ELCTX4 before DoVerb. Consume that
+    // independent candidate once; ELACT1 remains the older-template fallback.
+    NSDictionary* preCapture=EquationLabTakePreCapturedDocumentActivation();
+    BOOL preCaptureRejected=[preCapture[@"_preCaptureRejected"] boolValue];
+    NSDictionary* activationHint=preCaptureRejected?nil:(preCapture?preCapture:EquationLabTakeDocumentActivationAnchor());
+    BOOL preCaptured=activationHint&&[activationHint[@"_preCapturedActivation"] boolValue];
+    os_log_info(OS_LOG_DEFAULT,"WordHostCapture activation precaptured=%d rejected=%d anchored=%d",preCaptured,preCaptureRejected,activationHint!=nil);
     ProbeEditState* existing=self.edits[@(sessionId)];
     if(existing){
         existing.activation=++self.activation;
+        if(existing.request||existing.ticket){
+            existing.reopenRequested=YES;
+            if(existing.ticket&&!existing.request){existing.pollScheduled=NO;++existing.pollGeneration;[self poll:existing];}
+            return;
+        }
+        if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:existing code:InvalidReply];return;}
+        if(preCaptured){
+            NSMutableDictionary* context=[activationHint mutableCopy];[context removeObjectForKey:@"_preCapturedActivation"];
+            existing.documentContext=context;existing.preCapturedActivation=YES;existing.awaitingDocument=NO;existing.requiresDocumentCapture=NO;
+            existing.captureRequested=NO;if(self.captureRequest.state==existing)self.captureRequest=nil;
+            [self openState:existing];return;
+        }
         if(existing.awaitingDocument){
+            if(activationHint){
+                existing.activationBinding=activationHint;
+                existing.requiresDocumentCapture=YES;
+                existing.captureRequested=NO;
+                if(self.captureRequest.state==existing)self.captureRequest=nil;
+            }
             // Repeated verbs for this same retained owner share one pending
             // capture. They neither allocate another request nor invalidate a
             // WordOpenXML response that is already being produced for it.
@@ -417,17 +482,24 @@ static ProbeEditorTransport* transport=nil;
         return;
     }
     [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.started=CFAbsoluteTimeGetCurrent();logOpenPhase("verb",state.started);state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
-    // On macOS the OLE verb can arrive before Word's selection event. Allow
-    // that event to capture the live document before freezing the source binding.
-    state.requiresDocumentCapture=self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil;
-    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture?3:1];lastCaptureState=CapturePending;
+    if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+    state.activationBinding=activationHint;
+    state.preCapturedActivation=preCaptured;
+    if(preCaptured){
+        NSMutableDictionary* context=[activationHint mutableCopy];[context removeObjectForKey:@"_preCapturedActivation"];
+        state.documentContext=context;state.awaitingDocument=NO;state.requiresDocumentCapture=NO;lastCaptureState=CaptureReady;
+        logOpenPhase("precapture-ready",state.started);[self openState:state];return;
+    }
+    // ELACT1 is a legacy anchor only: it requests a fresh post-DoVerb ELCTX4.
+    state.requiresDocumentCapture=activationHint!=nil||self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil||inWord();
+    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture?10:1];lastCaptureState=CapturePending;
     __weak ProbeEditState* weak=state;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
         ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         // The isolated CLI launcher has no Word/VBA event source unless a
         // context was explicitly configured by its document-race tests.
-        if(self.launch&&!self.testDocumentContext&&!current.requiresDocumentCapture&&![self documentForOwner:current]){current.awaitingDocument=NO;[self openState:current];return;}
+        if(self.launch&&!inWord()&&!self.testDocumentContext&&!current.requiresDocumentCapture&&![self documentForOwner:current]){current.awaitingDocument=NO;[self openState:current];return;}
         [self documentReady];
     });
     [self scheduleCaptureDeadline:state];
@@ -443,6 +515,7 @@ static ProbeEditorTransport* transport=nil;
         if(!state.awaitingDocument||state.request)continue;
         if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);continue;}
         if(self.captureRequest.claimed&&self.captureRequest.state==state)continue;
+        if(state.requiresDocumentCapture){[self requestCapture:state];continue;}
         NSDictionary* owned=[self documentForOwner:state];NSDictionary* candidate=context;
         NSDictionary* anchor=self.ownerCaptureBindings[@(state.ownerIdentity)];
         if(anchor&&(![candidate[@"identity"] isEqual:anchor[@"identity"]]||![candidate[@"index"] isEqual:anchor[@"index"]]))candidate=nil;
@@ -503,7 +576,13 @@ static ProbeEditorTransport* transport=nil;
     if(![self active:state])return;
     if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);return;}
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
-    if(state.documentContext)body[@"document"]=state.documentContext;
+    if(state.documentContext){
+        // ELCTX4's one-shot token belongs to the Word/native handshake. The
+        // service accepts only its public document schema after that check.
+        NSMutableDictionary* document=[state.documentContext mutableCopy];
+        [document removeObjectForKey:@"captureToken"];
+        body[@"document"]=document;
+    }
     state.opening=YES;
     logOpenPhase("service-request",state.started);
     state.request=[self request:@"/api/native-open" body:body reply:^(NSDictionary* json,NSError* error){
@@ -512,6 +591,12 @@ static ProbeEditorTransport* transport=nil;
             if(![self active:current])return;
             if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
             if(connectionRefused(error)){if(!current.wakeAttempted)[self wake:current];else[self retryOpen:current];}
+            else if(current.preCapturedActivation){
+                // The service checks the opening Native SHA against this exact
+                // pre-DoVerb document. Never replace a rejected fast-path
+                // candidate with an unrelated post-DoVerb capture.
+                [self fail:current code:InvalidReply];
+            }
             else if(current.documentContext&&current.documentDeadline.timeIntervalSinceNow>0){
                 // A previous selection can still be in the capture slot when
                 // Word starts a new verb. The service rejects mismatched
@@ -541,9 +626,10 @@ static ProbeEditorTransport* transport=nil;
         // ownership until the App confirms a draft switch.
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         logOpenPhase("editor-launch",current.started);
-        if(self.launch){if(!self.launch([url UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
+        NSString* launchURL=editorLaunchURL(current);
+        if(self.launch){if(!self.launch([launchURL UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
         else {
-            launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=state;if(![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
+            launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:launchURL],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=state;if(![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
         }
     }];
 }
@@ -555,7 +641,7 @@ static ProbeEditorTransport* transport=nil;
         if(error){if(++current.failures<=3)[self schedule:current];else[self fail:current code:NetworkFailure];return;}current.failures=0;
         id status=json[@"state"];
         if([status isEqual:@"editing"]){
-            if(current.reopenRequested){current.reopenRequested=NO;NSString* url=[@"equationlab://word-edit/" stringByAppendingString:current.ticket];if(self.launch)self.launch(url.UTF8String,self.launchContext);else launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError*){});}
+            if(current.reopenRequested){current.reopenRequested=NO;NSString* url=editorLaunchURL(current);if(self.launch)self.launch(url.UTF8String,self.launchContext);else launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError*){});}
             [self schedule:current];return;
         }
         if([status isEqual:@"navigate"]){id index=json[@"index"];if(![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]){[self fail:current code:InvalidReply];return;}if(!current.reopenRequested)EquationLabSetNavigationTarget([index intValue]);bridge_probe::completeEdit(current.sessionId,nullptr,0,false,current.reopenRequested);return;}
@@ -605,6 +691,14 @@ static ProbeEditorTransport* transport=nil;
 }
 @end
 
+std::int32_t EquationLabQueueEditorTool(NSString* tool){
+    if(!NSThread.isMainThread||!transport||![@[@"typography",@"spacing",@"export"] containsObject:tool])return -1;
+    for(ProbeEditState* state in transport.edits.allValues){
+        if(!state.terminal&&state.activation==transport.activation){state.toolIntent=tool;return 0;}
+    }
+    return -3;
+}
+
 namespace bridge_probe {
 namespace {
 HResult openTransport(std::uint64_t id,const std::uint8_t* data,std::size_t size,void*){
@@ -619,10 +713,13 @@ void forgetTransportOwner(std::uint64_t id,void*){
     auto forget=^{if(id)[transport forgetOwner:id];else{documentCapturedAt=nil;[transport invalidateDocuments];}};
     if(NSThread.isMainThread)forget();else dispatch_async(dispatch_get_main_queue(),forget);
 }
-void writtenTransportOwner(std::uint64_t id,const std::uint8_t* data,std::size_t size,void*){
+void writtenTransportOwner(std::uint64_t id,const std::uint8_t*,std::size_t,void*){
     if(!NSThread.isMainThread)return;
-    NSDictionary* binding=transport.ownerCaptureBindings[@(id)];if(!binding)return;
-    [transport rememberCaptureOwner:id context:binding digest:nativeDigest([NSData dataWithBytes:data length:size])];
+    // Word may replace the OLE character during SaveObject, invalidating even
+    // duplicated VBA ranges. Updating the hash cannot make that old anchor
+    // fresh. A later activation must capture its exact current selection (or
+    // consume a new preactivation anchor) instead of retrying the written one.
+    [transport forgetOwner:id];
 }
 }
 HResult installEditorTransport(){
@@ -646,8 +743,19 @@ std::uint32_t editorTransportActive(){
 std::uint32_t editorTransportLastError(){return lastError.load();}
 }
 void EquationLabDocumentContextDidCapture(){documentCapturedAt=NSDate.date;if(transport){++transport.captureSerial;[transport documentReady];}}
+void EquationLabDocumentContextWillCapture(){documentCapturedAt=nil;}
 void EquationLabDocumentContextDidClearSelection(){documentCapturedAt=nil;}
-void EquationLabDocumentContextDidClear(){documentCapturedAt=nil;if(transport){[transport invalidateDocuments];[transport.ownerCaptureBindings removeAllObjects];[transport.ownerCaptureOrder removeAllObjects];for(ProbeEditState* state in transport.edits.allValues)if(state.awaitingDocument&&state.requiresDocumentCapture){lastCaptureState=CaptureSuperseded;[transport fail:state code:InvalidReply];}}}
+void EquationLabDocumentContextDidClear(){documentCapturedAt=nil;EquationLabClearDocumentActivationAnchor();if(transport){[transport invalidateDocuments];for(ProbeEditState* state in transport.edits.allValues)if(state.awaitingDocument&&state.requiresDocumentCapture&&state.activation==transport.activation)[transport requestCapture:state];}}
+void EquationLabDocumentContextDidCloseIdentity(std::int32_t identity){
+    if(!NSThread.isMainThread||identity<=0||!transport)return;
+    EquationLabClearDocumentActivationAnchor();
+    NSString* suffix=[NSString stringWithFormat:@":%d",identity];NSMutableArray<NSNumber*>* owners=[NSMutableArray array];
+    for(NSNumber* owner in transport.ownerCaptureBindings){if([transport.ownerCaptureBindings[owner][@"identity"] hasSuffix:suffix])[owners addObject:owner];}
+    NSMutableArray<ProbeEditState*>* pending=[NSMutableArray array];
+    for(ProbeEditState* state in transport.edits.allValues)if(state.awaitingDocument&&[owners containsObject:@(state.ownerIdentity)])[pending addObject:state];
+    for(ProbeEditState* state in pending){lastCaptureState=CaptureSuperseded;[transport fail:state code:InvalidReply];}
+    for(NSNumber* owner in owners)[transport forgetOwner:owner.unsignedLongLongValue];
+}
 extern "C" __attribute__((visibility("default")))
 bridge_probe::HResult MathTypeBridgeInstallTransportForTesting(std::uint16_t port,bridge_probe::LaunchEditorUrl launch,void* context,std::uint32_t interval){return bridge_probe::installEditorTransportForTesting(port,launch,context,interval);}
 extern "C" __attribute__((visibility("default")))
@@ -665,7 +773,7 @@ std::uint32_t MathTypeBridgeDocumentCaptureAllowed(){
 // VBA uses integer commands only. Take is one-shot and never claims inside
 // SaveObject; getters refer exclusively to that same latest activation.
 extern "C" __attribute__((visibility("default")))
-std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(transport.ownerCaptureBindings.count||transport.edits.count)?1:0;}
+std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(transport.ownerCaptureBindings.count||transport.edits.count||transport.backgroundSave||EquationLabPreCapturedActivationIsPending()||EquationLabActivationAnchorIsPending())?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeTakeDocumentCaptureRequest(){return NSThread.isMainThread?[transport takeCaptureRequest]:0;}
 extern "C" __attribute__((visibility("default")))
@@ -673,7 +781,13 @@ std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return NSThread.isMainT
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureSnapshot(){return NSThread.isMainThread&&transport.captureRequest.claimed?[transport.captureRequest.binding[@"snapshot"] intValue]:0;}
 extern "C" __attribute__((visibility("default")))
-std::int32_t MathTypeBridgeDocumentCaptureIndex(){return NSThread.isMainThread&&transport.captureRequest.claimed?[transport.captureRequest.binding[@"index"] intValue]+1:0;}
+std::int32_t MathTypeBridgeDocumentCaptureIndex(){
+    // VBA uses zero for an unbound request, and one-based indices only when
+    // a retained Document+Range is present. Messaging nil returns zero;
+    // adding one before checking the binding would fabricate formula 1.
+    return NSThread.isMainThread&&transport.captureRequest.claimed&&transport.captureRequest.binding
+        ?[transport.captureRequest.binding[@"index"] intValue]+1:0;
+}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureIdentity(){return NSThread.isMainThread&&transport.captureRequest.claimed?[[transport.captureRequest.binding[@"identity"] componentsSeparatedByString:@":"].lastObject intValue]:0;}
 extern "C" __attribute__((visibility("default")))
@@ -699,6 +813,15 @@ bridge_probe::HResult MathTypeBridgeSetTransportDocumentForTesting(const char* j
     NSData* bytes=[[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];id context=[NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
     if(![context isKindOfClass:NSDictionary.class])return bridge_probe::InvalidArgument;transport.testDocumentContext=context;EquationLabDocumentContextDidCapture();return bridge_probe::Ok;
 }
+extern "C" __attribute__((visibility("default")))
+bridge_probe::HResult MathTypeBridgeArmDocumentActivationForTesting(const char* json){
+    if(inWord()||!NSThread.isMainThread||!transport.launch||!json)return bridge_probe::InvalidArgument;
+    NSData* bytes=[[NSString stringWithUTF8String:json] dataUsingEncoding:NSUTF8StringEncoding];id context=[NSJSONSerialization JSONObjectWithData:bytes options:0 error:nil];
+    if(![context isKindOfClass:NSDictionary.class]||!EquationLabArmDocumentActivationAnchor(context))return bridge_probe::InvalidArgument;
+    return bridge_probe::Ok;
+}
+extern "C" __attribute__((visibility("default")))
+std::uint32_t MathTypeBridgeActivationAnchorPendingForTesting(){return !inWord()&&NSThread.isMainThread?EquationLabActivationAnchorIsPending():0;}
 extern "C" __attribute__((visibility("default")))
 std::uint64_t MathTypeBridgeLastOwnerIdentityForTesting(){return inWord()?0:transport.lastOwnerIdentity;}
 extern "C" __attribute__((visibility("default")))

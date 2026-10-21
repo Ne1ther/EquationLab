@@ -115,7 +115,7 @@ class EquationObject final:public OleObject,public PersistStorage,public DataObj
     Ref<Storage> source_,backup_;Ref<OleClientSite> client_;Ref<AdviseSink> viewSink_;
     std::map<std::uint32_t,Connection> oleSinks_,dataSinks_;
     std::vector<std::uint8_t> native_,pdf_;
-    SizeL extent_{2540,1270};bool dirty_=false,noScribble_=false,loaded_=false,closed_=false;
+    SizeL extent_{2540,1270};bool dirty_=false,noScribble_=false,loaded_=false,closed_=false,editorWindowOpen_=false;
     std::uint32_t nextCookie_=1,viewAspect_=1,viewFlags_=0;
     std::uint64_t session_=0;
     const std::uint64_t identity_=nextSession++;
@@ -123,6 +123,13 @@ class EquationObject final:public OleObject,public PersistStorage,public DataObj
     void gauges(){record(Metric::ClientPresent,client_?1:0);record(Metric::SourceStorage,source_?1:0);record(Metric::Dirty,dirty_);record(Metric::NoScribble,noScribble_);record(Metric::DataSinks,static_cast<std::int32_t>(dataSinks_.size()));record(Metric::OleSinks,static_cast<std::int32_t>(oleSinks_.size()));record(Metric::ViewSink,viewSink_?1:0);}
     template<class F>HResult measured(Metric calls,Metric result,F&& action){increment(calls);auto hr=action();record(result,hr);if(correctThread())gauges();return hr;}
     HResult requestSave(){auto site=client_;if(!site)return NoConnection;auto before=current(Metric::PersistSaveCalls);increment(Metric::SaveObjectCalls);auto hr=site->SaveObject();record(Metric::SaveObjectResult,hr);if(hr>=0&&current(Metric::PersistSaveCalls)==before)increment(Metric::SaveObjectWithoutPersistSave);gauges();return hr;}
+    void reportEditorWindow(bool open){
+        if(editorWindowOpen_==open)return;
+        editorWindowOpen_=open;
+        // Word owns out-of-place OLE selection/shading. A synchronous
+        // background save finishes inside DoVerb and never opens a window.
+        auto site=client_;if(site)site->OnShowWindow(open?1:0);
+    }
     HResult snapshot(Storage* target){
         return measured(Metric::SnapshotCalls,Metric::SnapshotResult,[&]() -> HResult {
         if(!target)return PointerError;
@@ -178,7 +185,7 @@ public:
     HResult Save(Storage* storage,std::int32_t same)override{return measured(Metric::PersistSaveCalls,Metric::PersistSaveResult,[&]() -> HResult {record(Metric::SameAsLoad,same);if(noScribble_)return Unexpected;auto hr=snapshot(storage);if(hr==Ok)noScribble_=true;return hr;});}
     HResult SaveCompleted(Storage* storage)override{return measured(Metric::SaveCompletedCalls,Metric::SaveCompletedResult,[&]() -> HResult {if(!noScribble_&&source_)increment(Metric::SaveCompletedWithoutSave);if(storage)source_=Ref<Storage>(storage);noScribble_=false;dirty_=false;auto sinks=oleSinks_;for(auto& [cookie,c]:sinks){(void)cookie;increment(Metric::SaveNotifications);c.sink->OnSave();}return Ok;});}
     HResult HandsOffStorage()override{source_={};gauges();return Ok;}
-    HResult SetClientSite(OleClientSite* site)override{increment(Metric::SetClientSiteCalls);client_=Ref<OleClientSite>(site);gauges();return Ok;}
+    HResult SetClientSite(OleClientSite* site)override{increment(Metric::SetClientSiteCalls);if(client_.get()!=site)reportEditorWindow(false);client_=Ref<OleClientSite>(site);gauges();return Ok;}
     HResult GetClientSite(OleClientSite** site)override{if(!site)return PointerError;*site=client_.get();if(*site)(*site)->AddRef();return Ok;}
     HResult SetHostNames(const OleChar*,const OleChar*)override{return Ok;}
     HResult Close(std::uint32_t mode)override{
@@ -187,6 +194,7 @@ public:
         if(closed_)return Ok;
         if(mode!=1&&dirty_&&client_){auto hr=requestSave();if(hr<0)return hr;}
         if(session_)completeEdit(session_,nullptr,0,false);
+        reportEditorWindow(false);
         if(forgetEditorOwner)forgetEditorOwner(identity_,editorContext);
         notifyData(true);
         auto sinks=oleSinks_;oleSinks_.clear();dataSinks_.clear();viewSink_={};client_={};source_={};closed_=true;
@@ -203,10 +211,10 @@ public:
         if(site)SetClientSite(site);if(closed_)closed_=false;
         // An external editor may be behind Word or hidden. Re-activation must
         // bring that SAME session back, without allocating another OLE owner.
-        if(session_)return openEditor(session_,native_.data(),native_.size(),editorContext);
+        if(session_){auto id=session_;auto hr=openEditor(id,native_.data(),native_.size(),editorContext);if(hr>=0&&session_==id)reportEditorWindow(true);return hr;}
         session_=nextSession++;AddRef();{std::lock_guard lock(sessionMutex);sessions[session_]=this;}
         auto id=session_;auto hr=openEditor(id,native_.data(),native_.size(),editorContext);
-        if(hr<0)completeEdit(id,nullptr,0,false);return hr;});
+        if(hr<0)completeEdit(id,nullptr,0,false);else if(session_==id)reportEditorWindow(true);return hr;});
     }
     HResult EnumVerbs(EnumOleVerb** out)override{if(!out)return PointerError;*out=new VerbEnumerator(api_);return Ok;}
     HResult Update()override{return Ok;}HResult IsUpToDate()override{return Ok;}
@@ -252,7 +260,7 @@ public:
     HResult finish(std::uint64_t id,const std::uint8_t* data,std::size_t size,bool apply){return measured(apply?Metric::ApplyCalls:Metric::CancelCalls,apply?Metric::ApplyResult:Metric::CancelResult,[&]() -> HResult {
         if(!correctThread())return WrongThread;if(id!=session_)return NoConnection;
         if(apply){if(noScribble_||closed_)return Unexpected;if(!validNative(data,size))return StorageHeaderError;native_.assign(data,data+size);dirty_=true;increment(Metric::EditGeneration);if(forgetEditorOwner)forgetEditorOwner(0,editorContext);if(editorOwnerWritten)editorOwnerWritten(identity_,native_.data(),native_.size(),editorContext);notifyData();notifyView();if(client_){auto hr=requestSave();if(hr<0)return hr;}}
-        session_=0;return Ok;});
+        session_=0;reportEditorWindow(false);return Ok;});
     }
     HResult preview(const std::uint8_t* data,std::size_t size,SizeL extent){return measured(Metric::PreviewCalls,Metric::PreviewResult,[&]() -> HResult {if(!correctThread())return WrongThread;if(noScribble_||closed_)return Unexpected;if(!data||!size||size>MaxBytes||extent.width<=0||extent.height<=0)return InvalidArgument;pdf_.assign(data,data+size);extent_=extent;return Ok;});}
 };

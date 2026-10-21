@@ -12,10 +12,14 @@ Option Explicit
 Public WithEvents Host As Word.Application
 
 Private Sub Host_WindowSelectionChange(ByVal Sel As Selection)
-    ' Opening an already selected OLE object need not emit another selection
-    ' or double-click callback. Keep this exact selection for its activation.
     EquationLabDocumentContext.ELObserveDocument Sel.Document
-    EquationLabDocumentContext.ELCaptureSelection Sel, False
+    If EquationLabNativeCommand("MathTypeBridgeTransportActive") = 0 Then
+        ' Capture an exact OLE selection before Word enters its native verb.
+        EquationLabDocumentContext.ELCaptureSelection Sel, True
+    Else
+        ' While an editor is active, keep the existing lightweight selection path.
+        EquationLabDocumentContext.ELCaptureSelection Sel
+    End If
 End Sub
 
 Private Sub Host_WindowActivate(ByVal Doc As Document, ByVal Wn As Window)
@@ -37,5 +41,10 @@ End Sub
 
 Private Sub Host_WindowBeforeDoubleClick(ByVal Sel As Selection, Cancel As Boolean)
     ' Leave Word's normal OLE activation intact.
-    EquationLabDocumentContext.ELCaptureSelection Sel
+    ' Arm one exact Doc+Range for the immediately following DoVerb. Native
+    ' consumes it once, then asks VBA for a fresh ELCTX4 full-document capture.
+    EquationLabDocumentContext.ELCaptureSelection Sel, True
+    ' Word may publish the exact OLE selection only after this callback. Keep
+    ' the OnTime poll alive so a newly created native request gets serviced.
+    EquationLabDocumentContext.ELQueueNativeSessionWatch
 End Sub

@@ -94,27 +94,8 @@ End Sub
 Private Sub InsertEquation(ByVal kind As String)
     RequireDocument
     If Selection.Start <> Selection.End Then Err.Raise vbObjectError + 7346, "Equation Lab", "Please place an empty cursor where the equation should be inserted."
-    Dim start As Long, original As String, target As Range, equation As InlineShape, beforeLength As Long, insertedEnd As Long
-    start = Selection.Start
-    Set target = Selection.Range.Duplicate
-    original = target.Text
     ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", Preference("EquationLabNumberFormat", "(#E1)") & vbLf & Preference("EquationLabChapter", "1") & vbLf & Preference("EquationLabSection", "1") & vbLf & CStr(NextNumber()) & vbLf
-    NativeTool kind
-    If Selection.Start <> start Or Selection.End <> start Or target.Text <> original Then Err.Raise vbObjectError + 7347, "Equation Lab", "The document cursor changed; no equation was inserted."
-    beforeLength = ActiveDocument.Content.End
-    target.InsertFile FileName:=WorkDirectory() & "ribbon-insert.docx", ConfirmConversions:=False, Link:=False, Attachment:=False
-    insertedEnd = start + ActiveDocument.Content.End - beforeLength
-    For Each equation In ActiveDocument.InlineShapes
-        If equation.Range.Start >= start And equation.Range.Start < insertedEnd Then
-            If IsEquation(equation) Then
-                equation.Range.Select
-                ELCaptureEquation equation
-                equation.OLEFormat.Activate
-                Exit Sub
-            End If
-        End If
-    Next
-    Err.Raise vbObjectError + 7348, "Equation Lab", "The inserted equation could not be selected. Use Browse Equations to select it."
+    EquationLabDocumentContext.ELBeginEquationInsertion kind
 End Sub
 
 Private Function IsEquation(ByVal equation As InlineShape) As Boolean
@@ -132,7 +113,7 @@ Private Sub EditEquation()
     If equations.count = 0 Then Set equations = Selection.Paragraphs(1).Range.InlineShapes
     If equations.count <> 1 Then Err.Raise vbObjectError + 7349, "Equation Lab", "Select one MathType equation, or place the cursor in its own paragraph."
     If Not IsEquation(equations(1)) Then Err.Raise vbObjectError + 7350, "Equation Lab", "The selected object is not a MathType equation."
-    ELCaptureEquation equations(1)
+    ELCaptureEquation equations(1), False, True, 0, True
     equations(1).OLEFormat.Activate
 End Sub
 
@@ -152,7 +133,7 @@ Private Sub OpenDocumentEditor()
         Exit Sub
     End If
     ELInvalidateDocumentSnapshot
-    ELCaptureEquation chosen
+    ELCaptureEquation chosen, False, True, 0, True
     chosen.OLEFormat.Activate
 End Sub
 

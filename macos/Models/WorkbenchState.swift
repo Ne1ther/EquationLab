@@ -100,6 +100,7 @@ struct WorkbenchState: Decodable {
     var messageError = false
     var valid = false
     var canExport = false
+    var wordOutcomeUnknown = false
     var busy = false
     var mode = "rebuild"
     var readOnly = false
@@ -140,6 +141,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("messageError", Bool.self) { messageError = v }
         if let v = try value("valid", Bool.self) { valid = v }
         if let v = try value("canExport", Bool.self) { canExport = v }
+        if let v = try value("wordOutcomeUnknown", Bool.self) { wordOutcomeUnknown = v }
         if let v = try value("busy", Bool.self) { busy = v }
         if let v = try value("mode", String.self) { mode = v }
         if let v = try value("readOnly", Bool.self) { readOnly = v }

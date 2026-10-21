@@ -38,6 +38,12 @@
     syncRail();
    });
   }
+  // WebKit can pause its process while the retained native window is hidden.
+  // Re-measure after the page or app becomes visible again; this only updates
+  // display sizing and the scrollbar, never the MathLive value or selection.
+  window.addEventListener('pageshow',refresh);
+  window.addEventListener('resize',refresh);
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
   new ResizeObserver(refresh).observe(wrap);
   // MathLive can render after the host's input event/animation frame. Measure
   // its completed content too, without polling or observing caret animation.

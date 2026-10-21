@@ -262,7 +262,7 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         "跟随系统":"System", "界面语言":"Interface language", "新建公式":"New equation", "Word 中的公式":"Equation in Word", "Word 原生公式":"Native Word equation",
         "搜索命令":"Search commands", "搜索命令…":"Search commands…", "搜索命令、符号或模板":"Search commands, symbols or templates", "搜索现有命令、符号与模板 (⌘K)":"Search commands, symbols and templates (⌘K)",
         "Office 插件":"Office add-in", "Word 插件":"Word add-in", "安装或管理 Microsoft Word 插件":"Install or manage the Microsoft Word add-in", "撤销":"Undo", "重做":"Redo", "取消":"Cancel", "完成":"Done", "好":"OK",
-        "保存并返回 Word":"Save to Word", "另存副本":"Save a copy", "导出 Word":"Export to Word", "检查器":"Inspector", "显示或隐藏格式检查器":"Show or hide inspector", "隐藏检查器":"Hide inspector",
+        "保存并返回 Word":"Save to Word", "完成并插入":"Finish and insert", "更新公式":"Update equation", "另存副本":"Save a copy", "导出 Word":"Export to Word", "检查器":"Inspector", "显示或隐藏格式检查器":"Show or hide inspector", "隐藏检查器":"Hide inspector",
         "原版预设":"Presets", "原版默认与预设":"Defaults and presets", "恢复 MathType 默认":"Restore MathType defaults", "恢复此公式原始设置":"Restore equation settings", "设为新公式默认":"Use for new equations",
         "样式":"Style", "排版":"Layout", "文档":"Document", "字体与样式":"Font and style", "字体名称":"Font family", "字体预览":"Font sample", "选择字体或输入名称搜索":"Choose a font or type to search", "正体":"Regular", "粗体":"Bold", "斜体":"Italic", "粗斜体":"Bold italic",
         "每类字体与字形写入原生公式设置。":"Font roles and styles are saved in the native equation.", "标准字号":"Type sizes", "额外字号":"Additional sizes", "定义间距…":"Define spacing…", "矩阵与多行模板":"Matrices and multiline", "Word 位置与编号":"Word placement and numbering",

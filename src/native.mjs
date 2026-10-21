@@ -62,7 +62,7 @@ export class MtefReader {
       if (n.options & ~mask) throw Error(`Unknown MTEF options ${n.options} for record ${type}`);
       this.nudge(n.options);
       if (type === 1) {
-        if (n.options & 4) n.lineSpacing = this.word();
+        if (n.options & 4) { n.lineSpacing = this.word(); if (n.lineSpacing >= 32768) n.lineSpacing -= 65536; }
         if (n.options & 2) n.ruler = this.record(depth + 1);
         n.children = n.options & 1 ? [] : this.list(depth + 1);
       } else if (type === 2) {
@@ -128,7 +128,7 @@ export function wrapNative(native, sourceOle) {
 const glyphs = {
  alpha:'α',beta:'β',gamma:'γ',delta:'δ',epsilon:'ϵ',varepsilon:'ε',zeta:'ζ',eta:'η',theta:'θ',vartheta:'ϑ',iota:'ι',kappa:'κ',varkappa:'ϰ',lambda:'λ',mu:'μ',nu:'ν',xi:'ξ',omicron:'ο',pi:'π',varpi:'ϖ',rho:'ρ',varrho:'ϱ',sigma:'σ',varsigma:'ς',tau:'τ',upsilon:'υ',phi:'ϕ',varphi:'φ',chi:'χ',psi:'ψ',omega:'ω',
  Gamma:'Γ',Delta:'Δ',Theta:'Θ',Lambda:'Λ',Xi:'Ξ',Pi:'Π',Sigma:'Σ',Upsilon:'Υ',Phi:'Φ',Psi:'Ψ',Omega:'Ω',
- times:'×',cdot:'⋅',div:'÷',pm:'±',mp:'∓',le:'≤',leq:'≤',ge:'≥',geq:'≥',ne:'≠',neq:'≠',approx:'≈',equiv:'≡',sim:'∼',simeq:'≃',propto:'∝',ll:'≪',gg:'≫',infty:'∞',partial:'∂',nabla:'∇',ell:'ℓ',hbar:'ℏ',Re:'ℜ',Im:'ℑ',emptyset:'∅',varnothing:'∅',forall:'∀',exists:'∃',nexists:'∄',in:'∈',notin:'∉',ni:'∋',subset:'⊂',supset:'⊃',subseteq:'⊆',supseteq:'⊇',cup:'∪',cap:'∩',setminus:'∖',land:'∧',lor:'∨',neg:'¬',lnot:'¬',oplus:'⊕',otimes:'⊗',odot:'⊙',circ:'∘',bullet:'•',star:'⋆',ast:'∗',perp:'⊥',parallel:'∥',angle:'∠',triangle:'△',square:'□',therefore:'∴',because:'∵',to:'→',rightarrow:'→',leftarrow:'←',leftrightarrow:'↔',Rightarrow:'⇒',Leftarrow:'⇐',Leftrightarrow:'⇔',mapsto:'↦',uparrow:'↑',downarrow:'↓',updownarrow:'↕',ldots:'…',cdots:'⋯',vdots:'⋮',ddots:'⋱',prime:'′',degree:'°',colon:':',langle:'⟨',rangle:'⟩',lfloor:'⌊',rfloor:'⌋',lceil:'⌈',rceil:'⌉',lbrace:'{',rbrace:'}',vert:'|',lvert:'|',rvert:'|',Vert:'‖',lVert:'‖',rVert:'‖',backslash:'\\'
+  times:'×',cdot:'⋅',div:'÷',pm:'±',mp:'∓',le:'≤',leq:'≤',ge:'≥',geq:'≥',ne:'≠',neq:'≠',approx:'≈',equiv:'≡',sim:'∼',simeq:'≃',propto:'∝',ll:'≪',gg:'≫',infty:'∞',partial:'∂',nabla:'∇',ell:'ℓ',hbar:'ℏ',Re:'ℜ',Im:'ℑ',emptyset:'∅',varnothing:'∅',forall:'∀',exists:'∃',nexists:'∄',in:'∈',notin:'∉',ni:'∋',subset:'⊂',supset:'⊃',subseteq:'⊆',supseteq:'⊇',cup:'∪',cap:'∩',setminus:'∖',land:'∧',lor:'∨',neg:'¬',lnot:'¬',oplus:'⊕',otimes:'⊗',odot:'⊙',circ:'∘',bullet:'•',star:'⋆',ast:'∗',perp:'⊥',parallel:'∥',angle:'∠',triangle:'△',square:'□',therefore:'∴',because:'∵',to:'→',rightarrow:'→',leftarrow:'←',leftrightarrow:'↔',Rightarrow:'⇒',Leftarrow:'⇐',Leftrightarrow:'⇔',mapsto:'↦',uparrow:'↑',downarrow:'↓',updownarrow:'↕',dots:'…',ldots:'…',cdots:'⋯',vdots:'⋮',ddots:'⋱',prime:'′',degree:'°',colon:':',langle:'⟨',rangle:'⟩',lfloor:'⌊',rfloor:'⌋',lceil:'⌈',rceil:'⌉',lbrace:'{',rbrace:'}',vert:'|',lvert:'|',rvert:'|',Vert:'‖',lVert:'‖',rVert:'‖',backslash:'\\'
 };
 const originalNativeGlyphs=new Set(Object.values(glyphs));
 Object.assign(glyphs,{
@@ -194,6 +194,18 @@ export function latexAst(input) {
       if(c==='\\'){const next=text[p++];if(next===undefined||!/[{}%$#&_\\ ]/.test(next))throw Error('Unsupported command inside text argument');s+=next;}else s+=c;}
     throw Error('Unclosed text group');
   }
+  function parseRowSpacing(){
+    if(text[p]!=='[')return undefined;
+    const end=text.indexOf(']',p+1);if(end<0)throw Error('Unclosed matrix row spacing');
+    const raw=text.slice(p+1,end).trim(),match=/^([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(pt|bp|pc|in|cm|mm|dd|cc|sp)$/i.exec(raw);
+    if(!match)throw Error('Matrix row spacing requires an absolute TeX dimension');
+    // Equation Native dimensions use PostScript points (1/72 inch), while TeX
+    // pt is 1/72.27 inch. Keep TeX's physical units exact before quantizing to
+    // MTEF's signed 1/32 point LINE field.
+    const texPoint=72/72.27,points=Number(match[1])*({pt:texPoint,bp:1,pc:12*texPoint,in:72,cm:72/2.54,mm:72/25.4,dd:1.07*texPoint,cc:12*1.07*texPoint,sp:texPoint/65536}[match[2].toLowerCase()]);
+    const value=Math.round(points*32);if(!Number.isFinite(points)||value < -32768||value>32767)throw Error('Matrix row spacing exceeds the MTEF range');
+    p=end+1;return value;
+  }
   function delimiter(){
     white();const command=text[p]==='\\';let d=command?control():text[p++];if(command&&d==='|')d='‖';
     if(glyphs[d])d=glyphs[d];if(d==='|')d='|';if(d==='.')return '.';
@@ -205,16 +217,17 @@ export function latexAst(input) {
     if(!supported.has(env))throw Error(`Unsupported LaTeX environment ${env}`);
     const columnSpec=env==='array'?textGroup():null,columns=columnSpec?.replace(/\|/g,'');
     if(columnSpec&&(!/^[lcr|]+$/.test(columnSpec)||!(/^(l+|c+|r+)$/.test(columns))||columnSpec.includes('||')))throw Error('Only uniformly aligned arrays with single solid partition lines are supported');
-    const rows=[],rowRules=[];let row=[];
+    const rows=[],rowRules=[],rowSpacings=[];let row=[];
     while(true){white();if(!row.length&&text.startsWith('\\hline',p)&&!/[A-Za-z]/.test(text[p+6]||'')){control();if(rowRules[rows.length])throw Error('Repeated horizontal rules are unsupported');rowRules[rows.length]=1;white();if(text.startsWith('\\end',p)){control();if(textGroup()!==inputEnv)throw Error(`Mismatched environment ${inputEnv}`);break;}}
       row.push(seq(null,{env,cell:true}));white();
       if(text[p]==='&'){p++;continue;}
-      if(text.startsWith('\\\\',p)){p+=2;rows.push(row);row=[];white();if(text[p]==='[')throw Error('Custom matrix row spacing is unsupported');continue;}
+      if(text.startsWith('\\\\',p)){p+=2;white();const spacing=parseRowSpacing();rows.push(row);if(spacing!==undefined)rowSpacings[rows.length-1]=spacing;row=[];continue;}
       if(text.startsWith('\\end',p)&&!/[A-Za-z]/.test(text[p+4]||'')){control();if(textGroup()!==inputEnv)throw Error(`Mismatched environment ${inputEnv}`);if(row.length>1||!emptyNode(row[0])||!rows.length)rows.push(row);break;}
       throw Error(`Unclosed environment ${env}`);
     }
     const cols=Math.max(...rows.map(r=>r.length));
     if(rows.length>31||cols>31)throw Error('MathType matrices support at most 31 rows and 31 columns');
+    if(rowSpacings.some(value=>value!==0)&&!['cases','gathered'].includes(env))throw Error('Custom row spacing is currently supported only for cases and gathered piles');
     if(env==='cases'&&cols!==2)throw Error('Cases require exactly two columns');
     if(env==='aligned'&&cols!==2)throw Error('Aligned equations support one relation alignment point per row');
     if(columns&&columns.length!==cols)throw Error('Array column declaration does not match its cells');
@@ -223,7 +236,7 @@ export function latexAst(input) {
     // aligned/cases permit omitted trailing cells; preserve these as empty slots.
     for(const r of rows)while(r.length<cols)r.push(seqNode([]));
     const colRules=[];if(columnSpec){let c=0;for(const ch of columnSpec){if(ch==='|')colRules[c]=1;else c++;}}
-    return {kind:'matrix',env,rows,cols,columns,rowRules,colRules};
+    return {kind:'matrix',env,rows,cols,columns,rowRules,colRules,rowSpacing:rowSpacings};
   }
   function atom(){
     white();const c=text[p++];if(c===undefined)throw Error('Missing formula operand');
@@ -231,6 +244,18 @@ export function latexAst(input) {
     if(c==='\\'){
       p--;const command=control();
       if(command==='eltab')return {kind:'char',value:'\t'};
+      if(command==='displaystyle')return {kind:'mathstyle',style:'display'};
+      if(command==='elrows'){
+        const raw=textGroup(),values=raw===''?[]:raw.split(',').map(Number),body=group();let matrix=body;
+        while(matrix?.kind==='seq'&&matrix.items.length===1)matrix=matrix.items[0];
+        if(!values.every(v=>Number.isInteger(v)&&v>=-32768&&v<=32767)||matrix?.kind!=='matrix'||matrix.env!=='gathered'||values.length!==Math.max(0,matrix.rows.length-1))throw Error('Invalid native pile row spacing');
+        matrix.rowSpacing=values;return body;
+      }
+      if(command==='elruler'){
+        const rawPositions=textGroup(),rawTypes=textGroup(),rawCount=textGroup(),positions=rawPositions===''?[]:rawPositions.split(',').map(Number),types=rawTypes===''?[]:rawTypes.split(',').map(Number),count=Number(rawCount);
+        if(!Number.isInteger(count)||count<1||count>256||positions.length!==types.length||positions.length>255||positions.some((v,i)=>!Number.isInteger(v)||v<0||v>32767||i&&v<=positions[i-1])||types.some(v=>!Number.isInteger(v)||v<0||v>4))throw Error('Invalid native ruler row');
+        const parts=Array.from({length:count},()=>group());return {kind:'tabbedRow',parts,ruler:positions.map((position,i)=>({position,type:types[i]}))};
+      }
       if(embellishmentMacroIds.has(command))return {kind:'accent',body:group(),embellishment:embellishmentMacroIds.get(command)};
       if(command==='mtjstat')return {kind:'wideaccent',command:'mtjstat',body:group()};
       if(command==='mtdoublearrow'){
@@ -330,13 +355,19 @@ export function latexAst(input) {
     return sub||sup?{kind:'script',base:n,sub,sup}:n;
   }
   function bindOperators(items){
-    const out=[];
+    const out=[];let displayStyle=false;
     for(let i=0;i<items.length;i++){
       let n=items[i];
+      if(n.kind==='mathstyle'){displayStyle=n.style==='display';continue;}
+      if(displayStyle)n={...n,displayStyle:true};
       if(n.kind==='bigop'){
         const body=[];let j=i+1;
-        for(;j<items.length;j++){const x=items[j];if(x.kind==='char'&&/[+\-=,;<>]/.test(x.value)||x.kind==='char'&&['≤','≥','≠','≈','∈'].includes(x.value))break;body.push(x);}
-        n={...n,body:seqNode(bindOperators(body))};i=j-1;
+        for(;j<items.length;j++){
+          const x=items[j],space=x.kind==='seq'&&x.items.length>0&&x.items.every(c=>c.kind==='char'&&/^\s$/u.test(c.value));
+          if(space&&items[j+1]?.kind==='text')break;
+          if(x.kind==='char'&&/[+\-=,;<>]/.test(x.value)||x.kind==='char'&&['≤','≥','≠','≈','∈'].includes(x.value))break;body.push(x);
+        }
+        n={...n,displayStyle:n.displayStyle||displayStyle,body:seqNode(bindOperators(body))};i=j-1;
       }
       out.push(n);
     }
@@ -360,6 +391,7 @@ export function latexAst(input) {
 
 const uintRecord=n=>n<255?Buffer.from([n]):cat([255],u16(n));
 const signedRecord=n=>n>=-128&&n<127?Buffer.from([n+128]):cat([255],u16(n+32768));
+const signedWord=n=>{const b=Buffer.alloc(2);b.writeInt16LE(n);return b;};
 function charRecord(value,{typeface,options=0,embellishments=[]}={}){
   let code=value.codePointAt(0);if([...value].length!==1||code>65535||code===0)throw Error('Unsupported native character');
   if(code===9)return cat([2,4],signedRecord(23),u16(9),[9]);
@@ -371,16 +403,45 @@ function charRecord(value,{typeface,options=0,embellishments=[]}={}){
 const inheritedSize=ctx=>10+(ctx.logicalSize??0);
 const scriptSize=ctx=>10+([1,2,2,4,4,5,6][ctx.logicalSize??0]??1);
 function slot(node,ctx,size=inheritedSize(ctx),style){return emptyNode(node)?Buffer.from([1,1]):cat([size,1,0],emit(node,{...ctx,logicalSize:size-10},style),[0]);}
+function rulerRecord(tabs){return cat([7,tabs.length],...tabs.map(({position,type})=>cat([type],u16(position))));}
+function pileLine(node,ctx,style,lineSpacing=0){
+  const empty=emptyNode(node),options=(empty?1:0)|(lineSpacing?4:0),line=cat([1,options],...(lineSpacing?[signedWord(lineSpacing)]:[]),...(empty?[]:[emit(node,{...ctx,logicalSize:ctx.logicalSize??0},style),[0]]));
+  return cat([inheritedSize(ctx)],line);
+}
+function pileRecord(rows,ctx,style,{rowSpacing=[],ruler=[]}={}){
+  const hasRuler=!!ruler.length,lines=rows.map((row,index)=>pileLine(row,ctx,style,index?rowSpacing[index-1]??0:0));
+  return cat([4,hasRuler?2:0,2,4],...(hasRuler?[rulerRecord(ruler)]:[]),...lines,[0]);
+}
+function tabbedPileRows(n){
+  let ruler=null;
+  const rows=n.rows.map(([cell])=>{
+    const candidate=cell?.kind==='seq'&&cell.items.length===1&&cell.items[0].kind==='tabbedRow'?cell.items[0]:null;
+    if(!candidate)return cell;
+    if(ruler&&JSON.stringify(ruler)!==JSON.stringify(candidate.ruler))throw Error('Native pile rows use different rulers');
+    ruler=candidate.ruler;
+    const items=[];for(const [i,part]of candidate.parts.entries()){if(i)items.push({kind:'char',value:'\t'});items.push(...(part.kind==='seq'?part.items:[part]));}
+    return seqNode(items);
+  });
+  return {rows,ruler:ruler??[]};
+}
+function caseRuler(ctx){return [{position:Math.min(32767,Math.max(1,Math.round((ctx.fullPointSize??12)*2*32))),type:0}];}
 function tmpl(selector,slots,variation=0,options=0){
   if(variation&0x80)throw Error('Unsupported template variation bit 0x80');
   const variationBytes=variation>127?[128|(variation&127),variation>>8]:[variation];
   return cat([3,0,selector],variationBytes,[options],...slots,[0]);
 }
+function nativePointSize(d){
+  if(!Array.isArray(d)||d.length<2)return undefined;
+  const raw=d.slice(1).map(n=>n<10?String(n):n===10?'.':n===11?'-':null).join('');if(!/^(?:\d+(?:\.\d*)?|\.\d+)$/.test(raw))return undefined;
+  const factor={0:72,1:72/2.54,2:1,3:12}[d[0]],value=Number(raw)*factor;
+  return Number.isFinite(value)&&value>0&&value<=512?value:undefined;
+}
 function sourceContext(parsed){
   const fonts=[],styles=[],preferenceStyles=[];
   for(const n of parsed.records){if(n.type===17)fonts.push(n);if(n.type===8)styles.push(n);if(n.type===18)preferenceStyles.splice(0,preferenceStyles.length,...n.styles);}
   const extras=[];
-  return {fonts,styles,preferenceStyles,extras,explicit(style,value){
+  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;
+  return {fonts,styles,preferenceStyles,extras,fullPointSize,explicit(style,value){
     if(typeof style==='string')style=combineStyle(null,style);
     const symbolic=!/^[\x20-\x7e]$/.test(value)&&!reverseSpaces[value];
     let family=style.family==='math'?'STIX Two Math':style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman';
@@ -409,10 +470,12 @@ function authoredTypeface(ctx,value,style){
  return undefined;
 }
 function emit(n,ctx,style){
+  if(n.displayStyle&&!ctx.displayStyle){const {displayStyle,...body}=n;return cat([10],emit(body,{...ctx,logicalSize:0,displayStyle:true},style),[inheritedSize(ctx)]);}
   if(n.kind==='seq')return cat(...n.items.map(x=>cat(emit(x,ctx,style),['bigop','custombigop','expandedintegral','limit','limitbox','hbrace','arrow'].includes(x.kind)||x.kind==='sqrt'&&x.index||x.kind==='fraction'&&x.small?[inheritedSize(ctx)]:[])));
   if(n.kind==='char')return charRecord(n.value,{typeface:authoredTypeface(ctx,n.value,style)});
   if(n.kind==='text')return cat(...[...n.value].map(c=>charRecord(c,{typeface:/[^\x00-\u024f]/.test(n.value)?ctx.explicit({family:'textUnicode',bits:0},c):1})));
   if(n.kind==='style')return emit(n.body,ctx,combineStyle(style,n.style));
+  if(n.kind==='tabbedRow')throw Error('Native ruler rows must be inside a gathered pile');
   if(n.kind==='function')return cat(...[...n.value].map((c,i)=>charRecord(c,{typeface:2,options:i===0?2:0})));
   if(n.kind==='fraction')return tmpl(11,[slot(n.num,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style),slot(n.den,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style)],n.variation??(n.small?1:0));
   if(n.kind==='sqrt')return tmpl(10,[slot(n.body,ctx,undefined,style),slot(n.index,ctx,scriptSize(ctx),style)],n.index?1:0);
@@ -427,7 +490,7 @@ function emit(n,ctx,style){
     return tmpl(selector,[slot(n.body,ctx,undefined,style),...(n.left==='.'?[]:[charRecord(n.left,{typeface:22})]),...(n.right==='.'?[]:[charRecord(n.right,{typeface:22})])],variation);
   }
   if(n.kind==='bigop'){
-    const op=bigOperators[n.command];let sum=n.limits===undefined?!!op.sum:n.limits,sub=n.sub;
+    const op=bigOperators[n.command];let sum=n.limits===undefined?(ctx.displayStyle?true:!!op.sum):n.limits,sub=n.sub;
     // The recovered constructor table has no upper-only pair. Its visible
     // lower slot may be empty; retain that real pair rather than inventing one.
     if(n.sup&&!sub)sub=seqNode([]);
@@ -480,7 +543,15 @@ function emit(n,ctx,style){
       });
       return cat([4,0,4,4],...rows,[0]);
     }
-    if(n.env==='gathered')return cat([4,0,2,4],...n.rows.map(r=>slot(r[0],ctx,undefined,style)),[0]);
+    if(n.env==='cases'&&n.rowSpacing?.some(value=>value!==0)){
+      const rows=n.rows.map(([left,right])=>seqNode([...left.items,{kind:'char',value:'\t'},...right.items])),pile=pileRecord(rows,ctx,style,{rowSpacing:n.rowSpacing,ruler:caseRuler(ctx)}),body=cat([inheritedSize(ctx),1,0],pile,[0]);
+      return tmpl(2,[body,charRecord('{',{typeface:22})],1);
+    }
+    if(n.env==='gathered'){
+      const decoded=tabbedPileRows(n),spaced=n.rowSpacing?.some(value=>value!==0),ruler=decoded.ruler;
+      if(spaced||ruler.length)return pileRecord(decoded.rows,ctx,style,{rowSpacing:n.rowSpacing,ruler});
+      return cat([4,0,2,4],...decoded.rows.map(row=>slot(row,ctx,undefined,style)),[0]);
+    }
     // MatrixSpec column_align wire enums: left0, center1, right2. Original
     // 0x679330 writes these bytes directly; 1..5 belongs to the UI mapping.
     const hjust=n.hjust??(n.env==='cases'||n.columns?.[0]==='l'?0:n.columns?.[0]==='r'?2:1);
@@ -639,13 +710,13 @@ function glyphLatex(n){
   if(Object.values(bigOperators).some(op=>op.value===c))return c;
   if(greekLetters.has(c))return c;
   if(/[{}%$#&_]/.test(c))return '\\'+c;
-  if(/^[A-Za-z0-9+\-=().,\[\]\/|:;<>!?]$/.test(c))return c;
+  if(/^[A-Za-z0-9+*\-=().,\[\]\/|:;<>!?]$/.test(c))return c;
   previewError(`Preview of MTCode U+${n.code.toString(16)} is unsupported`);
 }
 function decoderContext(parsed){
   const fonts=[],styles=[],preferences=[],encodings=[];
   function walk(nodes){for(const n of nodes){if(n.type===17)fonts.push(n);else if(n.type===8)styles.push(n);else if(n.type===18)preferences.splice(0,preferences.length,...n.styles);else if(n.type===19)encodings.push(n);if(n.children)walk(n.children);}}
-  walk(parsed.records);return {fonts,styles,preferences,encodings};
+  walk(parsed.records);const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize};
 }
 function characterStyle(n,ctx){
   if(n.typeface===23&&n.code===9&&n.fontPosition===9)return null;
@@ -724,6 +795,7 @@ function renderTemplate(n,ctx){
     const count=(left==='.'?0:1)+(right==='.'?0:1),{slots,decor}=slotsFor(n,1,{chars:count});let j=0;
     const originalPairs={0:[0x2329,0x232a],4:[0xec07,0xec08],5:[0xec09,0xec0a],6:[0xf8f0,0xf8fb],7:[0xf8ee,0xf8f9],8:[0x301a,0x301b]};
     for(const [side,d]of [left,right].entries())if(d!=='.'){const c=decor[j++];if(![d.charCodeAt(0),originalPairs[selector]?.[side]].includes(c.code)||c.typeface!==22||c.children?.length)previewError('Custom fence glyph is unsupported');}
+    if(selector===2&&variation===1&&!ctx.fontToken){const cases=renderCasePile(slots[0].children,ctx);if(cases)return cases;}
     const escape=d=>({'{':'\\{','}':'\\}','⟨':'\\langle ','⟩':'\\rangle ','‖':'\\|','⌊':'\\lfloor ','⌋':'\\rfloor ','⌈':'\\lceil ','⌉':'\\rceil '}[d]||d);
     return `\\left${escape(left)}${value(slots[0])}\\right${escape(right)}`;
   }
@@ -796,11 +868,38 @@ function renderTemplate(n,ctx){
   if(selector===37){if(![0xa,0xc,0x12,0x14,0x1e,0x1f].includes(variation))previewError('Unknown box variation');const {slots}=slotsFor(n,1),notation=variation===0x1e?'box':variation===0x1f?'roundedbox':[[2,'left'],[4,'right'],[8,'top'],[16,'bottom']].filter(([bit])=>variation&bit).map(([,name])=>name).join(' ');return variation===0x1e?`\\boxed{${value(slots[0])}}`:`\\enclose{${notation}}{${value(slots[0])}}`;}
   previewError(`Preview of template ${selector}/${variation} is not supported`);
 }
+function rulerParts(latex,ctx){return latex.split(ctx.fontToken?'\\elTab{}':'\\eltab ');}
+function nativeRowGap(value){
+  if(!value)return '';
+  const points=Math.abs(value)/32,decimal=points.toFixed(5).replace(/0+$/,'').replace(/\.$/,'');
+  return `[${value<0?'-':''}${decimal}bp]`;
+}
+function nativeRowBreak(lineRecords,index){return `\\\\${nativeRowGap(lineRecords[index+1]?.lineSpacing??0)}`;}
+function findPile(nodes){for(const n of nodes){if(n.type===4)return n;if(n.children){const found=findPile(n.children);if(found)return found;}}return null;}
+function renderCasePile(slotNodes,ctx){
+  const pile=findPile(slotNodes);if(!pile||pile.halign!==2||pile.valign!==4||!pile.ruler?.tabs||pile.ruler.tabs.length!==1)return null;
+  const expected=Math.min(32767,Math.max(1,Math.round((ctx.fullPointSize??12)*2*32))),tab=pile.ruler.tabs[0];
+  if(tab.position!==expected||tab.type!==0)return null;
+  const lines=pile.children.filter(child=>child.type===1);if(lines.length<1)return null;
+  const rows=[];for(const line of lines){const local={...ctx,currentRuler:line.ruler||pile.ruler},latex=renderNodes(line.children,local),parts=rulerParts(latex,ctx);if(parts.length!==2)return null;rows.push(parts.join('&'));}
+  return `\\begin{cases}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lines,index):'')).join('')}\\end{cases}`;
+}
+function rulerLatex(latex,ctx){
+  const parts=rulerParts(latex,ctx);if(parts.length===1)return latex;
+  if(!ctx.fontToken)return latex;
+  const tabs=ctx.currentRuler?.tabs??[];return `\\elruler{${tabs.map(t=>t.position).join(',')}}{${tabs.map(t=>t.type).join(',')}}{${parts.length}}${parts.map(part=>`{${part}}`).join('')}`;
+}
 function renderNodes(nodes,ctx,{top=false}={}){
+  // Our encoder brackets explicit \displaystyle with native Full-size records.
+  // Decode only a paired scope, so ordinary MathType size changes stay native
+  // metadata and do not leak into user-authored LaTeX.
+  if(!ctx.fontToken&&nodes.length>=3&&nodes[0].type===10&&nodes.at(-1).type===10){
+    const body=renderNodes(nodes.slice(1,-1),ctx);return `{\\displaystyle ${body}}`;
+  }
   const out=[];
   for(let i=0;i<nodes.length;i++){
     const n=nodes[i];
-    if(n.type===1){if(n.options&8)previewError('Nudged line position is unsupported');if(n.lineSpacing&&!ctx.line)previewError('Custom line spacing requires native renderer');const local={...ctx,currentRuler:n.ruler||ctx.currentRuler},latex=renderNodes(n.children,local);out.push(ctx.line?ctx.line(n,latex,local):latex);}
+    if(n.type===1){if(n.options&8)previewError('Nudged line position is unsupported');if(n.lineSpacing&&!ctx.line)previewError('Custom line spacing requires native renderer');const local={...ctx,currentRuler:n.ruler||ctx.currentRuler},latex=renderNodes(n.children,local);out.push(ctx.line?ctx.line(n,latex,local):rulerLatex(latex,local));}
     else if(n.type===2){
       if(n.typeface===2&&!(n.children?.length)&&!(n.options&8)&&ctx.fontToken){
         const group=[n];let j=i+1;for(;j<nodes.length;j++){const c=nodes[j];if(c.type!==2||c.typeface!==2||c.children?.length||c.options&10||!/[A-Za-z]/.test(String.fromCharCode(c.code)))break;group.push(c);}out.push(`\\mathop{${group.map(c=>renderChar(c,ctx)).join('')}}\\nolimits`);i=j-1;
@@ -827,12 +926,12 @@ function renderNodes(nodes,ctx,{top=false}={}){
     else if(n.type===4){
       if(n.options&8||![2,4].includes(n.halign)||n.valign!==4||n.children.some(c=>![1,10,11,12,13,14].includes(c.type)))previewError('Custom equation pile is unsupported');
       const local={...ctx,currentRuler:n.ruler||ctx.currentRuler};
-      const rows=n.children.filter(c=>c.type===1).map(c=>{
-        if(n.halign===2){const latex=renderNodes(c.children,local);return ctx.line?ctx.line(c,latex,local):latex;}
+      let hasAlignment=false;const lineRecords=n.children.filter(c=>c.type===1),rows=lineRecords.map(c=>{
+        if(n.halign===2){const latex=renderNodes(c.children,local);if(ctx.line)return ctx.line(c,latex,local);if(ctx.fontToken)return rulerLatex(latex,local);const parts=rulerParts(latex,local);hasAlignment||=parts.length>1;return parts.join('&');}
         const at=c.children.findIndex(x=>x.type===2&&['=','<','>','≤','≥','≠','≈','≡','∼'].includes(String.fromCharCode(x.code)));
         if(at<0)previewError('Relationally aligned pile has no supported relation');
         return renderNodes(c.children.slice(0,at),local)+'&'+renderNodes(c.children.slice(at),local);
-      });const env=n.halign===4?'aligned':'gathered',latex=`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`;out.push(ctx.pile?ctx.pile(n,latex,local):latex);
+      });const env=n.halign===4||hasAlignment?'aligned':'gathered',spaced=lineRecords.slice(1).some(line=>line.lineSpacing??0),body=ctx.fontToken?`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`:`\\begin{${env}}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lineRecords,index):'')).join('')}\\end{${env}}`,latex=ctx.fontToken&&spaced?`\\elrows{${lineRecords.slice(1).map(line=>line.lineSpacing??0).join(',')}}{${body}}`:body;out.push(ctx.pile?ctx.pile(n,latex,local):latex);
     }
     else if(n.type===9){if(!ctx.fontToken)previewError('Explicit character-size overrides cannot be faithfully represented');}
     else if([15,16].includes(n.type)){if(!ctx.fontToken)previewError('Explicit native colors cannot be faithfully represented');}

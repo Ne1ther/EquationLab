@@ -9,14 +9,26 @@
 #include <atomic>
 #include <os/log.h>
 #include "diagnostics.hpp"
+#include "word_insertion.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
+void EquationLabFinishWordInsertionUncertain();
 void EquationLabDocumentContextDidCapture();
 void EquationLabDocumentContextDidClear();
 void EquationLabDocumentContextDidClearSelection();
+void EquationLabDocumentContextDidCloseIdentity(std::int32_t identity);
+void EquationLabDocumentContextWillCapture();
+std::int32_t EquationLabQueueEditorTool(NSString* tool);
+BOOL EquationLabArmDocumentActivationAnchor(NSDictionary* context);
+NSDictionary* EquationLabTakeDocumentActivationAnchor();
+void EquationLabClearDocumentActivationAnchor();
+BOOL EquationLabActivationAnchorIsPending();
+NSDictionary* EquationLabTakePreCapturedDocumentActivation();
 namespace {
 NSDictionary* pendingDocument;NSDictionary* explicitSelectionBase;BOOL pendingDocumentSelection=NO;std::int32_t navigationTarget=0;std::atomic<std::int32_t> bindingToken{0};
+std::int32_t EquationLabCapturePreCapturedDocumentContext(NSDictionary* context);
+void EquationLabClearPreCapturedDocumentActivation();
 struct CaptureTiming {CFAbsoluteTime started=0,xmlReady=0,fileReady=0;};CaptureTiming captureTiming;
 }
 // Word owns the latest captured snapshot. ELCTX2 remains short-lived; an exact
@@ -37,6 +49,7 @@ NSURL* startupDirectory(){
     return executable.URLByDeletingLastPathComponent.URLByDeletingLastPathComponent.URLByDeletingLastPathComponent.URLByDeletingLastPathComponent;
 }
 bool validHost(){return NSThread.isMainThread&&[[NSBundle mainBundle].bundleIdentifier isEqual:@"com.microsoft.Word"]&&MathTypeBridgeMathTypeRegistrationState()==1;}
+NSString* documentProcessIdentity(){static NSString* identity=NSUUID.UUID.UUIDString;return identity;}
 NSData* inputFile(NSURL* directory,NSString* name){
     NSURL* file=[directory URLByAppendingPathComponent:name];int fd=open(file.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
     if(fd<0)return nil;struct stat st{};
@@ -51,8 +64,20 @@ bool outputFile(NSURL* directory,NSString* name,NSData* data){
     auto* bytes=static_cast<const unsigned char*>(data.bytes);std::size_t used=0;
     while(ok&&used<data.length){auto n=write(fd,bytes+used,data.length-used);if(n<=0)ok=false;else used+=static_cast<std::size_t>(n);}close(fd);return ok;
 }
+NSDictionary* activationAnchor=nil;
+NSDate* activationAnchorExpiry=nil;
+NSDictionary* preCaptureIssue=nil;
+NSDictionary* preCaptureCandidate=nil;
+NSDate* preCaptureExpiry=nil;
+NSUInteger documentCaptureSequence=0;
+BOOL preCaptureWasCaptured=NO;
+BOOL preCaptureWasArmed=NO;
+BOOL preCaptureWasRejected=NO;
+constexpr NSTimeInterval ActivationAnchorLifetime=5.0;
+constexpr NSTimeInterval PreCaptureLifetime=15.0;
 std::int32_t openTool(NSString* tool){
     if(!validHost())return -1;
+    if([@[@"typography",@"spacing",@"export"] containsObject:tool])return EquationLabQueueEditorTool(tool);
     NSURL* app=nil;
     for(NSRunningApplication* running in [NSRunningApplication runningApplicationsWithBundleIdentifier:@"app.equationlab.mac"].reverseObjectEnumerator)if(!running.terminated&&running.bundleURL){app=running.bundleURL;break;}
     if(!app)app=[NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"app.equationlab.mac"];
@@ -89,21 +114,22 @@ std::int32_t prepare(NSString* layout,NSString* operation=@"ribbon-create"){
     if(docx.length<4||memcmp(docx.bytes,"PK\x03\x04",4)||!outputFile(directory,@"ribbon-insert.docx",docx)||!outputFile(directory,@"ribbon-insert.xml",xml))return -4;
     return 0;
 }
+std::int32_t prepareInsertion(NSString* layout);
 NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr){
     NSRange first=[text rangeOfString:@"\n"];if(!text||first.location==NSNotFound)return nil;
     NSRange second=[text rangeOfString:@"\n" options:0 range:NSMakeRange(NSMaxRange(first),text.length-NSMaxRange(first))];if(second.location==NSNotFound)return nil;
-    NSString* index=[text substringToIndex:first.location];NSString* identity=nil;NSNumber* snapshot=nil;BOOL selected=[index isEqualToString:@"ELCTX3"];
-    if([index isEqualToString:@"ELCTX2"]||selected){
-        NSMutableArray<NSString*>* fields=[NSMutableArray arrayWithCapacity:4];NSUInteger offset=0;
-        for(NSUInteger i=0;i<4;i++){
+    NSString* index=[text substringToIndex:first.location];NSString* identity=nil;NSNumber* snapshot=nil;NSNumber* captureToken=nil;BOOL selected=[index isEqualToString:@"ELCTX3"],requested=[index isEqualToString:@"ELCTX4"];
+    if([index isEqualToString:@"ELCTX2"]||selected||requested){
+        NSMutableArray<NSString*>* fields=[NSMutableArray arrayWithCapacity:requested?5:4];NSUInteger offset=0;
+        for(NSUInteger i=0;i<(requested?5u:4u);i++){
             NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound)return nil;
             [fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);
         }
-        NSScanner* docScanner=[NSScanner scannerWithString:fields[1]],*snapshotScanner=[NSScanner scannerWithString:fields[2]];int doc=0,token=0;
+        NSUInteger base=requested?1:0;NSScanner* docScanner=[NSScanner scannerWithString:fields[base+1]],*snapshotScanner=[NSScanner scannerWithString:fields[base+2]];int doc=0,token=0;
         if(![docScanner scanInt:&doc]||!docScanner.isAtEnd||doc<=0||![snapshotScanner scanInt:&token]||!snapshotScanner.isAtEnd||token<=0)return nil;
-        static NSString* processIdentity=NSUUID.UUID.UUIDString;
-        identity=[NSString stringWithFormat:@"%@:%d",processIdentity,doc];snapshot=@(token);
-        index=fields[3];
+        if(requested){NSScanner* requestScanner=[NSScanner scannerWithString:fields[1]];int request=0;if(![requestScanner scanInt:&request]||!requestScanner.isAtEnd||request<=0)return nil;captureToken=@(request);}
+        identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),doc];snapshot=@(token);
+        index=fields[base+3];
         first=NSMakeRange(offset-1,1);second=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];
         if(second.location==NSNotFound)return nil;
     }
@@ -111,8 +137,20 @@ NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr)
     if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return nil;
     NSMutableDictionary* context=[@{@"index":@(number),@"name":[text substringWithRange:NSMakeRange(NSMaxRange(first),second.location-NSMaxRange(first))],@"ooxml":[text substringFromIndex:NSMaxRange(second)]} mutableCopy];
     if(identity){context[@"identity"]=identity;context[@"snapshot"]=snapshot;}
-    if(selectionBound)*selectionBound=selected;
+    if(captureToken)context[@"captureToken"]=captureToken;
+    if(selectionBound)*selectionBound=selected||requested;
     return context;
+}
+std::int32_t prepareInsertion(NSString* layout){
+    if(!validHost())return -1;NSURL* startup=startupDirectory();if(!startup)return -2;
+    NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
+    NSString* text=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-insertion-context.txt") encoding:NSUTF8StringEncoding];
+    NSDictionary* context=decodeDocumentContext(text);if(!context[@"identity"]||!context[@"snapshot"])return -3;
+    NSMutableDictionary* document=[context mutableCopy];document[@"index"]=@(-1);
+    NSString* settings=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-settings.txt") encoding:NSUTF8StringEncoding];
+    NSArray<NSString*>* lines=[settings componentsSeparatedByString:@"\n"];
+    NSDictionary* options=@{@"mode":layout,@"numberFormat":lines.count>0?lines[0]:@"(#E1)",@"chapter":@(lines.count>1?[lines[1] integerValue]:1),@"section":@(lines.count>2?[lines[2] integerValue]:1),@"equation":@(lines.count>3?[lines[3] integerValue]:1)};
+    return EquationLabBeginWordInsertion(directory,document,options,[context[@"snapshot"] intValue]);
 }
 BOOL decodeSelectionEquation(NSString* text,NSInteger* index,BOOL* selectionBound,NSInteger* documentIdentity=nullptr,NSInteger* snapshotToken=nullptr,BOOL* explicitCached=nullptr){
     if(!text||!index)return NO;
@@ -158,7 +196,7 @@ std::int32_t applySelectionEquation(NSString* text){
     NSMutableDictionary* next=[source mutableCopy];next[@"index"]=@(index);pendingDocument=next;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();return 0;
 }
 std::int32_t captureDocument(){
-    if(!validHost())return -1;clearDocumentSelectionState();explicitSelectionBase=nil;EquationLabDocumentContextDidClearSelection();
+    if(!validHost())return -1;clearDocumentSelectionState();explicitSelectionBase=nil;EquationLabDocumentContextWillCapture();
     const CFAbsoluteTime readStarted=CFAbsoluteTimeGetCurrent();
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"document-context.txt");
@@ -167,7 +205,10 @@ std::int32_t captureDocument(){
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
     BOOL selectionBound=NO;NSDictionary* context=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding],&selectionBound);
     const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();
-    if(!context)return -3;installDocumentContext(context,selectionBound);EquationLabDocumentContextDidCapture();
+    if(!context)return -3;
+    std::int32_t preCaptured=EquationLabCapturePreCapturedDocumentContext(context);
+    if(preCaptured<0){captureTiming={};return -4;}
+    if(preCaptured==0){installDocumentContext(context,selectionBound);EquationLabDocumentContextDidCapture();}
     const CFAbsoluteTime finished=CFAbsoluteTimeGetCurrent();
     if(captureTiming.started>0&&captureTiming.xmlReady>=captureTiming.started&&captureTiming.fileReady>=captureTiming.xmlReady){
         const double total=(finished-captureTiming.started)*1000.0;
@@ -181,8 +222,117 @@ std::int32_t captureDocument(){
     captureTiming={};
     return 0;
 }
-std::int32_t clearDocument(){if(!validHost())return -1;clearDocumentContextState();EquationLabDocumentContextDidClear();return 0;}
-std::int32_t clearDocumentSelection(){if(!validHost())return -1;clearDocumentSelectionState();EquationLabDocumentContextDidClearSelection();return 0;}
+void clearDocumentCaptureState(){clearDocumentContextState();EquationLabClearDocumentActivationAnchor();}
+std::int32_t clearDocument(){if(!validHost())return -1;clearDocumentCaptureState();EquationLabDocumentContextDidClear();return 0;}
+std::int32_t closeDocumentIdentity(){
+    if(!validHost())return -1;NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
+    EquationLabClearDocumentActivationAnchor();
+    NSData* data=inputFile(directory,@"document-close.txt");unlink([directory URLByAppendingPathComponent:@"document-close.txt"].fileSystemRepresentation);
+    NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
+    if(fields.count!=2||![fields[0] isEqual:@"ELCLOSE1"])return -2;NSScanner* scanner=[NSScanner scannerWithString:fields[1]];int identity=0;
+    if(![scanner scanInt:&identity]||!scanner.isAtEnd||identity<=0)return -3;EquationLabDocumentContextDidCloseIdentity(identity);return 0;
+}
+bool scanActivationInteger(NSString* value,int minimum,int maximum,int* result){
+    if(!value.length||!result)return false;
+    for(NSUInteger index=0;index<value.length;index++){unichar character=[value characterAtIndex:index];if(character<'0'||character>'9')return false;}
+    NSScanner* scanner=[NSScanner scannerWithString:value];int number=0;
+    if(![scanner scanInt:&number]||!scanner.isAtEnd||number<minimum||number>maximum)return false;
+    *result=number;return true;
+}
+NSDictionary* decodeDocumentActivationAnchor(NSString* text){
+    if(![text isKindOfClass:NSString.class])return nil;
+    NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];int nonce=0,identity=0,snapshot=0,index=0;
+    if(fields.count==4&&[fields[0] isEqual:@"ELACT1"]){
+        if(!scanActivationInteger(fields[1],1,INT32_MAX,&identity)||!scanActivationInteger(fields[2],1,INT32_MAX,&snapshot)||!scanActivationInteger(fields[3],0,10000,&index))return nil;
+        return @{@"identity":[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),identity],@"snapshot":@(snapshot),@"index":@(index)};
+    }
+    if(fields.count!=5||![fields[0] isEqual:@"ELACT2"]||!scanActivationInteger(fields[1],1,INT32_MAX,&nonce)||!scanActivationInteger(fields[2],1,INT32_MAX,&identity)||!scanActivationInteger(fields[3],1,INT32_MAX,&snapshot)||!scanActivationInteger(fields[4],0,10000,&index))return nil;
+    return @{@"nonce":@(nonce),@"identity":[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),identity],@"snapshot":@(snapshot),@"index":@(index)};
+}
+void EquationLabClearPreCapturedDocumentActivation(){
+    preCaptureIssue=nil;preCaptureCandidate=nil;preCaptureExpiry=nil;
+    preCaptureWasCaptured=NO;preCaptureWasArmed=NO;preCaptureWasRejected=NO;
+}
+std::int32_t EquationLabIssuePreCapturedDocumentActivationNonce(NSDictionary* binding){
+    NSString* identity=binding[@"identity"];NSNumber* index=binding[@"index"];
+    if(![identity isKindOfClass:NSString.class]||[identity rangeOfString:@":"].location==NSNotFound||![index isKindOfClass:NSNumber.class]||index.integerValue<0||index.integerValue>10000||index.doubleValue!=index.integerValue)return 0;
+    EquationLabClearDocumentActivationAnchor();
+    std::int32_t nonce=EquationLabNewDocumentToken();if(nonce<=0)return 0;
+    preCaptureIssue=@{@"nonce":@(nonce),@"identity":[identity copy],@"index":@(index.integerValue),@"sequence":@(documentCaptureSequence)};
+    preCaptureExpiry=[NSDate dateWithTimeIntervalSinceNow:PreCaptureLifetime];
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(PreCaptureLifetime*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        if([preCaptureIssue[@"nonce"] intValue]==nonce){preCaptureCandidate=nil;preCaptureWasRejected=YES;preCaptureWasArmed=NO;}
+    });
+    return nonce;
+}
+// Return 1 for a retained fast-path candidate, 0 for an ordinary ELCTX4
+// response, and -1 when the issued nonce was present but its binding failed.
+std::int32_t EquationLabCapturePreCapturedDocumentContext(NSDictionary* context){
+    ++documentCaptureSequence;
+    NSNumber* token=context[@"captureToken"];
+    if(!preCaptureIssue||![token isKindOfClass:NSNumber.class]||token.integerValue!=[preCaptureIssue[@"nonce"] integerValue])return 0;
+    if(preCaptureWasCaptured){preCaptureCandidate=nil;preCaptureWasRejected=YES;return -1;}
+    BOOL fresh=preCaptureExpiry&&preCaptureExpiry.timeIntervalSinceNow>0&&documentCaptureSequence>[preCaptureIssue[@"sequence"] unsignedIntegerValue];
+    BOOL matches=fresh&&[context[@"identity"] isEqual:preCaptureIssue[@"identity"]]&&[context[@"index"] isEqual:preCaptureIssue[@"index"]]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&[context[@"snapshot"] integerValue]>0&&[context[@"ooxml"] isKindOfClass:NSString.class];
+    preCaptureWasCaptured=YES;
+    if(!matches){preCaptureCandidate=nil;preCaptureWasRejected=YES;return -1;}
+    preCaptureCandidate=[context copy];return 1;
+}
+BOOL EquationLabArmPreCapturedDocumentActivation(NSDictionary* activation){
+    NSNumber* nonce=activation[@"nonce"];
+    if(!preCaptureIssue||![nonce isKindOfClass:NSNumber.class]||nonce.integerValue!=[preCaptureIssue[@"nonce"] integerValue])return NO;
+    BOOL matches=!preCaptureWasArmed&&!preCaptureWasRejected&&preCaptureWasCaptured&&preCaptureExpiry&&preCaptureExpiry.timeIntervalSinceNow>0&&preCaptureCandidate&&[activation[@"identity"] isEqual:preCaptureIssue[@"identity"]]&&[activation[@"identity"] isEqual:preCaptureCandidate[@"identity"]]&&[activation[@"index"] isEqual:preCaptureIssue[@"index"]]&&[activation[@"index"] isEqual:preCaptureCandidate[@"index"]]&&[activation[@"snapshot"] isEqual:preCaptureCandidate[@"snapshot"]];
+    if(!matches){preCaptureWasRejected=YES;preCaptureCandidate=nil;return NO;}
+    preCaptureWasArmed=YES;return YES;
+}
+NSDictionary* takePreCapturedDocumentActivation(){
+    if(!preCaptureIssue)return nil;
+    NSDictionary* result=nil;
+    if(preCaptureWasArmed&&!preCaptureWasRejected&&preCaptureExpiry&&preCaptureExpiry.timeIntervalSinceNow>0&&preCaptureCandidate){
+        NSMutableDictionary* activation=[preCaptureCandidate mutableCopy];activation[@"_preCapturedActivation"]=@YES;result=[activation copy];
+    }else result=@{@"_preCaptureRejected":@YES};
+    EquationLabClearPreCapturedDocumentActivation();return result;
+}
+std::int32_t preparedDocumentActivationNonce(){
+    if(!preCaptureIssue||!preCaptureWasArmed||!preCaptureWasCaptured||preCaptureWasRejected||!preCaptureCandidate||!preCaptureExpiry||preCaptureExpiry.timeIntervalSinceNow<=0)return 0;
+    NSNumber* issuedNonce=preCaptureIssue[@"nonce"];
+    if(![issuedNonce isKindOfClass:NSNumber.class]||![preCaptureCandidate[@"captureToken"] isEqual:issuedNonce])return 0;
+    if(![preCaptureCandidate[@"identity"] isEqual:preCaptureIssue[@"identity"]]||![preCaptureCandidate[@"index"] isEqual:preCaptureIssue[@"index"]])return 0;
+    return issuedNonce.intValue;
+}
+std::int32_t issueDocumentActivationNonce(){
+    if(!validHost())return -1;NSURL* startup=startupDirectory();if(!startup)return -2;
+    EquationLabClearDocumentActivationAnchor();
+    NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
+    NSURL* file=[directory URLByAppendingPathComponent:@"document-activation-request.txt"];
+    NSData* data=inputFile(directory,@"document-activation-request.txt");if(!data)return -3;unlink(file.fileSystemRepresentation);
+    NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
+    int identity=0,index=0;if(fields.count!=3||![fields[0] isEqual:@"ELACT0"]||!scanActivationInteger(fields[1],1,INT32_MAX,&identity)||!scanActivationInteger(fields[2],0,10000,&index))return -4;
+    NSDictionary* binding=@{@"identity":[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),identity],@"index":@(index)};
+    return EquationLabIssuePreCapturedDocumentActivationNonce(binding);
+}
+std::int32_t prepareDocumentActivation(){
+    if(!validHost())return -1;
+    NSURL* startup=startupDirectory();if(!startup)return -2;
+    NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
+    NSURL* file=[directory URLByAppendingPathComponent:@"document-activation.txt"];
+    NSData* data=inputFile(directory,@"document-activation.txt");
+    if(!data){os_log_info(OS_LOG_DEFAULT,"WordHostCapture prepare result=missing");return -2;}
+    unlink(file.fileSystemRepresentation);
+    NSDictionary* context=decodeDocumentActivationAnchor([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
+    if(!context){os_log_info(OS_LOG_DEFAULT,"WordHostCapture prepare result=invalid");return -3;}
+    BOOL fast=context[@"nonce"]!=nil;
+    if(!fast)EquationLabClearPreCapturedDocumentActivation();
+    BOOL armed=fast?EquationLabArmPreCapturedDocumentActivation(context):EquationLabArmDocumentActivationAnchor(context);
+    os_log_info(OS_LOG_DEFAULT,"WordHostCapture prepare armed=%d",armed);
+    return armed?0:-4;
+}
+// Word can drop its ordinary selection while entering an OLE verb. The
+// independently issued activation survives that transient callback until
+// consumption, expiry, an exact replacement target, or document teardown.
+void clearOrdinaryDocumentSelection(){clearDocumentSelectionState();EquationLabDocumentContextDidClearSelection();}
+std::int32_t clearDocumentSelection(){if(!validHost())return -1;clearOrdinaryDocumentSelection();return 0;}
+std::int32_t clearDocumentSelectionDuringCapture(){if(!validHost())return -1;clearOrdinaryDocumentSelection();return 0;}
 std::int32_t selectDocumentEquation(){
     if(!validHost())return -1;
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
@@ -191,6 +341,31 @@ std::int32_t selectDocumentEquation(){
     if(!text)return -2;return applySelectionEquation(text);
 }
 }
+NSDictionary* EquationLabTakePreCapturedDocumentActivation(){return takePreCapturedDocumentActivation();}
+BOOL EquationLabPreCapturedActivationIsPending(){return preparedDocumentActivationNonce()>0;}
+void EquationLabClearDocumentActivationAnchor(){
+    if(activationAnchor)os_log_info(OS_LOG_DEFAULT,"WordHostCapture clear armed=1");
+    activationAnchor=nil;activationAnchorExpiry=nil;
+    EquationLabClearPreCapturedDocumentActivation();
+    if(validHost()){NSURL* startup=startupDirectory();if(startup){NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];unlink([[directory URLByAppendingPathComponent:@"document-activation.txt"] fileSystemRepresentation]);}}
+}
+BOOL EquationLabActivationAnchorIsPending(){
+    if(!activationAnchor||!activationAnchorExpiry||activationAnchorExpiry.timeIntervalSinceNow<=0){EquationLabClearDocumentActivationAnchor();return NO;}
+    return YES;
+}
+BOOL EquationLabArmDocumentActivationAnchor(NSDictionary* context){
+    if(![context isKindOfClass:NSDictionary.class])return NO;
+    NSString* identity=context[@"identity"];NSNumber* snapshot=context[@"snapshot"];NSNumber* index=context[@"index"];
+    if(![identity isKindOfClass:NSString.class]||[identity rangeOfString:@":"].location==NSNotFound||![snapshot isKindOfClass:NSNumber.class]||snapshot.integerValue<=0||![index isKindOfClass:NSNumber.class]||index.integerValue<0||index.integerValue>10000)return NO;
+    activationAnchor=@{@"identity":[identity copy],@"snapshot":@(snapshot.integerValue),@"index":@(index.integerValue)};
+    activationAnchorExpiry=[NSDate dateWithTimeIntervalSinceNow:ActivationAnchorLifetime];
+    return YES;
+}
+NSDictionary* EquationLabTakeDocumentActivationAnchor(){
+    NSDictionary* result=EquationLabActivationAnchorIsPending()?activationAnchor:nil;
+    EquationLabClearDocumentActivationAnchor();
+    return result;
+}
 #define RIBBON_EXPORT(name,expression) extern "C" __attribute__((visibility("default"))) std::int32_t name(){@autoreleasepool{return expression;}}
 RIBBON_EXPORT(MathTypeBridgeRibbonOpen,openTool(@"editor"))
 RIBBON_EXPORT(MathTypeBridgeRibbonTypography,openTool(@"typography"))
@@ -198,15 +373,34 @@ RIBBON_EXPORT(MathTypeBridgeRibbonSpacing,openTool(@"spacing"))
 RIBBON_EXPORT(MathTypeBridgeRibbonExport,openTool(@"export"))
 RIBBON_EXPORT(MathTypeBridgeRibbonHelp,openTool(@"help"))
 RIBBON_EXPORT(MathTypeBridgeRibbonCapabilities,openTool(@"capabilities"))
-RIBBON_EXPORT(MathTypeBridgeRibbonInline,prepare(@"inline"))
-RIBBON_EXPORT(MathTypeBridgeRibbonDisplay,prepare(@"display"))
-RIBBON_EXPORT(MathTypeBridgeRibbonRight,prepare(@"numbered-right"))
-RIBBON_EXPORT(MathTypeBridgeRibbonLeft,prepare(@"numbered-left"))
+RIBBON_EXPORT(MathTypeBridgeRibbonInline,prepareInsertion(@"inline"))
+RIBBON_EXPORT(MathTypeBridgeRibbonDisplay,prepareInsertion(@"display"))
+RIBBON_EXPORT(MathTypeBridgeRibbonRight,prepareInsertion(@"numbered-right"))
+RIBBON_EXPORT(MathTypeBridgeRibbonLeft,prepareInsertion(@"numbered-left"))
+RIBBON_EXPORT(MathTypeBridgeInsertionActive,EquationLabWordInsertionActive()?1:0)
+RIBBON_EXPORT(MathTypeBridgeInsertionInline,EquationLabWordInsertionInline())
+RIBBON_EXPORT(MathTypeBridgeCancelInsertion,([&](){EquationLabCancelWordInsertion();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeFinishInsertion,([&](){EquationLabFinishWordInsertion(true);return 0;})())
+RIBBON_EXPORT(MathTypeBridgeFailInsertion,([&](){EquationLabFinishWordInsertion(false);return 0;})())
+RIBBON_EXPORT(MathTypeBridgeUncertainInsertion,([&](){EquationLabFinishWordInsertionUncertain();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeInsertionError,EquationLabWordInsertionError())
+RIBBON_EXPORT(MathTypeBridgeTakeInsertion,([&](){
+    if(!validHost())return -1;
+    std::int32_t token=0;NSData* data=EquationLabClaimWordInsertion(&token);if(!data)return 0;
+    if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-complete-insert.docx",data)){EquationLabFinishWordInsertion(false);return -2;}
+    return token;
+})())
 RIBBON_EXPORT(MathTypeBridgeRibbonNumber,prepare(@"inline",@"ribbon-number"))
 RIBBON_EXPORT(MathTypeBridgeRibbonChapter,prepare(@"inline",@"ribbon-chapter"))
 RIBBON_EXPORT(MathTypeBridgeCaptureDocument,captureDocument())
+RIBBON_EXPORT(MathTypeBridgeIssueDocumentActivationNonce,issueDocumentActivationNonce())
+RIBBON_EXPORT(MathTypeBridgePreparedDocumentActivationNonce,validHost()?preparedDocumentActivationNonce():-1)
 RIBBON_EXPORT(MathTypeBridgeClearDocumentContext,clearDocument())
+RIBBON_EXPORT(MathTypeBridgeCloseDocumentIdentity,closeDocumentIdentity())
 RIBBON_EXPORT(MathTypeBridgeClearDocumentSelection,clearDocumentSelection())
+RIBBON_EXPORT(MathTypeBridgeClearDocumentSelectionDuringCapture,clearDocumentSelectionDuringCapture())
+RIBBON_EXPORT(MathTypeBridgeClearDocumentActivationAnchor,([&](){if(!validHost())return -1;EquationLabClearDocumentActivationAnchor();return 0;})())
+RIBBON_EXPORT(MathTypeBridgePrepareDocumentActivation,prepareDocumentActivation())
 RIBBON_EXPORT(MathTypeBridgeSelectDocumentEquation,selectDocumentEquation())
 RIBBON_EXPORT(MathTypeBridgeCaptureTimingStart,([&](){if(!validHost())return -1;captureTiming={};captureTiming.started=CFAbsoluteTimeGetCurrent();return 0;})())
 RIBBON_EXPORT(MathTypeBridgeCaptureTimingXMLReady,([&](){if(!validHost()||captureTiming.started<=0)return -1;captureTiming.xmlReady=CFAbsoluteTimeGetCurrent();return 0;})())

@@ -107,6 +107,16 @@ test('Twenty-minute expiration removes private staging without a later service r
  const replacement=await open(initial,session.session);assert.notEqual(replacement.ticket,session.ticket);
 });
 
+test('An accepted result that Word never receives expires as a definitive failed acknowledgement',async t=>{
+ t.mock.timers.enable({apis:['Date','setTimeout'],now:Date.now()});
+ const sessionId=String(next++),opened=await operation('native-open',{session:sessionId,native:initial.toString('base64'),acknowledgement:true});tickets.add(opened.ticket);
+ await operation('native-complete',{...resultBody(opened.ticket),session:sessionId});
+ assert.deepEqual(await operation('native-status',{ticket:opened.ticket}),{state:'queued'});
+ t.mock.timers.tick(20*60*1000);
+ assert.deepEqual(await operation('native-status',{ticket:opened.ticket}),{state:'failed'},'an undelivered payload cannot remain pending after its session expires');
+ tickets.delete(opened.ticket);t.mock.timers.reset();
+});
+
 function nativeOfSize(size){
  const parsed=inspectOle(makeOle('x')),chunks=[parsed.header,parsed.data.subarray(0,-1)];let remaining=size-parsed.native.length;
  while(remaining){
@@ -137,6 +147,15 @@ test('Host save receipts bind uint64 identity, distinguish delivery from persist
  assert.deepEqual(await operation('native-status',{ticket:opened.ticket}),{state:'delivered'});
  await assert.rejects(operation('native-ack',{ticket:opened.ticket,session:'99000002',ok:true}),/Unknown or expired/);
  assert.deepEqual(await operation('native-ack',{ticket:opened.ticket,session,ok:true}),{state:'committed'});
+ assert.deepEqual(await operation('native-ack',{ticket:opened.ticket,session,ok:true}),{state:'committed'},'repeating the same acknowledgement returns its terminal state');
  assert.deepEqual(await operation('native-status',{ticket:opened.ticket}),{state:'committed'});
  await assert.rejects(operation('native-ack',{ticket:opened.ticket,session,ok:false}),/Conflicting/);
+});
+
+test('A failed host acknowledgement is also idempotent and rejects a conflicting retry',async()=>{
+ const session='99000002',opened=await operation('native-open',{session,native:initial.toString('base64'),acknowledgement:true});tickets.add(opened.ticket);
+ await operation('native-complete',{...resultBody(opened.ticket),session});await operation('native-poll',{ticket:opened.ticket});tickets.delete(opened.ticket);
+ assert.deepEqual(await operation('native-ack',{ticket:opened.ticket,session,ok:false}),{state:'failed'});
+ assert.deepEqual(await operation('native-ack',{ticket:opened.ticket,session,ok:false}),{state:'failed'});
+ await assert.rejects(operation('native-ack',{ticket:opened.ticket,session,ok:true}),/Conflicting native acknowledgement/);
 });

@@ -50,13 +50,7 @@ struct WorkbenchView: View {
                     .help(bridge.t("安装或管理 Microsoft Word 插件"))
                     .accessibilityLabel(bridge.t(bridge.wordSessionActive ? "Word 插件" : "Office 插件"))
                 InterfaceLanguageMenu(bridge: bridge)
-                if bridge.wordSessionActive {
-                    Button(bridge.t("取消")) { bridge.invoke("nativeCancelWordSession") }
-                    Button { bridge.invoke("nativeCommitWordSession") } label: {
-                        Label(bridge.t("保存并返回 Word"), systemImage: "checkmark.circle.fill")
-                    }.labelStyle(.titleAndIcon)
-                        .buttonStyle(.borderedProminent).tint(.blue).disabled(!bridge.state.canExport || bridge.state.busy)
-                } else {
+                if !bridge.wordSessionActive {
                     Button {
                         if bridge.state.canSaveEdit { bridge.action("click", ["id": "save-edit"]) }
                         else { bridge.invoke("nativeExport") }
@@ -109,11 +103,34 @@ struct WorkbenchView: View {
                 .buttonStyle(WorkbenchButtonStyle())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18).frame(height: 42)
+                if bridge.wordSessionActive {
+                    HStack(spacing: 10) {
+                        Spacer(minLength: 0)
+                        Button(bridge.t(bridge.state.wordOutcomeUnknown ? "关闭" : "取消")) { bridge.invoke("nativeCancelWordSession") }
+                            .buttonStyle(.bordered)
+                            .disabled(bridge.state.busy)
+                            .accessibilityLabel(bridge.t(bridge.state.wordOutcomeUnknown ? "关闭" : "取消"))
+                        Button { bridge.invoke("nativeCommitWordSession") } label: {
+                            Label(bridge.t(wordSessionSaveLabel), systemImage: bridge.wordSessionIsInsertion ? "plus.circle.fill" : "checkmark.circle.fill")
+                        }
+                        .labelStyle(.titleAndIcon)
+                        .buttonStyle(.borderedProminent)
+                        .tint(.blue)
+                        .disabled(!bridge.state.canExport || bridge.state.busy || bridge.state.wordOutcomeUnknown)
+                        .accessibilityLabel(bridge.t(wordSessionSaveLabel))
+                    }
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 8)
+                }
                 if bridge.showRuler { EquationRuler(bridge: bridge).frame(height: 39).padding(.horizontal, 18) }
                 EquationWebView(bridge: bridge)
                     .frame(minHeight: 280)
                 WorkbenchStatusBar(bridge: bridge)
             }
+    }
+
+    private var wordSessionSaveLabel: String {
+        bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
     }
 }
 

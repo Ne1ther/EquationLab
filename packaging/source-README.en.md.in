@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.1 (build63)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.1/Equation-Lab-0.6.1.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.2 (build67)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.2/Equation-Lab-0.6.2.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -14,9 +14,11 @@ Save your documents, quit Word and Equation Lab, then open the installer. Reopen
 ## What it does
 
 - Browse and search document equations, edit them, and save back to Word.
-- Enter templates or LaTeX; adjust fonts, sizes, and spacing.
+- Enter templates or LaTeX, including multiple lines, cases, and matrices; adjust fonts, sizes, and spacing.
 - Use equation numbering, cross-references, format presets, and custom previews.
 - Export PDF, SVG, or PNG, and copy LaTeX.
+
+New equations start on a blank canvas. Choose Done and Insert to add one to Word, or Update Equation when editing. These actions and Cancel sit above the canvas.
 
 Updates are under **Equation Lab → Check for updates…**, with optional daily checks and automatic downloads.
 

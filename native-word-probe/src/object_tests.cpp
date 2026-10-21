@@ -26,13 +26,14 @@ struct Sink final:AdviseSink{
 };
 struct Site final:OleClientSite{
     ULong refs=1;int saves=0;PersistStorage* persist=nullptr;Storage* storage=nullptr;
+    std::vector<std::int32_t> windowVisibility;
     bool savePersists=true;
     HResult QueryInterface(const Guid&,void** out)override{if(!out)return PointerError;*out=this;AddRef();return Ok;}
     ULong AddRef()override{return ++refs;}ULong Release()override{return --refs;}
     HResult SaveObject()override{++saves;if(!savePersists)return Ok;auto hr=persist->Save(storage,1);return hr<0?hr:persist->SaveCompleted(nullptr);}
     HResult GetMoniker(std::uint32_t,std::uint32_t,Unknown** out)override{if(out)*out=nullptr;return NotImplemented;}
     HResult GetContainer(Unknown** out)override{if(out)*out=nullptr;return NotImplemented;}
-    HResult ShowObject()override{return Ok;}HResult OnShowWindow(std::int32_t)override{return Ok;}HResult RequestNewObjectLayout()override{return Ok;}
+    HResult ShowObject()override{return Ok;}HResult OnShowWindow(std::int32_t open)override{windowVisibility.push_back(open);return Ok;}HResult RequestNewObjectLayout()override{return Ok;}
 };
 void writeStream(Storage* storage,const char16_t* name,const std::vector<std::uint8_t>& bytes){Stream* s=nullptr;check(storage->CreateStream(name,StorageCreateReadWriteExclusive,0,0,&s)==Ok,"create test stream");ULong n=0;auto hr=s->Write(bytes.data(),static_cast<ULong>(bytes.size()),&n);s->Release();check(hr==Ok&&n==bytes.size(),"write test stream");}
 std::vector<std::uint8_t> readStream(Storage* storage,const char16_t* name){Stream* s=nullptr;check(storage->OpenStream(name,nullptr,StorageReadExclusive,0,&s)==Ok,"open test stream");StatStg stat{};check(s->Stat(&stat,1)==Ok,"stat test stream");std::vector<std::uint8_t> data(static_cast<std::size_t>(stat.size.value));ULong n=0;auto hr=s->Read(data.data(),static_cast<ULong>(data.size()),&n);s->Release();check(hr>=0&&n==data.size(),"read test stream");return data;}
@@ -75,6 +76,9 @@ void runObjectTests(void* bundle,const InteropHooks& api,const std::vector<std::
     check(data->DAdvise(&notReadyPict,65,&stopSink,&stopCookie)==Ok&&stopSink.data==0,"DATAONSTOP deferred");
     std::uint32_t rejectedCookie=123;check(data->DAdvise(&wildcard,0,&wildcardSink,&rejectedCookie)<0&&rejectedCookie==0,"invalid wildcard request rejected and cookie cleared");
     check(object->DoVerb(0,nullptr,&site,0,nullptr,nullptr)==Ok&&openedBytes==original,"DoVerb sends original opaque MTEF");
+    check(site.windowVisibility==std::vector<std::int32_t>{1},"external editor did not report its open window to Word");
+    const auto initialEdit=activeSession;
+    check(object->DoVerb(0,nullptr,&site,0,nullptr,nullptr)==Ok&&activeSession==initialEdit&&site.windowVisibility==std::vector<std::int32_t>{1},"repeat activation duplicated the OLE window notification");
     check(preview(activeSession,pdf.data(),pdf.size(),2540,1270)==Ok,"attach real PDF preview");
     FormatEtc pict{3,nullptr,1,-1,32};check(data->QueryGetData(&pict)==Ok,"metafile format accepted");
     check(data->DAdvise(&pict,1,&sink,&dataCookie)==Ok,"data advise");
@@ -82,7 +86,9 @@ void runObjectTests(void* bundle,const InteropHooks& api,const std::vector<std::
     std::atomic<HResult> background{Ok};auto id=activeSession;
     std::thread worker([&]{background=complete(id,edited.data(),edited.size(),1);});worker.join();check(background==static_cast<HResult>(0x8001010eu),"background Word callbacks rejected");
     std::vector<std::uint8_t> bad(10);check(complete(id,bad.data(),bad.size(),1)==StorageHeaderError,"invalid native header rejected");
+    check(site.windowVisibility==std::vector<std::int32_t>{1},"invalid save closed the editor window state");
     check(complete(id,edited.data(),edited.size(),1)==Ok,"apply edit and client SaveObject");
+    check(site.windowVisibility==std::vector<std::int32_t>({1,0}),"saved external editor did not release Word's open-object shading");
     check(site.saves==1&&sink.save==1&&sink.view==1&&sink.data==1,"save/view/data notifications");
     check(wildcardSink.data==2&&delayedSink.data==1&&delayedSink.metadataPresent&&delayedSink.lastMedium==32&&delayedSink.refs==1&&data->DUnadvise(delayedCookie)==NoConnection&&stopSink.data==0,"wildcard and delayed presentation notify on actual edit; DATAONSTOP stays deferred");
     check(metric(Metric::SaveObjectResult)==Ok&&metric(Metric::PersistSaveResult)==Ok&&metric(Metric::SaveCompletedResult)==Ok&&metric(Metric::Dirty)==0&&metric(Metric::NoScribble)==0&&metric(Metric::ClientPresent)==1,"metadata diagnostics observe normal persistence path");

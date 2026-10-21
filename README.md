@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.1 安装包（build63）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.1/Equation-Lab-0.6.1.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.2 安装包（build67）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.2/Equation-Lab-0.6.2.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -14,9 +14,11 @@
 ## 能做什么
 
 - 浏览、搜索文档里的 MathType 公式，编辑后保存回 Word。
-- 用模板或 LaTeX 输入，调整字体、字号和间距。
+- 用模板或 LaTeX 输入，支持多行、分段和矩阵，调整字体、字号和间距。
 - 公式编号、交叉引用，编号格式预设、自定义和预览。
 - 导出 PDF、SVG、PNG，复制 LaTeX。
+
+新公式从空白画布开始，点“完成并插入”才写入 Word；已有公式用“更新公式”。这两个按钮和“取消”都在编辑区上方。
 
 更新在 **Equation Lab → 检查更新…**，也可以开启每日检查和自动下载。
 

@@ -50,11 +50,53 @@ function checkedWordSource(session,ticket){
 }
 async function readWordSession(ticket){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
- const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}}),activeIndex=session.document?.index??0;
- const selected=result.objects[activeIndex],native=Buffer.from(session.native,'base64');
- try{if(!selected||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
+ const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}}),insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
+ if(insertion){
+  if(session.document?.index!==-1||!session.layout)throw Error('Word 插入会话源数据无效');
+ }else{
+  const selected=result.objects[activeIndex],native=Buffer.from(session.native,'base64');
+  try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
+ }
  const documentIdentity=session.document?.identity??null;
- return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordTicket:ticket};
+ return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+}
+
+function insertionLayout(value,retained){
+ const allowed=new Set(['mode','numberFormat','chapter','section','equation']);
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!allowed.has(key)))throw Error('Word insertion layout is invalid');
+ const modes={'inline':'inline','display':'display','right-numbered':'numbered-right','left-numbered':'numbered-left','numbered-right':'numbered-right','numbered-left':'numbered-left'};
+ const mode=modes[value.mode];if(!mode)throw Error('Word insertion layout is invalid');
+ for(const key of ['chapter','section','equation'])if(value[key]!==undefined&&value[key]!==retained[key])throw Error('Word insertion layout must retain the captured numbering values');
+ const layout={mode,numberFormat:value.numberFormat??retained.numberFormat,chapter:retained.chapter,section:retained.section,equation:retained.equation};
+ if(typeof layout.numberFormat!=='string'||layout.numberFormat.length>128)throw Error('Word insertion layout is invalid');
+ previewNumberFormat(layout.numberFormat,layout);
+ return layout;
+}
+async function insertWordEquation(payload){
+ const allowed=new Set(['ticket','session','input','intent','insertion','latex','typography','ruler','layout']);
+ if(Object.keys(payload).some(key=>!allowed.has(key))||payload.intent!==undefined&&payload.intent!=='insert'||payload.insertion!==undefined&&payload.insertion!==true)throw Error('Word insertion intent is invalid');
+ if(payload.session!==undefined&&typeof payload.session!=='string'||typeof payload.input!=='string')throw Error('Word insertion source is invalid');
+ if(typeof payload.latex!=='string'||!payload.latex.trim()||payload.latex.length>20000)throw Error('新公式 LaTeX 不能为空且不能超过 20000 个字符');
+ const session=await wordSession('native-read',{ticket:payload.ticket});checkedWordSource(session,payload.ticket);
+ if(session.insertion!==true||session.document?.index!==-1)throw Error('Word edit session cannot accept an insertion payload');
+ if(payload.session!==undefined&&session.session!==payload.session)throw Error('Word insertion source session does not match');
+ const layout=insertionLayout(payload.layout,session.layout);
+ const sourcePath=await realpath(session.path),inputPath=await realpath(payload.input);
+ if(inputPath!==sourcePath)throw Error('Word 插入源文件不属于当前 Word 会话');
+ const {objects}=await inspectDocx(await readFile(sourcePath));
+ if(objects.length!==1||objects[0].mainDocument!==true||objects[0].parseError)throw Error('Word 插入源必须只包含一个原生公式');
+ const expected=Buffer.from(session.native,'base64');let original,same;
+ try{original=inspectOle(objects[0].ole).native;same=expected.length>0&&expected.toString('base64')===session.native&&original.equals(expected);}finally{original?.fill(0);expected.fill(0);objects[0].ole.fill(0);}
+ if(!same)throw Error('Word 插入会话源公式已变化，已阻止提交');
+ const base=makeNewOle(payload.latex,payload.typography);let ole=base,native,docx;
+ try{
+  ole=applyRuler(base,{ruler:payload.ruler});if(ole!==base)base.fill(0);
+  native=inspectOle(ole).native;
+  const pdf=await nativePdf(ole);
+  docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:false});
+  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:native.toString('base64'),...pdf,docx:docx.toString('base64')});
+  return {...result,insertion:true,acknowledgement:session.acknowledgement===true};
+ }finally{native?.fill(0);docx?.fill(0);ole.fill(0);if(ole!==base)base.fill(0);}
 }
 
 export async function desktopRequest(request) {
@@ -81,6 +123,7 @@ export async function desktopRequest(request) {
   await writeFile(payload.output,bytes);return {path:payload.output,bytes:bytes.length};
  }
  if(action==='wordSessionRead')return readWordSession(payload.ticket);
+ if(action==='wordSessionInsert')return insertWordEquation(payload);
  if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
  if(action==='wordSessionThumbnails'){
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
@@ -93,6 +136,7 @@ export async function desktopRequest(request) {
  if(action==='wordSessionSave'){
   const session=await wordSession('native-read',{ticket:payload.ticket});
   checkedWordSource(session,payload.ticket);
+  if(session.insertion===true)throw Error('Word insertion sessions cannot save over an existing equation');
   const sourcePath=await realpath(session.path),inputPath=await realpath(payload.input);
   if(inputPath!==sourcePath)throw Error('编辑源文件不属于当前 Word 会话');
   if(!['characters','rebuild'].includes(payload.mode))throw Error('未知的 Word 原生编辑模式');
@@ -108,7 +152,7 @@ export async function desktopRequest(request) {
    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Word 保存目标无效');
    if(!session.document?.identity||session.document.identity!==value.documentIdentity)throw Error('Word 保存目标不属于当前文档');
    const document=await readDocument(session.document.path);o=document.objects[value.index];
-   if(!o||o.part!=='word/document.xml'||o.parseError||o.nativeSha256!==value.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
+   if(!o||o.mainDocument!==true||o.parseError||o.nativeSha256!==value.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
    target={index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:session.document.identity};
   }
   const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex),ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),p=await nativePdf(ole);
@@ -145,7 +189,7 @@ export async function desktopRequest(request) {
     if(payload.thumbnails===false)image=thumbnailCache.get(o.nativeSha256)??null;
     else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);}catch{/* Preserve the stored preview if the native renderer cannot display it. */}}
    }
-   return {index:o.index,part:o.part,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
+   return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
   }));
   return {path:payload.path,objects:entries};
  }

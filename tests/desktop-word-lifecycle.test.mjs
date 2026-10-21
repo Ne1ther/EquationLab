@@ -8,7 +8,7 @@ const code=await readFile(new URL('../desktop/app.js',import.meta.url),'utf8');
 const slice=(from,to)=>code.slice(code.indexOf(from),code.indexOf(to));
 function editor(){
  const calls=[],messages=[],elements=new Map();let confirm=false,failRead=false;
- const context=vm.createContext({window:{},performance,busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,editingRuler:undefined,
+ const context=vm.createContext({window:{},performance,busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,editingRuler:undefined,
   mf:{value:'',readOnly:false},$:id=>{if(!elements.has(id))elements.set(id,{hidden:false,value:'',querySelectorAll:()=>[]});return elements.get(id);},
   setTimeout,clearTimeout,controls(){},message:text=>messages.push(text),requestWorkbenchSync(){},renderObjects(){},loadWordThumbnails(){},resetNewFormula(){context.mf.value='';context.source=null;context.selected=null;},
   syncSidebar:async()=>{},validate:async()=>{},
@@ -138,18 +138,30 @@ test('A different snapshot with the same formula bytes and position cannot silen
 });
 
 test('A failed native acknowledgement unlocks editing and can be ended without leaving a stuck queued save',async()=>{
- const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mf.value='retained failed draft';
- c.ensureValid=async()=>{};c.sourceEditMode=()=> 'rebuild';c.rulerPatch=()=>({});let restored=0;c.renderModes=()=>{restored++;c.mf.readOnly=false;};
+ const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mode='rebuild';c.mf.value='retained failed draft';
+ c.ensureValid=async()=>{};c.sourceEditMode=()=> 'rebuild';c.rulerPatch=()=>({});c.renderModes=()=>assert.fail('failed acknowledgement must not rebuild and overwrite the editor draft');
  const originalNative=c.native;c.native=async(action,payload)=>{if(action==='wordSessionSave')return {acknowledgement:true};if(action==='wordSessionStatus')return {state:'failed'};return originalNative(action,payload);};
- assert.equal(await c.window.nativeCommitWordSession(),false);assert.equal(c.mf.value,'retained failed draft');assert.equal(c.mf.readOnly,false);assert.equal(c.wordSaveQueued,false);assert.equal(c.window.wordSaveInFlight,false);assert.equal(restored,1);
+ assert.equal(await c.window.nativeCommitWordSession(),false);assert.equal(c.mf.value,'retained failed draft');assert.equal(c.mf.readOnly,false);assert.equal(c.wordSaveQueued,false);assert.equal(c.window.wordSaveInFlight,false);
  assert.equal(await c.window.nativeCancelWordSession(),true);assert.equal(c.wordTicket,null);
 });
 
-test('An acknowledgement timeout releases the queued flag and retains the draft for an explicit recovery choice',async()=>{
- const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mf.value='retained timed-out draft';
- c.wordSaveQueued=true;c.mf.readOnly=true;let tick=0;c.Date={now:()=>tick++===0?0:21000};c.renderModes=()=>{c.mf.readOnly=false;};
- await assert.rejects(vm.runInContext('waitForWordSave()',c),/保存确认/);
- assert.equal(c.wordSaveQueued,false);assert.equal(c.mf.value,'retained timed-out draft');assert.equal(c.mf.readOnly,false);assert.equal(await c.window.nativeCancelWordSession(),true);
+test('An accepted save stays locked past 20 seconds and closes only after Word confirms it',async()=>{
+ const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mf.value='retained delayed draft';
+ c.ensureValid=async()=>{};c.sourceEditMode=()=> 'rebuild';c.rulerPatch=()=>({});let clock=0,cancelResult,close,waiting;
+ const deadlineTimers=new Map();let deadlineTimerId=0;c.Date={now:()=>clock};c.setTimeout=(callback,delay=0)=>{if(delay>=60000){const id=++deadlineTimerId;deadlineTimers.set(id,callback);return id;}clock+=delay;queueMicrotask(callback);return 1;};c.clearTimeout=id=>deadlineTimers.delete(id);
+ c.native=async action=>{
+  if(action==='wordSessionSave')return {acknowledgement:true};
+  if(action==='wordSessionStatus'){
+   if(clock<21000)return {state:'delivered'};
+   cancelResult=await c.window.nativeCancelWordSession();close=c.window.nativePrepareToClose();waiting=true;return {state:'committed'};
+  }
+  return {};
+ };
+ const saving=c.window.nativeCommitWordSession();
+ assert.equal(await saving,true);assert.equal(await close,true);
+ assert.ok(clock>20000);assert.equal(waiting,true);assert.equal(cancelResult,false);
+ assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');assert.equal(c.wordSaveQueued,false);
+ assert.ok(p.messages.includes('已保存回 Word 原生公式。'));
 });
 
 test('Closing during a short open operation waits for idle and then cancels an unchanged formula',async()=>{
