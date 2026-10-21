@@ -7,6 +7,7 @@ Private mEquations As Collection
 Private mPollScheduled As Boolean
 Private mPaintDocument As Document
 Private mCapturing As Boolean
+Private mOpeningEquation As Boolean
 Private mSnapshotReady As Boolean
 Private mSnapshotAt As Double
 Private mSnapshotEnd As Long
@@ -256,6 +257,14 @@ Private Function Supported(ByVal shape As InlineShape) As Boolean
 Missing:
 End Function
 
+Private Function EditableEquation(ByVal shape As InlineShape) As Boolean
+    On Error GoTo Missing
+    ' Preserve the legacy external editor entry without including its data
+    ' in our native document snapshots.
+    EditableEquation = Supported(shape) Or shape.OLEFormat.ProgID = "DSEquations"
+Missing:
+End Function
+
 Private Sub ELClearActivationAnchor()
     On Error Resume Next
     Dim ignored As Long
@@ -309,42 +318,60 @@ End Function
 
 Public Sub ELCaptureSelection(ByVal selected As Selection, Optional ByVal prepareActivation As Boolean = False)
     On Error GoTo Missing
+    ' OLE activation can synchronously publish more selection callbacks. The
+    ' opening gesture already owns its exact target; do not replace its nonce.
+    If mOpeningEquation Then Exit Sub
     If mCapturing Then
         ELClearSelectionCaptureDuringCapture
         Exit Sub
     End If
-    If selected.Range.StoryType <> wdMainTextStory Then GoTo Missing
-    Dim shapes As InlineShapes, shape As InlineShape, position As Long
-    If Application.Documents.Count = 0 Then GoTo Missing
-    If Not (selected.Document Is ActiveDocument) Then GoTo Missing
-    position = selected.Range.Start
-    Set shapes = selected.InlineShapes
-    If shapes.Count = 1 Then
-        Set shape = shapes(1)
-        If position >= shape.Range.Start And position < shape.Range.End And selected.Range.End <= shape.Range.End Then
-            If Not Supported(shape) Then GoTo Missing
-            If prepareActivation And CanReusePreparedActivation(shape, selected.Document) Then Exit Sub
-            If Not SameActivationTarget(shape, selected.Document) Then ELClearActivationAnchor
-            ELCaptureEquation shape, False, True, 0, prepareActivation
-            Exit Sub
-        End If
-    End If
-    ' Word's text/caret selection and its OLE sizing frame can expose
-    ' different InlineShapes collections for the same click. Match the
-    ' actual object character; never choose the first formula in a paragraph
-    ' that contains several formulas or capture an ordinary body-text click.
-    Set shapes = selected.Paragraphs(1).Range.InlineShapes
-    For Each shape In shapes
-        If position >= shape.Range.Start And position < shape.Range.End Then
-            If Not Supported(shape) Then GoTo Missing
-            If prepareActivation And CanReusePreparedActivation(shape, selected.Document) Then Exit Sub
-            If Not SameActivationTarget(shape, selected.Document) Then ELClearActivationAnchor
-            ELCaptureEquation shape, False, True, 0, prepareActivation
-            Exit Sub
-        End If
-    Next
+    Dim shape As InlineShape
+    Set shape = ELSelectedEquation(selected)
+    If shape Is Nothing Then GoTo Missing
+    If Not Supported(shape) Then GoTo Missing
+    If prepareActivation And CanReusePreparedActivation(shape, selected.Document) Then Exit Sub
+    If Not SameActivationTarget(shape, selected.Document) Then ELClearActivationAnchor
+    ELCaptureEquation shape, False, True, 0, prepareActivation
+    Exit Sub
 Missing:
     ELClearSelectionCapture
+End Sub
+
+Public Function ELSelectedEquation(ByVal selected As Selection) As InlineShape
+    On Error GoTo Missing
+    Set ELSelectedEquation = ExactSelectedEquation(selected, selected.Document)
+Missing:
+End Function
+
+Public Sub ELOpenEquation(ByVal target As InlineShape)
+    If mOpeningEquation Then Exit Sub
+    On Error GoTo Failed
+    mOpeningEquation = True
+    ' Reuse only the still-pending fresh capture from this exact gesture.
+    ' Neither opening nor capture needs Range.Select or an OLE sizing frame.
+    Dim prepare As Boolean
+    If Supported(target) Then
+        prepare = (EquationLabNativeCommand("MathTypeBridgeTransportActive") = 0)
+        If Not prepare Then prepare = (EquationLabNativeCommand("MathTypeBridgeDocumentCaptureAllowed") <> 0)
+    End If
+    If prepare Then
+        If Not CanReusePreparedActivation(target, target.Range.Document) Then
+            ELCaptureEquation target, False, True, 0, True
+        End If
+        If Not SameActivationTarget(target, target.Range.Document) Then Err.Raise vbObjectError + 7351, "Equation Lab", "Could not prepare the selected equation. Please try again."
+        If mActivationNonce <= 0 Then Err.Raise vbObjectError + 7351, "Equation Lab", "Could not prepare the selected equation. Please try again."
+    End If
+    ' An already-active owner is re-shown by native DoVerb; do not replace
+    ' its session or require an activation nonce that it already consumed.
+    target.OLEFormat.Activate
+    mOpeningEquation = False
+    Exit Sub
+Failed:
+    Dim number As Long, description As String
+    number = Err.Number
+    description = Err.Description
+    mOpeningEquation = False
+    Err.Raise number, "Equation Lab", description
 End Sub
 
 Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False, Optional ByVal selectionBound As Boolean = False, Optional ByVal captureRequestToken As Long = 0, Optional ByVal prepareActivation As Boolean = False)
@@ -691,7 +718,7 @@ Private Function ExactSelectedEquation(ByVal selected As Selection, ByVal Doc As
     Set shapes = selected.InlineShapes
     If shapes.Count = 1 Then
         Set shape = shapes(1)
-        If position >= shape.Range.Start And position < shape.Range.End And selected.Range.End <= shape.Range.End And Supported(shape) Then
+        If position >= shape.Range.Start And position < shape.Range.End And selected.Range.End <= shape.Range.End And EditableEquation(shape) Then
             Set ExactSelectedEquation = shape
             Exit Function
         End If
@@ -702,9 +729,47 @@ Private Function ExactSelectedEquation(ByVal selected As Selection, ByVal Doc As
     Set shapes = selected.Paragraphs(1).Range.InlineShapes
     For Each shape In shapes
         If position >= shape.Range.Start And position < shape.Range.End And selected.Range.End <= shape.Range.End Then
-            If Supported(shape) Then Set ExactSelectedEquation = shape
+            If EditableEquation(shape) Then Set ExactSelectedEquation = shape
             Exit Function
         End If
+    Next
+    ' Word can expose an embedded equation as an EMBED field. Blue text
+    ' selection then includes field delimiters outside the OLE character.
+    ' Accept only that field's own envelope, never adjacent body text.
+    Dim embedded As Field, fieldStart As Long
+    For Each embedded In selected.Paragraphs(1).Range.Fields
+        If embedded.Type = wdFieldEmbed Then
+            If embedded.Result.InlineShapes.Count = 1 Then
+                Set shape = embedded.Result.InlineShapes(1)
+                If EditableEquation(shape) Then
+                    fieldStart = EmbeddedEquationFieldStart(embedded, Doc)
+                    If fieldStart >= 0 Then
+                        If position >= fieldStart And position <= shape.Range.Start And selected.Range.End >= shape.Range.End And selected.Range.End <= embedded.Result.End + 1 Then
+                            Set ExactSelectedEquation = shape
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    Next
+Missing:
+End Function
+
+Private Function EmbeddedEquationFieldStart(ByVal embedded As Field, ByVal Doc As Document) As Long
+    On Error GoTo Missing
+    EmbeddedEquationFieldStart = -1
+    Dim position As Long, text As String
+    ' Mac Word's EMBED field can report Code.Start two positions past the
+    ' opening delimiter, and hides delimiter characters from Range.Text.
+    ' Accept only these empty control positions or an explicit field-begin
+    ' character; stop before any adjacent body text.
+    For position = embedded.Code.Start - 1 To embedded.Code.Start - 2 Step -1
+        If position < 0 Then Exit For
+        text = Doc.Range(position, position + 1).Text
+        If Len(text) > 0 And text <> Chr$(19) Then Exit For
+        EmbeddedEquationFieldStart = position
+        If text = Chr$(19) Then Exit Function
     Next
 Missing:
 End Function

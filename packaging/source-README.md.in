@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.2 安装包（build67）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.2/Equation-Lab-0.6.2.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.3 安装包（build68）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.3/Equation-Lab-0.6.3.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -20,7 +20,7 @@
 
 新公式从空白画布开始，点“完成并插入”才写入 Word；已有公式用“更新公式”。这两个按钮和“取消”都在编辑区上方。
 
-更新在 **Equation Lab → 检查更新…**，也可以开启每日检查和自动下载。
+默认每天检查一次更新，有新版时会在工具栏显示更新按钮。也可在 **Equation Lab → 检查更新…** 中手动检查、设置自动下载。
 
 ![Equation Lab 工作台](docs/preview/workbench-0.6.1.jpg)
 

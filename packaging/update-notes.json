@@ -1,5 +1,5 @@
 {
-  "version": "0.6.2",
-  "zh": "新公式从空白编辑区开始，完成后才插入；取消、插入和更新按钮移到画布上方。修复文档公式列表不全、冷启动侧栏保存超时、保存后重开失败和画布恢复空白，减少重复捕获与窗口切换。补齐卷积星号、dots、displaystyle 和 cases 行距，保留多行与中文标注。支持 ⌘A 替换整条公式。插入结果未确认时可保留草稿并关闭，避免卡住或重复插入。",
-  "en": "Start new equations on a blank canvas and insert only when ready. Cancel, Insert and Update now sit above the canvas. Fix incomplete document lists, cold-start sidebar saves, reopening and hidden-canvas rendering; reduce repeated captures and window switching. Add convolution asterisks, dots, displaystyle and cases row spacing, preserve multiline and Chinese annotations, and support Command-A replacement. Unconfirmed insertions keep the draft and allow closing without repeated submission."
+  "version": "0.6.3",
+  "zh": "修复 Word 浅蓝选区无法直接编辑公式的问题，减少双击时的重复激活。逐一验证 30 个公式的打开和完整列表，并验证公式 26 的保存、重开与编号。补充自动检查更新及更新按钮的实测。",
+  "en": "Fix editing equations selected as blue text in Word and avoid duplicate activation on double-click. Verified all 30 demo equations and full document lists, plus saving, reopening, and numbering for equation 26. Checked automatic update detection and the update button in the app."
 }

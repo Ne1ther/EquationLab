@@ -110,12 +110,48 @@ test('ordinary selection clearing preserves legacy anchors while exact target an
  assert.match(reentry,/ELClearSelectionCaptureDuringCapture/);assert.doesNotMatch(reentry,/ELClearActivationAnchor/);
  assert.match(missing,/ELClearSelectionCapture/);assert.doesNotMatch(missing,/ELClearActivationAnchor/);
  assert.match(selection,/If Not SameActivationTarget\(shape, selected\.Document\) Then ELClearActivationAnchor/);
- assert.match(selection,/If position >= shape\.Range\.Start And position < shape\.Range\.End/);
+ assert.match(selection,/Set shape = ELSelectedEquation\(selected\)/);
  assert.match(selection,/ELCaptureEquation shape, False, True, 0, prepareActivation/);
  const equation=procedure('Public Sub ELCaptureEquation');assert.match(equation,/If prepareActivation Then\s+ELClearActivationAnchor/);
  const observe=procedure('Public Sub ELObserveDocument');assert.match(observe,/ElseIf Not Doc Is mDocument Then\s+ELClearDocumentContext/);
  const close=procedure('Public Sub ELCloseDocumentContext');assert.match(close,/If mActivationDocument Is Doc Then ELClearActivationAnchor/);
  assert.match(source,/result = EquationLabNativeCommand\("MathTypeBridgePrepareDocumentActivation"\)/);
+});
+
+test('blue text selection, Ribbon edit and double-click share one exact target and one activation',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const events=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabWordEvents.cls',import.meta.url),'utf8');
+ const block=(text,name,end='End Sub')=>text.slice(text.indexOf(name),text.indexOf(end,text.indexOf(name))).split('\n').map(line=>line.split("'")[0]).join('\n');
+ const resolver=block(source,'Private Function ExactSelectedEquation','End Function');
+ assert.match(resolver,/Doc Is ActiveDocument/);assert.match(resolver,/selected\.Range\.StoryType <> wdMainTextStory/);
+ assert.equal((resolver.match(/selected\.Range\.End <= shape\.Range\.End/g)||[]).length,2,'both collection paths reject selection extending into adjacent text');
+ assert.match(resolver,/embedded\.Type = wdFieldEmbed/);
+ assert.match(resolver,/embedded\.Result\.InlineShapes\.Count = 1/);
+ assert.match(resolver,/fieldStart = EmbeddedEquationFieldStart\(embedded, Doc\)/);
+ assert.match(resolver,/position >= fieldStart/);
+ assert.match(resolver,/selected\.Range\.End <= embedded\.Result\.End \+ 1/);
+ assert.match(source,/EditableEquation = Supported\(shape\) Or shape\.OLEFormat\.ProgID = "DSEquations"/);
+ const fieldStart=block(source,'Private Function EmbeddedEquationFieldStart','End Function');
+ assert.match(fieldStart,/EmbeddedEquationFieldStart = -1/);
+ assert.match(fieldStart,/text = Doc\.Range\(position, position \+ 1\)\.Text/);
+ assert.match(fieldStart,/If Len\(text\) > 0 And text <> Chr\$\(19\) Then Exit For/);
+ const edit=block(ribbon,'Private Sub EditEquation');
+ assert.match(edit,/ELSelectedEquation\(Selection\)/);assert.match(edit,/ELOpenEquation chosen/);
+ assert.doesNotMatch(edit,/Paragraphs|\.Select\b|\.Activate\b/);
+ const open=block(ribbon,'Private Sub OpenDocumentEditor');
+ assert.match(open,/ELSelectedEquation\(Selection\)/);assert.match(open,/ELOpenEquation chosen/);
+ const double=block(events,'Private Sub Host_WindowBeforeDoubleClick');
+ assert.match(double,/ELSelectedEquation\(Sel\)/);
+ assert.match(double,/If Not target Is Nothing Then\s+[^]*?Cancel = True\s+[^]*?ELOpenEquation target\s+End If/);
+ const activation=block(source,'Public Sub ELOpenEquation');
+ assert.equal((activation.match(/\.OLEFormat\.Activate/g)||[]).length,1);
+ assert.match(activation,/If mOpeningEquation Then Exit Sub/);assert.match(activation,/CanReusePreparedActivation/);
+ assert.match(activation,/MathTypeBridgeTransportActive/);assert.match(activation,/MathTypeBridgeDocumentCaptureAllowed/);
+ assert.match(activation,/Failed:[^]*?mOpeningEquation = False[^]*?Err\.Raise/);
+ assert.doesNotMatch(activation,/\.Select\b|Selection\.|ScreenUpdating/);
+ const capture=block(source,'Public Sub ELCaptureSelection');
+ assert.ok(capture.indexOf('If mOpeningEquation Then Exit Sub')<capture.indexOf('ELClearSelectionCaptureDuringCapture'));
 });
 
 test('double-click pre-capture nonce precedes forced ELCTX4 serialization and ELACT2 arming',async()=>{

@@ -1,6 +1,6 @@
 # 安装与使用
 
-[下载 Equation Lab 0.6.2](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.2/Equation-Lab-0.6.2.pkg)
+[下载 Equation Lab 0.6.3](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.3/Equation-Lab-0.6.3.pkg)
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
@@ -18,7 +18,7 @@
 
 ## 更新
 
-在 **Equation Lab → 检查更新…** 中检查新版。可开启每日检查、自动下载；下载完成后选择合适的时间安装。
+默认每天检查一次，有新版时在工具栏显示更新按钮。在 **Equation Lab → 检查更新…** 中可随时手动检查、设置自动下载；下载完成后选择合适的时间安装。
 
 ## 安装报错
 
@@ -26,4 +26,4 @@
 
 ---
 
-Save your documents and quit Word and Equation Lab, then open the [0.6.2 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.2/Equation-Lab-0.6.2.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons sit above the canvas. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.
+Save your documents and quit Word and Equation Lab, then open the [0.6.3 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.3/Equation-Lab-0.6.3.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons sit above the canvas. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.

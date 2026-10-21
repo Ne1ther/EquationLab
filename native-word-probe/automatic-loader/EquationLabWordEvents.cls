@@ -40,11 +40,20 @@ Private Sub Host_DocumentBeforeClose(ByVal Doc As Document, Cancel As Boolean)
 End Sub
 
 Private Sub Host_WindowBeforeDoubleClick(ByVal Sel As Selection, Cancel As Boolean)
-    ' Leave Word's normal OLE activation intact.
-    ' Arm one exact Doc+Range for the immediately following DoVerb. Native
-    ' consumes it once, then asks VBA for a fresh ELCTX4 full-document capture.
-    EquationLabDocumentContext.ELCaptureSelection Sel, True
-    ' Word may publish the exact OLE selection only after this callback. Keep
-    ' the OnTime poll alive so a newly created native request gets serviced.
+    On Error GoTo Failed
+    Dim target As InlineShape
+    Set target = EquationLabDocumentContext.ELSelectedEquation(Sel)
+    If Not target Is Nothing Then
+        ' The exact OLE character is enough, including Word's blue text
+        ' selection. Own this gesture once, rather than also allowing Word's
+        ' default double-click to change selection and activate it again.
+        Cancel = True
+        EquationLabDocumentContext.ELOpenEquation target
+    End If
+    ' Word can bypass this event for a native OLE double-click. Its existing
+    ' DoVerb path and exact selection pre-capture remain available.
     EquationLabDocumentContext.ELQueueNativeSessionWatch
+    Exit Sub
+Failed:
+    MsgBox "Equation Lab: " & Err.Description, vbExclamation, "Equation Lab"
 End Sub

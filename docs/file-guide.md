@@ -67,7 +67,7 @@
 | --- | --- |
 | `native-word-probe/automatic-loader/EquationLabDynamicStartupLoader.bas` | 在 Word Startup 位置加载自带原生组件 / Native component loading |
 | `native-word-probe/automatic-loader/EquationLabEntryPoints.bas` | 自动启动和文档事件初始化 / Startup entry points |
-| `native-word-probe/automatic-loader/EquationLabDocumentContext.bas` | 整篇公式捕获、精确范围锚点、插入和后台保存 / Document capture, exact anchors, insertion and background saves |
+| `native-word-probe/automatic-loader/EquationLabDocumentContext.bas` | 整篇公式捕获、字段选区定位、单次激活、插入和后台保存 / Document capture, field selection, single activation, insertion and background saves |
 | `native-word-probe/automatic-loader/EquationLabWordEvents.cls` | Word 文档、窗口和选择事件 / Word events |
 | `native-word-probe/automatic-loader/EquationLabRibbon.bas` | 插入、编辑、编号、引用等功能区命令 / Ribbon commands |
 | `native-word-probe/src/` | 原生 OLE 对象、编辑通信及宿主检查 / Native Word component |

@@ -108,21 +108,16 @@ End Function
 
 Private Sub EditEquation()
     RequireDocument
-    Dim equations As InlineShapes
-    Set equations = Selection.InlineShapes
-    If equations.count = 0 Then Set equations = Selection.Paragraphs(1).Range.InlineShapes
-    If equations.count <> 1 Then Err.Raise vbObjectError + 7349, "Equation Lab", "Select one MathType equation, or place the cursor in its own paragraph."
-    If Not IsEquation(equations(1)) Then Err.Raise vbObjectError + 7350, "Equation Lab", "The selected object is not a MathType equation."
-    ELCaptureEquation equations(1), False, True, 0, True
-    equations(1).OLEFormat.Activate
+    Dim chosen As InlineShape
+    Set chosen = ELSelectedEquation(Selection)
+    If chosen Is Nothing Then Err.Raise vbObjectError + 7349, "Equation Lab", "Select one MathType equation to edit."
+    ELOpenEquation chosen
 End Sub
 
 Private Sub OpenDocumentEditor()
     RequireDocument
     Dim chosen As InlineShape, equation As InlineShape
-    If Selection.InlineShapes.Count = 1 Then
-        If IsEquation(Selection.InlineShapes(1)) Then Set chosen = Selection.InlineShapes(1)
-    End If
+    Set chosen = ELSelectedEquation(Selection)
     If chosen Is Nothing Then
         For Each equation In ActiveDocument.InlineShapes
             If IsEquation(equation) Then Set chosen = equation: Exit For
@@ -133,8 +128,7 @@ Private Sub OpenDocumentEditor()
         Exit Sub
     End If
     ELInvalidateDocumentSnapshot
-    ELCaptureEquation chosen, False, True, 0, True
-    chosen.OLEFormat.Activate
+    ELOpenEquation chosen
 End Sub
 
 Private Sub NavigateEquation(ByVal forward As Boolean)

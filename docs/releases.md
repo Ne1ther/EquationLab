@@ -1,5 +1,18 @@
 # 版本记录
 
+## 0.6.3 · build68
+
+- Word 用浅蓝色选中公式时，也能直接点“编辑选中”，不用先选出对象边框。
+- 双击和功能区共用同一条打开流程，避免重复激活。
+- 保留旧 DSEquations 对象的外部编辑入口。
+- 验证自动检查更新：旧版显示更新按钮，同版本不误报。
+
+在 Word 16.114 上逐一打开 30 个公式，核对完整列表；公式 26 修改、保存和重开通过，编号和引用保留。
+
+[下载 0.6.3](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.3)
+
+Blue text selections in Word can now open directly with Edit Selected. Double-click and Ribbon commands share one activation path, while legacy DSEquations still open in their external editor. Verified all 30 equations in Word 16.114, full lists, equation 26 save/reopen and numbering, plus automatic update detection and the update button.
+
 ## 0.6.2 · build67
 
 - 新公式从空白画布开始，完成后才插入；取消不会留下占位公式。
