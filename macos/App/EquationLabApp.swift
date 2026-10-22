@@ -45,11 +45,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
     }
-    func applicationDidBecomeActive(_ notification: Notification) { bridge?.recordApplicationFocus(true) }
+    func applicationDidBecomeActive(_ notification: Notification) {
+        bridge?.recordApplicationFocus(true)
+        bridge?.refreshVisibleWordDocumentIfNeeded()
+    }
     func applicationDidResignActive(_ notification: Notification) { bridge?.recordApplicationFocus(false) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }
     func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
-        bridge?.showEditorWindow(reason: "dock-reopen")
+        bridge?.reopenEditorFromDock()
         return false
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

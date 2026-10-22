@@ -5,11 +5,13 @@
 #include <fcntl.h>
 #include <unistd.h>
 #include <cstdint>
+#include <climits>
 #include <string>
 #include <atomic>
 #include <os/log.h>
 #include "diagnostics.hpp"
 #include "word_insertion.hpp"
+#include "word_document_requests.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
@@ -63,6 +65,68 @@ bool outputFile(NSURL* directory,NSString* name,NSData* data){
     if(fd<0)return false;struct stat st{};bool ok=!fstat(fd,&st)&&S_ISREG(st.st_mode)&&st.st_uid==geteuid()&&!fchmod(fd,0600);
     auto* bytes=static_cast<const unsigned char*>(data.bytes);std::size_t used=0;
     while(ok&&used<data.length){auto n=write(fd,bytes+used,data.length-used);if(n<=0)ok=false;else used+=static_cast<std::size_t>(n);}close(fd);return ok;
+}
+BOOL wordRequestHexId(id value){
+    if(![value isKindOfClass:NSString.class]||[value length]!=64)return NO;
+    NSCharacterSet* bad=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+    return [value rangeOfCharacterFromSet:bad].location==NSNotFound;
+}
+BOOL wordRequestTarget(id value){
+    if(![value isKindOfClass:NSDictionary.class])return NO;
+    NSDictionary* target=value;id identity=target[@"identity"],snapshot=target[@"snapshot"],index=target[@"index"],digest=target[@"nativeSha256"];
+    return [identity isKindOfClass:NSString.class]&&[identity length]>=3&&[identity length]<=256&&[identity rangeOfString:@":"].location!=NSNotFound&&[snapshot isKindOfClass:NSNumber.class]&&[snapshot intValue]>0&&[snapshot doubleValue]==[snapshot intValue]&&[index isKindOfClass:NSNumber.class]&&[index intValue]>=0&&[index intValue]<=10000&&[index doubleValue]==[index intValue]&&wordRequestHexId(digest);
+}
+BOOL wordRequestFieldsMatch(NSArray<NSString*>* fields,NSDictionary* envelope){
+    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ1"]||fields[8].length||![envelope[@"requestId"] isEqual:fields[2]])return NO;
+    NSDictionary* target=envelope[@"target"];
+    if([fields[3] isEqual:@"0"])return !target&&!fields[4].length&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
+    return [fields[3] isEqual:@"1"]&&wordRequestTarget(target)&&[target[@"identity"] isEqual:fields[4]]&&
+        [[target[@"snapshot"] stringValue] isEqual:fields[5]]&&[[target[@"index"] stringValue] isEqual:fields[6]]&&[target[@"nativeSha256"] isEqual:fields[7]];
+}
+NSDictionary* wordDocumentRequestFromFile(NSInteger* tokenOut=nullptr){
+    if(!validHost())return nil;
+    NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
+    NSData* data=inputFile(directory,@"native-document-request.txt");if(!data)return nil;
+    NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
+    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ1"]||fields[8].length)return nil;
+    NSScanner* tokenScanner=[NSScanner scannerWithString:fields[1]];NSInteger token=0;
+    if(![tokenScanner scanInteger:&token]||!tokenScanner.isAtEnd||token<=0||token>INT32_MAX||!wordRequestHexId(fields[2]))return nil;
+    NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(static_cast<std::int32_t>(token));
+    if(!envelope||![envelope[@"requestId"] isEqual:fields[2]]||!bridge_probe::wordDocumentRequestIsCurrent(static_cast<std::int32_t>(token)))return nil;
+    if(!wordRequestFieldsMatch(fields,envelope))return nil;
+    if(tokenOut)*tokenOut=token;return envelope;
+}
+std::int32_t takeWordDocumentRequest(){
+    if(!validHost())return -1;
+    auto token=bridge_probe::takeWordDocumentRequest();if(token<=0)return token;
+    NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(token);NSString* requestId=envelope[@"requestId"];
+    if(!wordRequestHexId(requestId)){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-request-id");return -2;}
+    NSDictionary* target=envelope[@"target"];NSString* targetIdentity=@"",*digest=@"";NSNumber* snapshot=@0,*index=@0;NSString* targetFlag=@"0";
+    if(target){
+        if(!wordRequestTarget(target)){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-target");return -2;}
+        NSString* expectedPrefix=[documentProcessIdentity() stringByAppendingString:@":"];
+        if(![target[@"identity"] hasPrefix:expectedPrefix]){bridge_probe::finishWordDocumentRequest(token,@"failed",@"document-process-mismatch");return -2;}
+        targetFlag=@"1";targetIdentity=target[@"identity"];snapshot=target[@"snapshot"];index=target[@"index"];digest=target[@"nativeSha256"];
+    }
+    NSString* text=[NSString stringWithFormat:@"ELDREQ1\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
+    NSData* bytes=[text dataUsingEncoding:NSUTF8StringEncoding];
+    if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"native-document-request.txt",bytes)){
+        bridge_probe::finishWordDocumentRequest(token,@"failed",@"request-file-write");return -2;
+    }
+    return token;
+}
+std::int32_t currentWordDocumentRequest(){
+    NSInteger token=0;auto envelope=wordDocumentRequestFromFile(&token);return envelope&&bridge_probe::wordDocumentRequestIsCurrent(static_cast<std::int32_t>(token))?1:0;
+}
+std::int32_t beginCurrentWordDocumentRequest(){
+    NSInteger token=0;auto envelope=wordDocumentRequestFromFile(&token);(void)envelope;
+    return envelope&&bridge_probe::beginWordDocumentRequest(static_cast<std::int32_t>(token))?1:0;
+}
+std::int32_t finishCurrentWordDocumentRequest(NSString* outcome){
+    NSInteger token=0;auto envelope=wordDocumentRequestFromFile(&token);(void)envelope;
+    if(!envelope)token=bridge_probe::currentWordDocumentRequestToken();
+    if(token<=0)return -1;
+    return bridge_probe::finishWordDocumentRequest(static_cast<std::int32_t>(token),outcome);
 }
 NSDictionary* activationAnchor=nil;
 NSDate* activationAnchorExpiry=nil;
@@ -408,3 +472,10 @@ RIBBON_EXPORT(MathTypeBridgeCaptureTimingFileReady,([&](){if(!validHost()||captu
 RIBBON_EXPORT(MathTypeBridgeEditGeneration,bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration)))
 RIBBON_EXPORT(MathTypeBridgeNewDocumentToken,EquationLabNewDocumentToken())
 RIBBON_EXPORT(MathTypeBridgeTakeNavigation,([](){auto target=navigationTarget;navigationTarget=0;return target;})())
+RIBBON_EXPORT(MathTypeBridgeTakeWordDocumentRequest,takeWordDocumentRequest())
+RIBBON_EXPORT(MathTypeBridgeWordDocumentRequestCurrent,currentWordDocumentRequest())
+RIBBON_EXPORT(MathTypeBridgeBeginWordDocumentRequest,beginCurrentWordDocumentRequest())
+RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestOpened,finishCurrentWordDocumentRequest(@"opened"))
+RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestEmpty,finishCurrentWordDocumentRequest(@"empty"))
+RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestNoDocument,finishCurrentWordDocumentRequest(@"no-document"))
+RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestFailed,finishCurrentWordDocumentRequest(@"failed"))

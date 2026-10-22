@@ -7,7 +7,7 @@ test('Rapid edits update source immediately, limit validation to one request and
  const source=(await readFile(new URL('../desktop/app.js',import.meta.url),'utf8')).split('const groups=')[0];
  const elements=new Map(),requests=[],previews=[],timers=new Map();let sequence=0;
  const element=id=>{
-  if(!elements.has(id))elements.set(id,{value:id==='formula'?'x^3':'',disabled:false,textContent:'',classList:{toggle(){}},addEventListener(){},querySelectorAll(){return [];}});
+  if(!elements.has(id))elements.set(id,{value:id==='formula'?'x^3':'',disabled:false,textContent:'',classList:{toggle(){}},setAttribute(name,value){this[name]=value;},addEventListener(){},querySelectorAll(){return [];}});
   return elements.get(id);
  };
  const context=vm.createContext({MathfieldElement:{},document:{getElementById:element,querySelector:()=>element('editor-card')},requestWorkbenchSync(){},

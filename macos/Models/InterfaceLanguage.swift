@@ -47,6 +47,7 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         "当前公式还有未保存的修改":"This equation has unsaved changes",
         "当前公式尚不能保存":"This equation cannot be saved yet",
         "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。":"Keep editing this equation, or discard these changes and open the equation you just activated.",
+        "继续编写新公式，或放弃草稿并编辑左侧选中的公式。":"Keep writing the new equation, or discard the draft and edit the equation selected in the sidebar.",
         "可以继续编辑，或放弃本次修改并返回 Word。原公式会保留。":"Keep editing, or discard these changes and return to Word. The original equation will be kept.",
         "继续编辑当前公式":"Keep editing",
         "放弃修改并打开":"Discard and open",

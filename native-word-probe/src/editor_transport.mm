@@ -1,4 +1,5 @@
 #include "editor_transport.hpp"
+#include "word_document_requests.hpp"
 #include "diagnostics.hpp"
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
@@ -166,6 +167,7 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) std::uint64_t sessionId;
 @property(nonatomic) CFAbsoluteTime started;
 @property(nonatomic,strong) NSString* ticket;
+@property(nonatomic,strong) NSString* documentRequestId;
 @property(nonatomic,strong) NSString* toolIntent;
 @property(nonatomic,strong) ProbeJsonRequest* request;
 @property(nonatomic,strong) NSDate* expires;
@@ -201,6 +203,7 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 static NSString* editorLaunchURL(ProbeEditState* state){
     NSString* url=[@"equationlab://word-edit/" stringByAppendingString:state.ticket];
     if([@[@"typography",@"spacing",@"export"] containsObject:state.toolIntent])url=[url stringByAppendingFormat:@"?tool=%@",state.toolIntent];
+    if(state.documentRequestId.length)url=[url stringByAppendingFormat:@"%@request=%@",[url containsString:@"?"]?@"&":@"?",state.documentRequestId];
     return url;
 }
 
@@ -447,8 +450,10 @@ static ProbeEditorTransport* transport=nil;
     BOOL preCaptured=activationHint&&[activationHint[@"_preCapturedActivation"] boolValue];
     os_log_info(OS_LOG_DEFAULT,"WordHostCapture activation precaptured=%d rejected=%d anchored=%d",preCaptured,preCaptureRejected,activationHint!=nil);
     ProbeEditState* existing=self.edits[@(sessionId)];
+    NSString* documentRequestId=bridge_probe::openingWordDocumentRequestId();
     if(existing){
         existing.activation=++self.activation;
+        existing.documentRequestId=documentRequestId;
         if(existing.request||existing.ticket){
             existing.reopenRequested=YES;
             if(existing.ticket&&!existing.request){existing.pollScheduled=NO;++existing.pollGeneration;[self poll:existing];}
@@ -482,6 +487,7 @@ static ProbeEditorTransport* transport=nil;
         return;
     }
     [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.started=CFAbsoluteTimeGetCurrent();logOpenPhase("verb",state.started);state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
+    state.documentRequestId=documentRequestId;
     if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
     state.activationBinding=activationHint;
     state.preCapturedActivation=preCaptured;
@@ -725,6 +731,9 @@ void writtenTransportOwner(std::uint64_t id,const std::uint8_t*,std::size_t,void
 HResult installEditorTransport(){
     if(!NSThread.isMainThread)return WrongThread;
     if(!transport)transport=[ProbeEditorTransport new];
+    if(inWord()){
+        auto requestResult=installWordDocumentRequests();if(requestResult!=0)return static_cast<HResult>(requestResult);
+    }
     setEditorHooks(openTransport,nullptr);setEditorCancelHook(cancelTransport);setEditorOwnerForgetHook(forgetTransportOwner);setEditorOwnerWrittenHook(writtenTransportOwner);return Ok;
 }
 HResult installEditorTransportForTesting(std::uint16_t port,LaunchEditorUrl launch,void* context,std::uint32_t interval){
@@ -773,7 +782,7 @@ std::uint32_t MathTypeBridgeDocumentCaptureAllowed(){
 // VBA uses integer commands only. Take is one-shot and never claims inside
 // SaveObject; getters refer exclusively to that same latest activation.
 extern "C" __attribute__((visibility("default")))
-std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(transport.ownerCaptureBindings.count||transport.edits.count||transport.backgroundSave||EquationLabPreCapturedActivationIsPending()||EquationLabActivationAnchorIsPending())?1:0;}
+std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(bridge_probe::wordDocumentRequestWatch()||transport.ownerCaptureBindings.count||transport.edits.count||transport.backgroundSave||EquationLabPreCapturedActivationIsPending()||EquationLabActivationAnchorIsPending())?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeTakeDocumentCaptureRequest(){return NSThread.isMainThread?[transport takeCaptureRequest]:0;}
 extern "C" __attribute__((visibility("default")))

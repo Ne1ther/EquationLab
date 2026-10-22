@@ -1,6 +1,6 @@
 # 安装与使用
 
-[下载 Equation Lab 0.6.3](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.3/Equation-Lab-0.6.3.pkg)
+[下载 Equation Lab 0.6.4](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.4/Equation-Lab-0.6.4.pkg)
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
@@ -8,7 +8,7 @@
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
-双击公式进入独立编辑窗口；左边浏览当前文档的公式，右边调整样式、排版和编号。新公式点“完成并插入”，已有公式点“更新公式”；按钮都在编辑区上方。“取消”会保留 Word 原内容。
+双击公式进入独立编辑窗口；左边浏览当前文档的公式，右边调整样式、排版和编号。新公式点“完成并插入”，已有公式点“更新公式”；按钮在编辑模式选择栏的右侧。“取消”会保留 Word 原内容。插入后关闭窗口，从 Dock 重开会重新读取文档公式。插入时也能选择左侧已有公式；如果草稿已修改，会先询问是否放弃。
 
 ## Word 里没有显示 Equation Lab
 
@@ -26,4 +26,4 @@
 
 ---
 
-Save your documents and quit Word and Equation Lab, then open the [0.6.3 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.3/Equation-Lab-0.6.3.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons sit above the canvas. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.
+Save your documents and quit Word and Equation Lab, then open the [0.6.4 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.4/Equation-Lab-0.6.4.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons share a row with the editing mode controls. Reopening from the Dock refreshes the document list. Selecting an existing equation during insertion prompts before discarding a changed draft. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.

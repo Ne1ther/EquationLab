@@ -4,8 +4,10 @@ import {join} from 'node:path';
 import {homedir} from 'node:os';
 import {isMainModule} from './cli-entry.mjs';
 import {APP_VERSION} from './version.mjs';
+import {wordDocumentRequests} from './word-document-requests.mjs';
 
 export async function operation(path,body) {
+ if(path.startsWith('native-document-'))return wordDocumentRequests.handle(path,body);
  const {createDocx,chapterDocx,numberDocx,flatOpc}=await import('./document.mjs');
  const {nativeSessionOperation}=await import('./word-native-session.mjs');
  if(['ribbon-create','ribbon-number','ribbon-chapter'].includes(path)){
@@ -31,7 +33,7 @@ export function localServer({port=37952}={}) {
    if(req.method==='POST') {
     if(req.headers.origin&&req.headers.origin!==origin){res.writeHead(403);return res.end('Origin rejected');}
     if(!req.headers['content-type']?.startsWith('application/json'))throw Error('JSON required');
-    const nativeRequest=/^\/api\/native-(open|insert-open|read|poll|complete|cancel|ack|status|navigate)$/.test(req.url);
+    const nativeRequest=/^\/api\/native-(open|insert-open|read|poll|complete|cancel|ack|status|navigate|document-request|document-status|document-take|document-finish|document-cancel)$/.test(req.url);
     const ribbonRequest=/^\/api\/ribbon-(create|number|chapter)$/.test(req.url);
     if(!nativeRequest&&!ribbonRequest){res.writeHead(404);return res.end();}
     if(currentPort!==37952)throw Error('原生 Word 服务只在本机 37952 端口提供');
@@ -45,7 +47,7 @@ export function localServer({port=37952}={}) {
    const pathname=new URL(req.url,origin).pathname;
    if(pathname==='/api/health'){res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify({app:'Equation Lab',version:APP_VERSION}));}
    res.writeHead(404);return res.end();
-  }catch(e){res.writeHead(400,{'Content-Type':'application/json'});res.end(JSON.stringify({error:e.message}));}
+  }catch(e){res.writeHead(e.statusCode||400,{'Content-Type':'application/json','Cache-Control':'no-store'});res.end(JSON.stringify({error:e.message}));}
  };
  server=http.createServer(handler);
  return server;

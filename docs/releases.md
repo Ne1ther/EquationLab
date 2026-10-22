@@ -1,5 +1,19 @@
 # 版本记录
 
+## 0.6.4 · build73
+
+- 插入后关闭窗口，再从 Dock 打开会刷新当前文档的公式列表。
+- 插入时可以选择左侧已有公式；未保存的内容或格式设置会先提示确认。
+- 修复双击后编辑器未置前的问题，保存或关闭后返回 Word。
+- “取消”和“完成并插入 / 更新公式”移到编辑模式栏右侧，不再单独占一行。
+- 文档重开使用新会话，核对目标公式，避免迟到请求恢复旧窗口。
+
+在 Word 16.114 上验证了插入后列表从 1 条变为 2 条、侧栏切换、草稿保留与放弃、保存重开，以及冷启动和重复双击的前台切换。
+
+[下载 0.6.4](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.4)
+
+Reopening from the Dock now refreshes the equation list after insertion. Existing equations can be selected during insertion, with confirmation before discarding changed content or formatting. Double-click brings the editor forward, and saving or closing returns to Word. Cancel and the submit action share the editing mode row. Tested in Word 16.114 with insertion from one to two equations, sidebar selection, draft protection, save/reopen, and cold and repeated foreground handoffs.
+
 ## 0.6.3 · build68
 
 - Word 用浅蓝色选中公式时，也能直接点“编辑选中”，不用先选出对象边框。

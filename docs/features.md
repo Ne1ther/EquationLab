@@ -4,7 +4,9 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 编辑器支持模板与 LaTeX 输入、字体字号、分式、根式、求和、积分、矩阵、收藏，以及 PDF、SVG、PNG 导出。界面可切换中文和英文。
 
-0.6.2 中，点击 Word 的插入按钮会先打开空白编辑区，点“完成并插入”后才写入文档。编辑已有公式时，画布上方显示“取消”和“更新公式”。
+点击 Word 的插入按钮会先打开空白编辑区，点“完成并插入”后才写入文档。编辑已有公式时，编辑模式栏右侧显示“取消”和“更新公式”。
+
+插入后关闭窗口，从 Dock 重开会重新读取当前 Word 文档。插入过程中也可选择左侧已有公式；未保存的内容或格式设置会先提示保留或放弃。双击已有公式后，编辑窗口会置前，保存后回到 Word。
 
 多行公式可用 `\\` 换行，也可输入 `aligned`、`gathered` 或 `cases` 环境。保存时各行一起回到 Word。
 
@@ -24,4 +26,6 @@ Word 里的编号在功能区设置，插入或删除后点“更新编号”。
 
 Use the Word ribbon to insert, edit, number, and reference equations. Double-click to edit, and browse document equations on the left. The inspector previews number formats and shows the actual document number; saving an edit preserves the existing Word number. For space around an equation, change Before/After spacing in Word's Paragraph settings. Internal spacing is in the editor's Layout inspector.
 
-In 0.6.2, insertion starts with a blank editor. Choose Done and Insert to add the equation to Word, or Cancel to leave the document unchanged. Existing equations use Cancel and Update Equation above the canvas.
+Insertion starts with a blank editor. Choose Done and Insert to add the equation to Word, or Cancel to leave the document unchanged. Existing equations use Cancel and Update Equation beside the editing mode controls.
+
+Reopening from the Dock refreshes the current Word document after insertion. You can select an existing equation during insertion; changed content or formatting prompts before switching. Double-click brings the editor forward; saving returns to Word.

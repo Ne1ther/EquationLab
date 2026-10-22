@@ -14,7 +14,7 @@ extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeWriteStartupReceipt();
 
 namespace startup_receipt {
-NSString* const CompiledHelperVersion=@"0.0.27";
+NSString* const CompiledHelperVersion=@"0.0.28";
 enum : std::int32_t { WrongHost=-1,WrongThread=-4,NotRegistered=-6,InvalidContext=-7,ArtifactMismatch=-8,WriteFailure=-9,InvalidEnvironment=-10 };
 struct Environment {
     bool wordHost;

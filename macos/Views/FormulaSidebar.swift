@@ -9,7 +9,7 @@ struct FormulaSidebar: View {
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return search.isEmpty ? allItems : allItems.filter { "\($0.id + 1) \($0.latex) \($0.label) \($0.detail)".localizedCaseInsensitiveContains(search) }
     }
-    private var selectionUnavailable: Bool { bridge.state.busy || bridge.wordSessionIsInsertion || showingFavorites && bridge.wordSessionActive }
+    private var selectionUnavailable: Bool { bridge.state.busy || showingFavorites && bridge.wordSessionActive }
 
     var body: some View {
         VStack(spacing: 0) {

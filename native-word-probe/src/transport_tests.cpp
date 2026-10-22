@@ -2,6 +2,7 @@
 #include <CoreFoundation/CoreFoundation.h>
 #include <dlfcn.h>
 #include <iostream>
+#include <source_location>
 #include <stdexcept>
 #include <thread>
 #include <vector>
@@ -60,7 +61,7 @@ std::string control(const char* command){
     return response.substr(separator+4);
 }
 bool launch(const char* url,void*){check(std::this_thread::get_id()==mainThread,"launch callback is off owner thread");if(std::string(url)=="equationlab://wake"){++wakes;if(wakeMode==WakeMode::Start)control("start");else if(wakeMode==WakeMode::Cancel&&cancelOnWake)cancelOnWake->Close(1);return true;}check(std::string(url).starts_with("equationlab://word-edit/"),"transport invalid launch scheme");lastEditorUrl=url;++launches;return true;}
-template<class Predicate>void spin(Predicate done){auto deadline=CFAbsoluteTimeGetCurrent()+8;while(!done()&&CFAbsoluteTimeGetCurrent()<deadline)CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.025,true);check(done(),"transport operation timed out");}
+template<class Predicate>void spin(Predicate done,std::source_location where=std::source_location::current()){auto deadline=CFAbsoluteTimeGetCurrent()+8;while(!done()&&CFAbsoluteTimeGetCurrent()<deadline)CFRunLoopRunInMode(kCFRunLoopDefaultMode,0.025,true);if(!done())throw std::runtime_error(std::string("transport operation timed out at ")+where.file_name()+":"+std::to_string(where.line()));}
 }
 void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<std::uint8_t>& native,std::uint16_t port,std::uint16_t controlServicePort){
     controlPort=controlServicePort;
@@ -80,6 +81,29 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
     auto configure=resolve<HResult(*)(const InteropHooks*,std::size_t)>(bundle,"MathTypeBridgeSetInteropHooks");
     check(configure(&api,sizeof(api))==Ok,"transport runtime hooks");
     auto reset=[&]{check(install(port,launch,nullptr,10)==Ok,"install test-only transport");};
+    auto takeCapture=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeTakeDocumentCaptureRequest");
+    auto captureRequestToken=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureRequestToken");
+    auto captureSnapshot=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureSnapshot");
+    auto captureIndex=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIndex");
+    auto captureIdentity=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureIdentity");
+    auto finishCapture=resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeFinishDocumentCaptureRequest");
+    auto captureState=resolve<std::uint32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureState");
+    auto answerAnchoredCapture=[&](const char* identity,std::int32_t expectedSnapshot,std::int32_t expectedIndex,std::int32_t expectedIdentity,std::int32_t freshSnapshot){
+        std::int32_t token=0;spin([&]{return token||(token=takeCapture())>0;});
+        check(captureRequestToken()==token&&captureSnapshot()==expectedSnapshot&&captureIndex()==expectedIndex&&captureIdentity()==expectedIdentity,
+              "reopen capture request lost its exact owner document/range anchor");
+        check(freshSnapshot!=expectedSnapshot,"reopen capture did not advance the bound document snapshot");
+        std::string captured=std::string("{\"index\":")+std::to_string(expectedIndex-1)+",\"identity\":\""+identity+"\",\"snapshot\":"+std::to_string(freshSnapshot)+",\"name\":\"same-name.docx\",\"ooxml\":\"identical-formula\",\"captureToken\":"+std::to_string(token)+"}";
+        check(setDocument(captured.c_str())==Ok,"publish exact owner capture for same-object reopen");
+        check(finishCapture()==0,"exact owner capture response did not complete");
+    };
+    auto waitForCaptureTimeout=[&]{
+        const auto deadline=CFAbsoluteTimeGetCurrent()+11;
+        while((active()!=0||captureState()!=3)&&CFAbsoluteTimeGetCurrent()<deadline)
+            CFRunLoopRunInMode(kCFRunLoopDefaultMode,.025,true);
+        check(active()==0&&captureState()==3,"uncaptured owner request did not reach its bounded timeout");
+        check(takeCapture()==0,"timed-out owner capture request remained pending");
+    };
     if(std::getenv("PROBE_CANCEL_SLOTS_ONLY")){
         check(controlPort,"cancel-slot regression requires its isolated control endpoint");
         reset();const auto base=launches;std::uint32_t completedCleanups=0;std::uint32_t firstFailure=0;
@@ -345,28 +369,31 @@ void runTransportTests(void* bundle,const InteropHooks& api,const std::vector<st
             auto incoming=std::make_unique<TestObject>(getClass,api,native,25);
             check(setDocument(documentA)==Ok,"rejected incoming context seed");control("context-A");incoming->begin();auto firstOwner=ownerIdentity();before=launches;spin([&]{return launches==before+1;});
             // Reject incoming, cancel the preserved old draft, then reopen
-            // the SAME real OLE owner. No selection/capture event is sent.
+            // the SAME real OLE owner through its exact anchored capture request.
             control("cancel-editing");spin([&]{return active()==0;});check(ageDocument(2)==Ok,"age capture past the production 0.5 second gate");
-            before=launches;incoming->begin();check(ownerIdentity()==firstOwner,"same OLE object changed lifecycle identity");spin([&]{return launches==before+1;});
+            before=launches;incoming->begin();check(ownerIdentity()==firstOwner,"same OLE object changed lifecycle identity");answerAnchoredCapture("test-doc:1",1234,13,1,1235);spin([&]{return launches==before+1;});
             check(incoming->site.saves==0&&incoming->saved()==incoming->original,"rejected incoming reopen changed Word data");
             control("cancel-editing");spin([&]{return active()==0;});
             // Another same-Native owner and same file name get a separate
             // document binding; neither may borrow the other's context.
             auto other=std::make_unique<TestObject>(getClass,api,native,25);check(setDocument(documentB)==Ok,"same-name second document seed");control("context-B");before=launches;other->begin();check(ownerIdentity()!=firstOwner,"different OLE owners reused a lifecycle identity");spin([&]{return launches==before+1;});
-            control("cancel-editing");spin([&]{return active()==0;});control("context-A");before=launches;incoming->begin();spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
-            check(ageDocument(2)==Ok,"age other document capture");control("context-A");before=launches;incoming->begin();spin([&]{return launches==before+1;});
-            control("cancel-editing");spin([&]{return active()==0;});control("context-B");before=launches;other->begin();spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
+            control("cancel-editing");spin([&]{return active()==0;});control("context-A");before=launches;incoming->begin();answerAnchoredCapture("test-doc:1",1235,13,1,1236);spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
+            check(ageDocument(2)==Ok,"age other document capture");control("context-A");before=launches;incoming->begin();answerAnchoredCapture("test-doc:1",1236,13,1,1237);spin([&]{return launches==before+1;});
+            control("cancel-editing");spin([&]{return active()==0;});control("context-B");before=launches;other->begin();answerAnchoredCapture("other-doc:2",2222,13,2,2223);spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
             // A document-clear explicitly invalidates every retained XML
             // snapshot, even though the OLE owner itself remains alive.
-            check(clearDocuments()==Ok,"document clear invalidation");check(setDocument(documentB)==Ok,"foreign fresh context after clear");control("context-B");before=launches;incoming->begin();spin([&]{return active()==0;});
+            check(clearDocuments()==Ok,"document clear invalidation");check(setDocument(documentB)==Ok,"foreign fresh context after clear");control("context-B");before=launches;incoming->begin();waitForCaptureTimeout();
             check(launches==before&&error()==2&&incoming->saved()==incoming->original,"known owner accepted another same-Native document after its XML cache was cleared");
-            check(clearDocuments()==Ok,"clear foreign context age");control("context-none");before=launches;incoming->begin();spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
-            check(setDocument(documentA)==Ok,"recapture before native write");control("context-A");before=launches;incoming->begin();spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
+            // Clearing a snapshot preserves this live owner's precise Range
+            // binding. Missing fresh capture must fail, never show a one-item
+            // editor by borrowing an old or absent document context.
+            check(clearDocuments()==Ok,"clear foreign context age");control("context-none");before=launches;incoming->begin();waitForCaptureTimeout();
+            check(launches==before&&error()==2&&incoming->site.saves==0&&incoming->saved()==incoming->original,"known owner silently opened without its required fresh document capture");
+            check(setDocument(documentA)==Ok,"recapture before native write");control("context-A");before=launches;incoming->begin();answerAnchoredCapture("test-doc:1",1237,13,1,1238);spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
             {TestObject changed(getClass,api,native,1);changed.begin();spin([&]{return active()==0;});check(changed.site.saves==1,"write-generation invalidation setup");}
-            check(ageDocument(2)==Ok,"age capture after a different formula was saved");control("context-none");before=launches;incoming->begin();spin([&]{return active()==0;});
-            check(launches==before&&error()==2&&resolve<std::uint32_t(*)()>(bundle,"MathTypeBridgeDocumentCaptureState")()==3,"missing requested capture silently downgraded or left an edit busy");
-            check(resolve<std::int32_t(*)()>(bundle,"MathTypeBridgeTakeDocumentCaptureRequest")()==0,"timed-out document request stayed pending");
-            check(setDocument(documentA)==Ok,"recapture before owner release");control("context-A");before=launches;incoming->begin();spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
+            check(ageDocument(2)==Ok,"age capture after a different formula was saved");control("context-none");before=launches;incoming->begin();waitForCaptureTimeout();
+            check(launches==before&&error()==2&&captureState()==3,"missing requested capture silently downgraded or left an edit busy");
+            check(setDocument(documentA)==Ok,"recapture before owner release");control("context-A");before=launches;incoming->begin();answerAnchoredCapture("test-doc:1",1238,13,1,1239);spin([&]{return launches==before+1;});control("cancel-editing");spin([&]{return active()==0;});
             auto oldAddress=reinterpret_cast<std::uintptr_t>(incoming->object);incoming.reset();check(ageDocument(2)==Ok,"age capture before new object lifetime");control("context-none");
             bool reusedAddress=false;
             for(unsigned cycle=0;cycle<16&&!reusedAddress;cycle++){

@@ -16,5 +16,8 @@ test('Local native Word service restricts hosts and origins and serves only its 
   for(const path of ['/','/taskpane.html','/taskpane.js','/commands.html','/vendor/mathlive.min.js','/icons/inline-32.png','/icons/../../src/native.mjs'])assert.equal((await fetch(base+path)).status,404,path);
   const nativeRequest={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ticket:'0'.repeat(64)})};
   const response=await fetch(base+'/api/native-open',nativeRequest);assert.equal(response.status,400);assert.match((await response.json()).error,/37952/);
+  const documentRequest={method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({})};
+  const scoped=await fetch(base+'/api/native-document-request',documentRequest);assert.equal(scoped.status,400);assert.match((await scoped.json()).error,/37952/);
+  assert.equal((await fetch(base+'/api/native-document-request',{...documentRequest,headers:{...documentRequest.headers,Origin:'https://unrelated.invalid'}})).status,403);
  }finally{await new Promise(resolve=>server.close(resolve));}
 });

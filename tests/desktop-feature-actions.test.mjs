@@ -12,7 +12,7 @@ const macroSource=await readFile(new URL("../desktop/editable-macros.js",import.
 const source=await readFile(new URL('../desktop/app.js',import.meta.url),'utf8');
 function harness(){
  const elements=new Map(),insertions=[],requests=[],element=id=>{
-  if(!elements.has(id))elements.set(id,{value:id==='formula'?'x':'',textContent:'',disabled:false,querySelectorAll:()=>[],addEventListener(){},classList:{toggle(){}}});return elements.get(id);
+  if(!elements.has(id))elements.set(id,{value:id==='formula'?'x':'',textContent:'',disabled:false,setAttribute(name,value){this[name]=value;},querySelectorAll:()=>[],addEventListener(){},classList:{toggle(){}}});return elements.get(id);
  };
  const mf=element('formula');mf.focus=()=>{};mf.insert=latex=>{insertions.push(latex);mf.value+=latex;};
  const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:r=>requests.push(r)}}}},MathfieldElement:{},

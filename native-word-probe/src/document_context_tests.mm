@@ -15,10 +15,30 @@ std::int32_t EquationLabWordInsertionInline(){return 0;}
 void EquationLabCancelWordInsertion(){}
 NSData* EquationLabClaimWordInsertion(std::int32_t*){return nil;}
 void EquationLabFinishWordInsertion(bool){}
+void EquationLabFinishWordInsertionUncertain(){}
 std::int32_t EquationLabWordInsertionError(){return 0;}
-namespace bridge_probe {std::int32_t diagnosticValue(std::uint32_t){return 0;}}
+namespace bridge_probe {
+std::int32_t diagnosticValue(std::uint32_t){return 0;}
+std::int32_t takeWordDocumentRequest(){return 0;}
+NSDictionary* wordDocumentRequestEnvelope(std::int32_t){return nil;}
+BOOL wordDocumentRequestIsCurrent(std::int32_t){return NO;}
+BOOL beginWordDocumentRequest(std::int32_t){return NO;}
+std::int32_t currentWordDocumentRequestToken(){return 0;}
+std::int32_t finishWordDocumentRequest(std::int32_t,NSString*,NSString*){return -1;}
+}
 namespace {void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}}
 int main(){@autoreleasepool{try{
+    NSString* requestId=[@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0];
+    NSDictionary* request=@{@"requestId":requestId};
+    NSArray* requestFields=[[@"ELDREQ1\n1\n" stringByAppendingFormat:@"%@\n0\n\n0\n0\n\n",requestId] componentsSeparatedByString:@"\n"];
+    check(wordRequestFieldsMatch(requestFields,request),"current-document request rejected writer's zero snapshot/index fields");
+    NSMutableArray* badRequest=[requestFields mutableCopy];badRequest[5]=@"";
+    check(!wordRequestFieldsMatch(badRequest,request),"malformed empty snapshot accepted for current-document request");
+    NSDictionary* targetRequest=@{@"requestId":requestId,@"target":@{@"identity":@"process:1",@"snapshot":@5,@"index":@2,@"nativeSha256":requestId}};
+    NSArray* targetFields=[[@"ELDREQ1\n1\n" stringByAppendingFormat:@"%@\n1\nprocess:1\n5\n2\n%@\n",requestId,requestId] componentsSeparatedByString:@"\n"];
+    check(wordRequestFieldsMatch(targetFields,targetRequest),"exact document request lost target fields");
+    badRequest=[targetFields mutableCopy];badRequest[5]=@"5x";
+    check(!wordRequestFieldsMatch(badRequest,targetRequest),"malformed exact snapshot accepted by integer prefix");
     NSString* xml=@"<pkg:package>\n<xml>原始公式</xml>\n</pkg:package>";
     NSDictionary* legacy=decodeDocumentContext([@"0\n测试.docx\n" stringByAppendingString:xml]);
     check([legacy[@"index"] intValue]==0&&[legacy[@"name"] isEqual:@"测试.docx"]&&[legacy[@"ooxml"] isEqual:xml]&&!legacy[@"identity"],"legacy capture changed");

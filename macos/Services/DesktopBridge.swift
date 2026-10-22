@@ -80,6 +80,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
     @Published var wordSessionIsInsertion = false
+    @Published var wordDocumentRequestPending = false
     var lastWordPluginVerification: (date: Date, wordPID: pid_t?)?
     var wordTicket: String?
     private var editorReady = false
@@ -87,8 +88,10 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var wordOpenStarted: CFAbsoluteTime?
     private var pendingWordTickets: [String] = []
     private var wordToolIntents: [String: String] = [:]
+    private var wordDocumentRequestIDs: [String: String] = [:]
     private var deliveringWordTicket: String?
-    private var revealEditorWhenAttached = false
+    private var refreshWordDocumentAfterLoad = false
+    private(set) var pendingEditorReveal: (reason: String, ticket: String?, generation: Int)?
     private(set) var wordPresentationGeneration = 0
     private var focusEventSequence = 0
     private func recordWindowEvent(_ event: String, reason: String) {
@@ -96,11 +99,12 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         EditorLifecycleLog.logger.info("window_event sequence=\(self.focusEventSequence) event=\(event, privacy: .public) reason=\(reason, privacy: .public)")
     }
     func recordApplicationFocus(_ active: Bool) {
-        EditorLifecycleLog.logger.info("app_focus active=\(active, privacy: .public) window_visible=\(self.editorWindow?.isVisible ?? false, privacy: .public) window_key=\(self.editorWindow?.isKeyWindow ?? false, privacy: .public)")
+        let front = NSWorkspace.shared.frontmostApplication
+        EditorLifecycleLog.logger.info("app_focus active=\(active, privacy: .public) front_pid=\(front?.processIdentifier ?? 0, privacy: .public) window_visible=\(self.editorWindow?.isVisible ?? false, privacy: .public) window_key=\(self.editorWindow?.isKeyWindow ?? false, privacy: .public)")
     }
     private var nativeService: Process?
     private var installedServiceKickstartRequested = false
-    var hasWordSessionOrRequest: Bool { wordSessionActive || deliveringWordTicket != nil || !pendingWordTickets.isEmpty }
+    var hasWordSessionOrRequest: Bool { wordSessionActive || wordDocumentRequestPending || deliveringWordTicket != nil || !pendingWordTickets.isEmpty }
     func bundledNodeURL() -> URL? {
         guard let path = Bundle.main.object(forInfoDictionaryKey: "EquationLabNode") as? String else { return nil }
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : Bundle.main.resourceURL?.appendingPathComponent(path)
@@ -163,36 +167,83 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if url.scheme == "equationlab", url.host == "wake", url.path.isEmpty, url.query == nil, url.fragment == nil { ensureNativeService(); return }
         guard url.scheme == "equationlab", url.host == "word-edit", url.fragment == nil else { return }
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
-        guard query.isEmpty || (query.count == 1 && query[0].name == "tool" && ["typography", "spacing", "export"].contains(query[0].value ?? "")) else { return }
+        guard Set(query.map(\.name)).count == query.count, query.count <= 2,
+              query.allSatisfy({ item in
+                  item.name == "tool" && ["typography", "spacing", "export"].contains(item.value ?? "") ||
+                  item.name == "request" && item.value?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil
+              }) else { return }
         let ticket = String(url.path.dropFirst())
         guard ticket.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { return }
-        if let tool = query.first?.value { wordToolIntents[ticket] = tool }
+        if let tool = query.first(where: { $0.name == "tool" })?.value { wordToolIntents[ticket] = tool }
+        if let request = query.first(where: { $0.name == "request" })?.value { wordDocumentRequestIDs[ticket] = request }
         guard deliveringWordTicket != ticket, !pendingWordTickets.contains(ticket) else { return }
         // Only the most recent not-yet-opened selection matters. Release
         // superseded requests instead of replaying every click through Word.
-        for obsolete in pendingWordTickets { wordToolIntents.removeValue(forKey: obsolete); cancelUndeliveredWordTicket(obsolete) }
+        for obsolete in pendingWordTickets { wordToolIntents.removeValue(forKey: obsolete); wordDocumentRequestIDs.removeValue(forKey: obsolete); cancelUndeliveredWordTicket(obsolete) }
         pendingWordTickets = [ticket]
         if editorReady { deliverWordSession() }
     }
     func showEditorWindow(reason: String = "user") {
-        revealEditorWhenAttached = true
+        pendingEditorReveal = (reason, reason == "word-delivered" ? wordTicket : nil, wordPresentationGeneration)
         guard let editorWindow else { recordWindowEvent("reveal_pending", reason: reason); return }
-        revealEditorWhenAttached = false
-        guard !editorWindow.isVisible || !editorWindow.isKeyWindow || !NSApp.isActive else { recordWindowEvent("reveal_unchanged", reason: reason); return }
+        pendingEditorReveal = nil
+        let front = NSWorkspace.shared.frontmostApplication
+        let editorIsFrontmost = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first
+        let wordIsFrontmost = word != nil && front?.processIdentifier == word?.processIdentifier
+        guard !editorWindow.isVisible || !editorWindow.isKeyWindow || !editorIsFrontmost else { recordWindowEvent("reveal_unchanged", reason: reason); return }
         recordWindowEvent("reveal", reason: reason)
+        EditorLifecycleLog.logger.info("editor_presentation front_pid=\(front?.processIdentifier ?? 0, privacy: .public) editor_active=\(NSApp.isActive, privacy: .public) hidden=\(NSApp.isHidden, privacy: .public)")
+        if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         if editorWindow.isMiniaturized { editorWindow.deminiaturize(nil) }
         editorWindow.makeKeyAndOrderFront(nil)
         (webView as? EquationWKWebView)?.refreshAfterReveal()
-        if !NSApp.isActive {
-            if reason == "word-delivered", let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first, word.isActive {
+        WordFocusHandoff.begin(editorIsFrontmost: editorIsFrontmost, wordIsFrontmost: wordIsFrontmost, fromWord: reason == "word-delivered",
+            activateFromWord: { if let word {
                 let allowed = NSRunningApplication.current.activate(from: word, options: [])
                 EditorLifecycleLog.logger.info("word_focus_request allowed=\(allowed, privacy: .public)")
-            } else { NSApp.activate() }
+                if !allowed, NSWorkspace.shared.frontmostApplication?.processIdentifier == word.processIdentifier {
+                    // Same explicit Word gesture, still on Word. Do not retry
+                    // later over an app the user has switched to.
+                    NSApp.activate()
+                }
+            } },
+            activate: { NSApp.activate() })
+        if reason == "word-delivered", let ticket = wordTicket {
+            let generation = wordPresentationGeneration
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                guard let self, generation == self.wordPresentationGeneration,
+                      self.wordSessionActive, self.wordTicket == ticket else { return }
+                let front = NSWorkspace.shared.frontmostApplication
+                EditorLifecycleLog.logger.info("word_focus_observed front_pid=\(front?.processIdentifier ?? 0, privacy: .public) editor_active=\(NSApp.isActive, privacy: .public) window_key=\(self.editorWindow?.isKeyWindow ?? false, privacy: .public)")
+            }
         }
     }
-    func editorWindowDidAttach() { if revealEditorWhenAttached { showEditorWindow(reason: "window-attached") } }
+    func editorWindowDidAttach() {
+        guard let pending = pendingEditorReveal else { return }
+        pendingEditorReveal = nil
+        if let ticket = pending.ticket {
+            guard pending.generation == wordPresentationGeneration, shouldRevealWordDelivery(ticket, accepted: true) else { return }
+        }
+        showEditorWindow(reason: pending.reason)
+    }
+    func reopenEditorFromDock() {
+        showEditorWindow(reason: "dock-reopen")
+        refreshWordDocumentAfterLoad = true
+        refreshVisibleWordDocumentIfNeeded()
+    }
+    func refreshVisibleWordDocumentIfNeeded() {
+        guard refreshWordDocumentAfterLoad, editorReady, let webView, editorWindow?.isVisible == true,
+              !wordSessionActive, deliveringWordTicket == nil, pendingWordTickets.isEmpty else { return }
+        refreshWordDocumentAfterLoad = false
+        let wordRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty
+        webView.callAsyncJavaScript("return await window.nativeResumeWordDocument(wordRunning)", arguments: ["wordRunning": wordRunning], in: nil, in: .page) { [weak self] result in
+            if case .failure(let error) = result { self?.state.message = "未能恢复 Word 文档：\(error.localizedDescription)"; self?.state.messageError = true }
+        }
+    }
     // Returns whether this state update should hand the visible editor back to Word.
     func updateWordSessionState(_ payload: [String: Any]) -> Bool {
+        if let pending = payload["wordDocumentRequestPending"] as? Bool { wordDocumentRequestPending = pending }
         guard let active = payload["wordSession"] as? Bool else { return false }
         if active {
             wordSessionActive = true; wordSessionDelivered = true
@@ -206,7 +257,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             // being delivered, clear its ticket, or hide its window.
             if ended == deliveringWordTicket { wordPresentationGeneration += 1 }
             if ended == wordTicket { wordSessionActive = false; wordSessionIsInsertion = false; wordTicket = nil; wordSessionDelivered = false }
+            if pendingEditorReveal?.ticket == ended { pendingEditorReveal = nil }
             wordToolIntents.removeValue(forKey: ended)
+            wordDocumentRequestIDs.removeValue(forKey: ended)
             pendingWordTickets.removeAll { $0 == ended }
             let replacing = (deliveringWordTicket != nil && deliveringWordTicket != ended) || !pendingWordTickets.isEmpty
             return wasActive && !replacing && payload["wordSessionSwitching"] as? Bool != true
@@ -233,7 +286,10 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         deliveringWordTicket = ticket
         wordOpenStarted = CFAbsoluteTimeGetCurrent()
         recordWindowEvent("word_delivery_begin", reason: "word-activation")
-        web.callAsyncJavaScript("return await window.nativeOpenWordSession(ticket)", arguments: ["ticket": ticket], in: nil, in: .page) { [weak self] result in
+        let requestID = wordDocumentRequestIDs.removeValue(forKey: ticket)
+        var arguments: [String: Any] = ["ticket": ticket]
+        arguments["documentRequestId"] = requestID.map { $0 as Any } ?? NSNull()
+        web.callAsyncJavaScript("return await window.nativeOpenWordSession(ticket, documentRequestId)", arguments: arguments, in: nil, in: .page) { [weak self] result in
             guard let self else { return }
             self.deliveringWordTicket = nil
             guard presentationGeneration == self.wordPresentationGeneration else {
@@ -271,7 +327,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     func returnToWord(hideEditor: Bool = true) {
         recordWindowEvent("word_return", reason: hideEditor ? "session-ended" : "handoff")
         let word = NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").first
-        WordFocusHandoff.finish(editorIsActive: NSApp.isActive, wordIsActive: word?.isActive ?? true,
+        let front = NSWorkspace.shared.frontmostApplication
+        WordFocusHandoff.finish(editorIsActive: front?.processIdentifier == ProcessInfo.processInfo.processIdentifier,
+            wordIsActive: word == nil || front?.processIdentifier == word?.processIdentifier,
             yield: { if let word { NSApp.yieldActivation(to: word) } },
             activate: { if let word {
                 let allowed = word.activate(from: .current, options: [])
@@ -282,7 +340,11 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if hideEditor { EditorLifecycleLog.logger.info("word_editor_hidden") }
         else { EditorLifecycleLog.logger.info("word_navigation_handoff") }
     }
-    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) { editorReady = true; (webView as? EquationWKWebView)?.recordLifecycle("loaded"); (webView as? EquationWKWebView)?.syncAppearance(); syncInterfaceLanguage(); deliverWordSession() }
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        editorReady = true; (webView as? EquationWKWebView)?.recordLifecycle("loaded"); (webView as? EquationWKWebView)?.syncAppearance()
+        syncInterfaceLanguage(); deliverWordSession()
+        if refreshWordDocumentAfterLoad { refreshVisibleWordDocumentIfNeeded() }
+    }
     func invoke(_ function: String, argument: Int? = nil) { webView?.evaluateJavaScript("window.\(function)?.(\(argument.map(String.init) ?? ""))", completionHandler: nil) }
     func prepareToClose(_ completion: @escaping (Bool) -> Void) {
         recordWindowEvent("close_requested", reason: wordSessionActive ? "word-session" : "standalone")
@@ -399,8 +461,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             showEditorWindow()
             let alert = NSAlert()
             let closing = payload["closing"] as? Bool == true
+            let browsing = payload["browsing"] as? Bool == true
             alert.messageText = t(closing ? "当前公式尚不能保存" : "当前公式还有未保存的修改")
-            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
             alert.addButton(withTitle: t("继续编辑当前公式"))
             alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : "放弃修改并打开"))
             let answer: NSApplication.ModalResponse

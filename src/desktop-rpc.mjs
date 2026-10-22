@@ -41,9 +41,12 @@ function cacheThumbnail(key,image){
  return image;
 }
 
+async function nativeWordRequest(path,payload){
+ const response=await fetch('http://127.0.0.1:37952/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)}),result=await response.json();if(!response.ok)throw Error(result.error||'Word 会话服务不可用');return result;
+}
 async function wordSession(path,payload){
  if(!/^[a-f0-9]{64}$/.test(payload.ticket||''))throw Error('无效的 Word 编辑会话');
- const response=await fetch('http://127.0.0.1:37952/api/'+path,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:AbortSignal.timeout(15000)}),result=await response.json();if(!response.ok)throw Error(result.error||'Word 会话服务不可用');return result;
+ return nativeWordRequest(path,payload);
 }
 function checkedWordSource(session,ticket){
  if(session.ticket!==ticket||typeof session.path!=='string'||typeof session.native!=='string'||typeof session.session!=='string')throw Error('Word 会话源数据无效');
@@ -101,6 +104,9 @@ async function insertWordEquation(payload){
 
 export async function desktopRequest(request) {
  const {action,payload={}}=request;
+ if(action==='wordDocumentOpen')return nativeWordRequest('native-document-request',payload);
+ if(action==='wordDocumentStatus')return nativeWordRequest('native-document-status',payload);
+ if(action==='wordDocumentCancel')return nativeWordRequest('native-document-cancel',payload);
  if(action==='numberingPreview')return {text:previewNumberFormat(payload.pattern,payload.values)};
  if(action==='typography-default')return {profile:factoryTypography(),spaces:TYPOGRAPHY_SPACES,extraSizes:TYPOGRAPHY_EXTRA_SIZES,factorySource:MATHTYPE_FACTORY_SOURCE};
  if(action==='preferencesImport'){
@@ -237,7 +243,7 @@ export async function desktopRequest(request) {
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
   let rendering=warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n'));
-  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','typography-default','numberingPreview']),inflight=new Set();
+  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','typography-default','numberingPreview']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.

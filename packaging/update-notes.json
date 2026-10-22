@@ -1,5 +1,5 @@
 {
-  "version": "0.6.3",
-  "zh": "修复 Word 浅蓝选区无法直接编辑公式的问题，减少双击时的重复激活。逐一验证 30 个公式的打开和完整列表，并验证公式 26 的保存、重开与编号。补充自动检查更新及更新按钮的实测。",
-  "en": "Fix editing equations selected as blue text in Word and avoid duplicate activation on double-click. Verified all 30 demo equations and full document lists, plus saving, reopening, and numbering for equation 26. Checked automatic update detection and the update button in the app."
+  "version": "0.6.4",
+  "zh": "修复插入后从 Dock 重开时文档公式列表为空的问题；插入过程中可切换已有公式，并保护未保存的草稿。修复双击公式打开编辑器却没有置前的问题，保存后返回 Word。将取消和提交按钮放到编辑模式栏右侧，节省编辑空间。",
+  "en": "Restore the document equation list when reopening from the Dock after insertion. Existing equations can be selected during insertion, with a prompt protecting changed drafts. Fix the editor opening behind Word on double-click and return focus to Word after saving. Move Cancel and the submit action to the right of the editing mode controls."
 }

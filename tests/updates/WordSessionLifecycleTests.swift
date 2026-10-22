@@ -65,6 +65,30 @@ final class WordSessionLifecycleTests: XCTestCase {
             yield: { requests += 1 }, activate: { requests += 1 }, hide: {})
         XCTAssertEqual(requests, 0)
     }
+    func testWordForegroundRequestsEditorActivationEvenIfItsWindowWasAlreadyKey() {
+        var events: [String] = []
+        WordFocusHandoff.begin(editorIsFrontmost: false, wordIsFrontmost: true, fromWord: true,
+            activateFromWord: { events.append("activate-from-word") }, activate: { events.append("activate") })
+        XCTAssertEqual(events, ["activate-from-word"])
+    }
+    func testWordDeliveryDoesNotActivateOverAnAppTheUserSwitchedTo() {
+        var requests = 0
+        WordFocusHandoff.begin(editorIsFrontmost: false, wordIsFrontmost: false, fromWord: true,
+            activateFromWord: { requests += 1 }, activate: { requests += 1 })
+        XCTAssertEqual(requests, 0)
+    }
+    func testForegroundEditorDoesNotRepeatTheActivationRequest() {
+        var requests = 0
+        WordFocusHandoff.begin(editorIsFrontmost: true, wordIsFrontmost: false, fromWord: true,
+            activateFromWord: { requests += 1 }, activate: { requests += 1 })
+        XCTAssertEqual(requests, 0)
+    }
+    func testExplicitDockReopenRequestsActivationFromAnotherApp() {
+        var events: [String] = []
+        WordFocusHandoff.begin(editorIsFrontmost: false, wordIsFrontmost: false, fromWord: false,
+            activateFromWord: { events.append("activate-from-word") }, activate: { events.append("activate") })
+        XCTAssertEqual(events, ["activate"])
+    }
     func testRejectedTicketCannotRevealPreviousFormulaWindow() {
         let bridge = DesktopBridge()
         _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
@@ -84,5 +108,30 @@ final class WordSessionLifecycleTests: XCTestCase {
         _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": second])
         bridge.applyReadyWordTool(second)
         XCTAssertEqual(bridge.inspectorTab, .spacing)
+    }
+    func testEndingBeforeWindowAttachInvalidatesDeferredWordReveal() {
+        let bridge = DesktopBridge()
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        bridge.showEditorWindow(reason: "word-delivered")
+        XCTAssertEqual(bridge.pendingEditorReveal?.ticket, first)
+        XCTAssertTrue(bridge.updateWordSessionState(ended(first)))
+        XCTAssertNil(bridge.pendingEditorReveal)
+        bridge.editorWindowDidAttach()
+        XCTAssertNil(bridge.pendingEditorReveal)
+    }
+    func testDockRevealRemainsIndependentOfEndedWordTicket() {
+        let bridge = DesktopBridge()
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        bridge.showEditorWindow(reason: "dock-reopen")
+        XCTAssertTrue(bridge.updateWordSessionState(ended(first)))
+        XCTAssertEqual(bridge.pendingEditorReveal?.reason, "dock-reopen")
+        XCTAssertNil(bridge.pendingEditorReveal?.ticket)
+    }
+    func testDocumentRefreshIsAClosablePendingOperation() {
+        let bridge = DesktopBridge()
+        _ = bridge.updateWordSessionState(["wordSession": false, "wordDocumentRequestPending": true])
+        XCTAssertTrue(bridge.hasWordSessionOrRequest)
+        _ = bridge.updateWordSessionState(["wordSession": false, "wordDocumentRequestPending": false])
+        XCTAssertFalse(bridge.hasWordSessionOrRequest)
     }
 }

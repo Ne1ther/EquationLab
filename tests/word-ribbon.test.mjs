@@ -70,7 +70,8 @@ test('requested capture uses retained anchors or an exact first selection withou
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const procedure=name=>source.slice(source.indexOf(name),source.indexOf('End Sub',source.indexOf(name))).split('\n').map(line=>line.split("'")[0]).join('\n');
  const remember=procedure('Private Sub RememberSnapshot');
- assert.match(remember,/shape\.Range\.Duplicate/);assert.match(remember,/anchors\.Add anchor/);assert.match(remember,/mBoundRanges\.Add anchors/);
+ assert.match(remember,/shape\.Range\.Duplicate/);assert.match(remember,/anchors\.Add anchor/);assert.match(remember,/RememberDocumentRanges mDocument, mSnapshotToken, anchors/);
+ const rememberRanges=procedure('Private Sub RememberDocumentRanges');assert.match(rememberRanges,/mBoundRanges\.Add anchors, CStr\(snapshotToken\)/);
  assert.doesNotMatch(remember,/mBoundRanges\.Add mEquations/);
  const capture=procedure('Private Sub ApplyDocumentCaptureRequest');
  assert.match(capture,/mBoundDocuments\(CStr\(snapshot\)\)/);assert.match(capture,/KnownDocumentIdentity\(Doc\) <> identity/);

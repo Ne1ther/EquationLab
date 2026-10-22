@@ -10,6 +10,7 @@ End Sub
 
 Public Sub ELInitializeDocumentEvents()
     EquationLabDocumentContext.ELStartDocumentEvents
+    EquationLabDocumentContext.ELQueueNativeSessionWatch
     If Application.Documents.Count > 0 Then EquationLabDocumentContext.ELQueueDisplayRefresh ActiveDocument
 End Sub
 

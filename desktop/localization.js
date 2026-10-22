@@ -31,4 +31,5 @@ window.setWorkbenchLanguage = language => {
   : '只修改字符字节，保留原生结构、样式和伴随数据。支持数字、英文字母及已确认编码的希腊字母。';
  for (const input of document.querySelectorAll('#character-editor input')) input.setAttribute('aria-label', english
   ? `Replace character at ${input.dataset.offset}` : `替换字符，位置 ${input.dataset.offset}`);
+ window.syncWordEditorControls?.();
 };

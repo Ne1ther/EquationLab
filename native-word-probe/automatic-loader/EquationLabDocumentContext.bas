@@ -68,9 +68,18 @@ Private Sub RememberSnapshot()
         Set anchor = shape.Range.Duplicate
         anchors.Add anchor
     Next
-    mBoundDocuments.Add mDocument, CStr(mSnapshotToken)
-    mBoundRanges.Add anchors, CStr(mSnapshotToken)
-    mBoundTokens.Add mSnapshotToken
+    RememberDocumentRanges mDocument, mSnapshotToken, anchors
+End Sub
+
+Private Sub RememberDocumentRanges(ByVal Doc As Document, ByVal snapshotToken As Long, ByVal anchors As Collection)
+    If mBoundDocuments Is Nothing Then
+        Set mBoundDocuments = New Collection
+        Set mBoundRanges = New Collection
+        Set mBoundTokens = New Collection
+    End If
+    mBoundDocuments.Add Doc, CStr(snapshotToken)
+    mBoundRanges.Add anchors, CStr(snapshotToken)
+    mBoundTokens.Add snapshotToken
     ' Keep only live Range anchors for recent editing sessions. An evicted or
     ' deleted anchor fails rather than falling back to ActiveDocument.
     If mBoundDocuments.Count > 32 Then
@@ -543,7 +552,18 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String)
     Set mInsertionRange = Selection.Range.Duplicate
     ELObserveDocument mInsertionDocument
     mInsertionToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
-    Dim directory As String, xml As String, result As Long
+    Dim directory As String, xml As String, result As Long, shape As InlineShape, anchor As Range
+    Dim insertionEquations As Collection, insertionAnchors As Collection
+    Set insertionEquations = New Collection
+    For Each shape In mInsertionDocument.InlineShapes
+        If Supported(shape) Then insertionEquations.Add shape
+    Next
+    Set insertionAnchors = New Collection
+    For Each shape In insertionEquations
+        Set anchor = shape.Range.Duplicate
+        insertionAnchors.Add anchor
+    Next
+    RememberDocumentRanges mInsertionDocument, mInsertionToken, insertionAnchors
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     xml = mInsertionDocument.Content.WordOpenXML
@@ -661,6 +681,13 @@ Public Sub ELPollNavigation()
     End If
     ELReportDocumentCaptureFailure
     If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then SchedulePoll: Exit Sub
+    Dim documentRequestToken As Long
+    documentRequestToken = EquationLabNativeCommand("MathTypeBridgeTakeWordDocumentRequest")
+    If documentRequestToken > 0 Then
+        ApplyWordDocumentRequest documentRequestToken
+        SchedulePoll
+        Exit Sub
+    End If
     ' Word for Mac can leave newly visible inline previews blank after a
     ' jump. Repaint once after layout settles, without changing zoom,
     ' selection, document content, or another macro's ScreenUpdating state.
@@ -693,6 +720,136 @@ Public Sub ELPollNavigation()
     Exit Sub
 Failed:
     Debug.Print "Equation Lab navigation unavailable: "; Err.Number
+End Sub
+
+Private Function ELIsRequestId(ByVal value As String) As Boolean
+    If Len(value) <> 64 Then Exit Function
+    Dim i As Long, character As String
+    For i = 1 To 64
+        character = Mid$(value, i, 1)
+        If Not (character >= "0" And character <= "9") And Not (character >= "a" And character <= "f") Then Exit Function
+    Next
+    ELIsRequestId = True
+End Function
+
+Private Function ELIsUnsignedInteger(ByVal value As String) As Boolean
+    If Len(value) = 0 Then Exit Function
+    Dim i As Long, character As String
+    For i = 1 To Len(value)
+        character = Mid$(value, i, 1)
+        If character < "0" Or character > "9" Then Exit Function
+    Next
+    ELIsUnsignedInteger = True
+End Function
+
+Private Function ELFirstSupportedEquation(ByVal Doc As Document) As InlineShape
+    On Error GoTo Missing
+    Dim candidate As InlineShape
+    For Each candidate In Doc.InlineShapes
+        If Supported(candidate) Then
+            Set ELFirstSupportedEquation = candidate
+            Exit Function
+        End If
+    Next
+Missing:
+End Function
+
+Private Sub ELFinishWordDocumentRequest(ByVal command As String)
+    On Error Resume Next
+    Dim ignored As Long, directory As String, path As String
+    ignored = EquationLabNativeCommand(command)
+    directory = Options.DefaultFilePath(wdStartupPath)
+    Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
+    path = directory & "/.EquationLab/native-document-request.txt"
+    If Len(Dir$(path)) > 0 Then Kill path
+    Err.Clear
+    On Error GoTo 0
+End Sub
+
+Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
+    On Error GoTo Failed
+    Dim directory As String, path As String, fileNumber As Integer, content As String, fields As Variant
+    Dim requestId As String, identity As String, snapshot As Long, targetIndex As Long, identityToken As Long
+    Dim digest As String, separator As Long, Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape
+    Dim isOpen As Boolean, result As Long
+    directory = Options.DefaultFilePath(wdStartupPath)
+    Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
+    path = directory & "/.EquationLab/native-document-request.txt"
+    fileNumber = FreeFile
+    Open path For Binary Access Read Lock Read As #fileNumber
+    content = Space$(LOF(fileNumber))
+    If Len(content) = 0 Then GoTo Failed
+    Get #fileNumber, , content
+    Close #fileNumber
+    fields = Split(content, vbLf)
+    If UBound(fields) <> 8 Or fields(0) <> "ELDREQ1" Or fields(8) <> "" Then GoTo Failed
+    If CLng(fields(1)) <> requestToken Or requestToken <= 0 Then GoTo Failed
+    requestId = CStr(fields(2))
+    If Not ELIsRequestId(requestId) Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
+    If fields(3) = "0" Then
+        If fields(4) <> "" Or fields(5) <> "0" Or fields(6) <> "0" Or fields(7) <> "" Then GoTo Failed
+        If Application.Documents.Count = 0 Then
+            ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestNoDocument"
+            Exit Sub
+        End If
+        Set Doc = ActiveDocument
+        ELObserveDocument Doc
+        Set shape = ELSelectedEquation(Selection)
+        If shape Is Nothing Then
+            Set shape = ELFirstSupportedEquation(Doc)
+        ElseIf Not Supported(shape) Then
+            Set shape = ELFirstSupportedEquation(Doc)
+        End If
+        If shape Is Nothing Then
+            ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestEmpty"
+            Exit Sub
+        End If
+    ElseIf fields(3) = "1" Then
+        identity = CStr(fields(4)): digest = CStr(fields(7))
+        If Len(digest) <> 64 Or Not ELIsRequestId(digest) Then GoTo Failed
+        If Not ELIsUnsignedInteger(CStr(fields(5))) Or Not ELIsUnsignedInteger(CStr(fields(6))) Then GoTo Failed
+        snapshot = CLng(fields(5)): targetIndex = CLng(fields(6))
+        If snapshot <= 0 Or targetIndex < 0 Or targetIndex > 10000 Then GoTo Failed
+        separator = InStrRev(identity, ":")
+        If separator <= 1 Or separator = Len(identity) Then GoTo Failed
+        If Not ELIsUnsignedInteger(Mid$(identity, separator + 1)) Then GoTo Failed
+        identityToken = CLng(Mid$(identity, separator + 1))
+        If identityToken <= 0 Then GoTo Failed
+        If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
+        Set Doc = mBoundDocuments(CStr(snapshot))
+        If KnownDocumentIdentity(Doc) <> identityToken Then GoTo Failed
+        For Each candidate In Application.Documents
+            If candidate Is Doc Then isOpen = True: Exit For
+        Next
+        If Not isOpen Or Doc.ReadOnly Then GoTo Failed
+        Set anchors = mBoundRanges(CStr(snapshot))
+        If targetIndex + 1 > anchors.Count Then GoTo Failed
+        Set anchor = anchors(targetIndex + 1)
+        Set shape = ResolveBoundEquation(Doc, anchor, targetIndex + 1)
+        If shape Is Nothing Then GoTo Failed
+    Else
+        GoTo Failed
+    End If
+    If Not (shape.Range.Document Is Doc) Or shape.Range.StoryType <> wdMainTextStory Then GoTo Failed
+    If shape.Range.InlineShapes.Count <> 1 Or Not Supported(shape) Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
+    If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Cancelled
+    ELOpenEquation shape
+    ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestOpened"
+    Exit Sub
+Cancelled:
+    ' A status recheck retired this request before activation. Do not open it.
+    On Error Resume Next
+    If Len(Dir$(path)) > 0 Then Kill path
+    Err.Clear
+    On Error GoTo 0
+    Exit Sub
+Failed:
+    On Error Resume Next
+    If fileNumber <> 0 Then Close #fileNumber
+    Debug.Print "Equation Lab document request failed: "; Err.Number
+    ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestFailed"
 End Sub
 
 Private Function KnownDocumentIdentity(ByVal Doc As Document) As Long

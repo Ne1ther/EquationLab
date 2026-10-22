@@ -30,6 +30,7 @@
 | `src/layout.mjs` | 公式位置、编号样式和引用域 / Equation placement and numbering |
 | `src/word-numbering.mjs` | 从 Word 文档读取章、节、编号和引用详情 / Document numbering context |
 | `src/word-native-session.mjs` | Word 编辑与空白插入会话、回存确认、取消和公式切换 / Word edit and insertion sessions |
+| `src/word-document-requests.mjs` | 文档重开与精确公式请求、状态和取消 / Document reopen requests and cancellation |
 | `src/desktop-rpc.mjs` | 原生 App 与引擎之间的命令接口 / App-to-engine commands |
 | `src/app-services.mjs / src/server.mjs` | 本机后台服务和 Word 通信 / Local services |
 | `src/cli.mjs / src/cli-entry.mjs` | 命令行入口与路径识别 / CLI entry points |
@@ -54,6 +55,7 @@
 | `macos/Views/` | 编辑窗口、侧栏、工具栏和各类检查器 / App views |
 | `macos/Views/NumberingFormatEditor.swift` | 编号预设、自定义格式、预览和文档详情 / Number format editor |
 | `desktop/app.js` | 公式编辑、Word 会话和界面交互 / Editor behavior |
+| `desktop/word-document-workspace.js` | 文档列表缓存、Dock 恢复、草稿保护和新会话关联 / Document workspace restoration and draft protection |
 | `desktop/index.html / desktop/style.css / desktop/native.css` | 画布页面、基础样式与原生窗口样式 / Canvas markup and styles |
 | `desktop/editable-macros.js / desktop/catalog-macros.js` | 模板结构与可编辑参数的适配 / Editable template adapters |
 | `desktop/editor-viewport.js` | 公式画布的缩放与视口 / Editor viewport |
@@ -72,6 +74,7 @@
 | `native-word-probe/automatic-loader/EquationLabRibbon.bas` | 插入、编辑、编号、引用等功能区命令 / Ribbon commands |
 | `native-word-probe/src/` | 原生 OLE 对象、编辑通信及宿主检查 / Native Word component |
 | `native-word-probe/src/word_insertion.mm` | 新公式片段的交付、插入结果确认和重试 / New equation delivery and acknowledgements |
+| `native-word-probe/src/word_document_requests.mm` | 接收 App 文档请求并交给 Word 处理 / Word-owned document request delivery |
 | `native-word-probe/Info.plist` | 原生 Word 组件的版本与基本信息 / Component metadata |
 | `word-ribbon/` | 原生 Word 功能区命令元数据与图标 / Native Word Ribbon metadata and icons |
 
@@ -108,6 +111,8 @@
 | `docs/install.md / docs/features.md` | 安装、使用、编号及间距设置 / User guides |
 | `docs/development.md / packaging/README.md` | 编译、测试和完整打包 / Developer guides |
 | `docs/updates.md / docs/releases.md` | 更新方式和当前版本记录 / Update and release notes |
+| `docs/source-publication.md` | 源码、发布附件和本地材料的维护方式 / Source and release workflow |
+| `docs/feature-parity.md` | 当前功能入口与相关测试 / Feature and test map |
 | `docs/ocr.md` | 图片识别的后续计划 / OCR plan |
 | `docs/examples/` | 三节三十公式的 Word 和 PDF 演示 / Public demo documents |
 | `docs/preview/` | 真实 App 截图和演示预览 / Actual screenshots |
