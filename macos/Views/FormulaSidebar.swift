@@ -9,7 +9,19 @@ struct FormulaSidebar: View {
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return search.isEmpty ? allItems : allItems.filter { "\($0.id + 1) \($0.latex) \($0.label) \($0.detail)".localizedCaseInsensitiveContains(search) }
     }
-    private var selectionUnavailable: Bool { bridge.state.busy || showingFavorites && bridge.wordSessionActive }
+    private var selectionUnavailable: Bool {
+        bridge.state.busy || showingFavorites && bridge.wordSessionActive || !showingFavorites && bridge.state.wordDocumentUnavailable
+    }
+    private var documentSwitchUnavailable: Bool { bridge.state.busy || bridge.state.wordOutcomeUnknown }
+    private var documentOrdinals: [String: Int] {
+        var counts: [String: Int] = [:]
+        var ordinals: [String: Int] = [:]
+        for document in bridge.state.openWordDocuments {
+            counts[document.name, default: 0] += 1
+            ordinals[document.identity] = counts[document.name]
+        }
+        return ordinals
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -17,10 +29,85 @@ struct FormulaSidebar: View {
                 Text(bridge.t("文档")).tag(false)
                 Text(bridge.t("收藏")).tag(true)
             }.pickerStyle(.segmented).labelsHidden().padding(14)
-            HStack {
-                Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式")).font(.headline)
+            if !showingFavorites {
+                HStack(alignment: .top, spacing: 9) {
+                    Image(systemName: "doc.text")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .accessibilityHidden(true)
+                    VStack(alignment: .leading, spacing: 5) {
+                        Menu {
+                            if bridge.state.openWordDocuments.isEmpty {
+                                Text(bridge.t(bridge.state.wordWorkspaceConnected ? "没有打开的 Word 文档" : "尚未连接 Word"))
+                                    .foregroundStyle(.secondary)
+                            } else {
+                                ForEach(bridge.state.openWordDocuments) { document in
+                                    let selected = document.identity == bridge.state.wordDocumentIdentity
+                                    let duplicate = bridge.state.openWordDocuments.filter { $0.name == document.name }.count > 1
+                                    let title = duplicate ? "\(document.name) (\(documentOrdinals[document.identity] ?? 1))" : document.name
+                                    Button {
+                                        bridge.invoke("nativeChooseWordDocument", argument: document.identity)
+                                    } label: {
+                                        HStack {
+                                            Text(title)
+                                            if document.readOnly { Text("· " + bridge.t("只读")) }
+                                            Spacer()
+                                            if selected { Image(systemName: "checkmark") }
+                                        }
+                                    }
+                                    .disabled(documentSwitchUnavailable || document.readOnly || selected)
+                                }
+                            }
+                            Divider()
+                            Button(bridge.t("刷新 Word 文档列表")) {
+                                bridge.invoke("nativeRefreshWordDocumentList")
+                            }
+                        } label: {
+                            HStack(spacing: 7) {
+                                Text(bridge.state.documentName)
+                                    .font(.headline.weight(.semibold))
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
+                                Image(systemName: "chevron.up.chevron.down")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .contentShape(Rectangle())
+                        }
+                        .menuStyle(.borderlessButton)
+                        .help(bridge.state.documentName)
+                        .accessibilityLabel(bridge.t("切换 Word 文档"))
+                        .accessibilityValue(bridge.state.documentName)
+                        if bridge.state.wordDocumentUnavailable {
+                            Label(bridge.t("文档连接已结束，草稿已保留。"), systemImage: "exclamationmark.circle.fill")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .labelStyle(.titleAndIcon)
+                                .accessibilityLabel(bridge.t("文档连接已结束，草稿已保留。"))
+                        }
+                    }
+                    Spacer(minLength: 0)
+                }
+                .padding(.horizontal, 10)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
+                .padding(.horizontal, 14)
+                .padding(.top, 0)
+                .padding(.bottom, 5)
+            }
+            HStack(spacing: 8) {
+                Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式"))
+                    .font(showingFavorites ? .headline : .subheadline.weight(.medium))
                 Spacer()
                 Text(query.isEmpty ? "\(allItems.count)" : "\(items.count) / \(allItems.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                if !showingFavorites {
+                    Button { bridge.invoke("nativeRefreshWordWorkspace") } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.plain).disabled(bridge.state.busy)
+                        .accessibilityLabel(bridge.t("刷新当前 Word 文档")).help(bridge.t("刷新当前 Word 文档"))
+                }
             }.padding(.horizontal, 18).padding(.vertical, 8)
             if !allItems.isEmpty || !query.isEmpty {
                 HStack(spacing: 6) {

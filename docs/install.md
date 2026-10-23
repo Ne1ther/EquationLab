@@ -10,6 +10,8 @@
 
 双击公式进入独立编辑窗口；左边浏览当前文档的公式，右边调整样式、排版和编号。新公式点“完成并插入”，已有公式点“更新公式”；按钮在编辑模式选择栏的右侧。“取消”会保留 Word 原内容。插入后关闭窗口，从 Dock 重开会重新读取文档公式。插入时也能选择左侧已有公式；如果草稿已修改，会先询问是否放弃。
 
+左侧文件名菜单列出 Word 当前打开的文档。同名文件按文档身份区分；只读项不可选。有未保存修改时，切换前会询问是否放弃。保存忙碌、保存结果未确定或 Word 状态未知时不能切换。切换 Word 当前文档后，干净的编辑器会自动跟随；有修改的草稿留在原文档。来源文档关闭后会清理其不可用公式列表，并保留草稿。菜单刷新更新文档列表和可用状态；公式区刷新重新读取当前文档公式，有未保存修改时会跳过并保留草稿。文档信息刷新本身不会重读公式。
+
 ## Word 里没有显示 Equation Lab
 
 先完全退出 Word。在 Equation Lab 的 **Office 插件**窗口中安装或修复插件，再重新打开 Word。程序会检测 Word 和它的实际 Startup 位置；如果移动过 Word 或更改过启动目录，重新修复一次。
@@ -26,4 +28,4 @@
 
 ---
 
-Save your documents and quit Word and Equation Lab, then open the [0.6.4 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.4/Equation-Lab-0.6.4.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons share a row with the editing mode controls. Reopening from the Dock refreshes the document list. Selecting an existing equation during insertion prompts before discarding a changed draft. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.
+Save your documents and quit Word and Equation Lab, then open the [0.6.4 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.4/Equation-Lab-0.6.4.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons share a row with the editing mode controls. Reopening from the Dock refreshes the document list. The filename menu lists open Word documents and distinguishes them by identity; read-only choices are disabled. A changed draft prompts before switching. Switching is unavailable while saving, when the save result is unknown, or when Word's state is unavailable. A clean editor follows the active Word document; a changed draft stays with its original document. Closing the source document clears its unavailable formula list and keeps the draft. The menu refresh updates document metadata; the formula refresh rereads the current document's equations but skips the refresh when the draft has unsaved changes. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.

@@ -40,7 +40,8 @@ export async function manageWordService({action='install',app,home=homedir(),uid
  if(current&&(!state||state.label!==SERVICE_LABEL||state.plistSha256!==digest(current)))throw Error('后台服务文件已被外部修改，未覆盖或移除');
  if(action==='status')return {installed:!!current,app:state?.app};
  const loaded=()=>{try{execute('/bin/launchctl',['print',service]);return true;}catch{return false;}};
- if(loaded()&&!current)throw Error('发现未登记的同名后台服务，未停止或覆盖');
+ const wasLoaded=loaded();
+ if(wasLoaded&&!current)throw Error('发现未登记的同名后台服务，未停止或覆盖');
  if(action==='remove'){
   if(loaded())execute('/bin/launchctl',['bootout',service]);
   if(current)await unlink(target);
@@ -53,8 +54,20 @@ export async function manageWordService({action='install',app,home=homedir(),uid
   if(!(await lstat(file)).isFile())throw Error('应用缺少内置 Word 服务');
  }
  await mkdir(directory,{recursive:true,mode:0o700});await mkdir(join(support,'logs'),{recursive:true,mode:0o700});
- const wasLoaded=loaded(),temporary=target+`.${process.pid}.tmp`;
+ const temporary=target+`.${process.pid}.tmp`;
  const bootstrap=async()=>{for(let attempt=0;;attempt++){try{return execute('/bin/launchctl',['bootstrap',domain,target]);}catch(error){if(attempt>=15||!String(error.stderr??error.message).includes('Bootstrap failed: 5:'))throw error;await delay(200);}}};
+ // If the exact hash-owned configuration is already installed, keep the
+ // launchd job registered. A deleted and restored app can leave launchd with
+ // the old job definition; kickstart reloads it without bootout/bootstrap's
+ // transient "service already loaded" failure.
+ if(current&&current.equals(Buffer.from(plist))){
+  try{
+   if(wasLoaded)execute('/bin/launchctl',['kickstart','-k',service]);
+   else await bootstrap();
+   if(!loaded())throw Error('macOS 未启动 Word 后台服务');
+   return {installed:true,label:SERVICE_LABEL,app};
+  }catch(error){throw Error('Word 后台服务安装失败：'+error.message);}
+ }
  try{
   if(wasLoaded)execute('/bin/launchctl',['bootout',service]);
   await writeFile(temporary,plist,{mode:0o600,flag:'wx'});await rename(temporary,target);

@@ -16,6 +16,12 @@ Private mSnapshotGeneration As Long
 Private mSnapshotSaved As Boolean
 Private mSnapshotIdentity As Long
 Private mDocumentIdentity As Long
+Private mPublishedIdentity As Long
+Private mPublishedName As String
+Private mPublishedWorkspace As String
+Private mWorkspaceClearPublished As Boolean
+Private mWorkspaceRefreshRecheck As Boolean
+Private mReconcilingDocuments As Boolean
 Private mSnapshotToken As Long
 Private mKnownDocuments As Collection
 Private mKnownDocumentIds As Collection
@@ -32,28 +38,154 @@ Private mActivationAt As Double
 Private mActivationNonce As Long
 Private mActivationSnapshot As Long
 Private mActivationIndex As Long
+Private mRestoredActivationAnchor As Boolean
 
 Public Sub ELObserveDocument(ByVal Doc As Document)
-    Dim i As Long
+    If Not mReconcilingDocuments Then ELReconcileKnownDocuments
+    If Not ELIsDocumentOpen(Doc) Then Exit Sub
+    mWorkspaceClearPublished = False
     If mDocument Is Nothing Then
         Set mDocument = Doc
     ElseIf Not Doc Is mDocument Then
         ELClearDocumentContext
         Set mDocument = Doc
     End If
+    mDocumentIdentity = EnsureKnownDocumentIdentity(Doc)
+    If mDocumentIdentity <= 0 Then Exit Sub
+    PublishActiveDocument Doc
+End Sub
+
+Public Sub ELReconcileKnownDocuments()
+    If mReconcilingDocuments Then Exit Sub
+    mReconcilingDocuments = True
+    On Error GoTo Finished
+    Dim documentCount As Long, i As Long, Doc As Document
+    documentCount = Application.Documents.Count
+    If documentCount = 0 Then
+        If Not mKnownDocuments Is Nothing Then
+            For i = mKnownDocuments.Count To 1 Step -1
+                Set Doc = mKnownDocuments(i)
+                ELCloseDocumentContext Doc
+            Next
+        End If
+        If Not mWorkspaceClearPublished Then
+            If EquationLabNativeCommand("MathTypeBridgeClearWordWorkspace") = 0 Then
+                mWorkspaceClearPublished = True
+                mPublishedIdentity = 0
+                mPublishedName = ""
+                mPublishedWorkspace = ""
+            End If
+        End If
+        GoTo Finished
+    End If
+    If Not mKnownDocuments Is Nothing Then
+        For i = mKnownDocuments.Count To 1 Step -1
+            Set Doc = mKnownDocuments(i)
+            If Not ELIsDocumentOpen(Doc) Then ELCloseDocumentContext Doc
+        Next
+    End If
+    If Application.Documents.Count > 0 Then ELReconcileActiveDocumentWorkspace
+Finished:
+    mReconcilingDocuments = False
+End Sub
+
+Private Function ELIsDocumentOpen(ByVal Doc As Document) As Boolean
+    On Error GoTo Missing
+    Dim candidate As Document
+    ' Documents remain open while any of their windows remain. Comparing the
+    ' live Documents collection avoids treating one closed window as a closed
+    ' document and uses only COM identity checks, without reading document XML.
+    For Each candidate In Application.Documents
+        If candidate Is Doc Then
+            ELIsDocumentOpen = True
+            Exit Function
+        End If
+    Next
+Missing:
+End Function
+
+Private Sub PublishActiveDocument(ByVal Doc As Document)
+    PublishDocumentWorkspace Doc, mDocumentIdentity
+End Sub
+
+Private Sub ELReconcileActiveDocumentWorkspace()
+    On Error GoTo Failed
+    If Application.Documents.Count = 0 Then Exit Sub
+    Dim Doc As Document, identity As Long
+    Set Doc = ActiveDocument
+    identity = EnsureKnownDocumentIdentity(Doc)
+    If identity <= 0 Then Exit Sub
+    mWorkspaceClearPublished = False
+    PublishDocumentWorkspace Doc, identity
+Failed:
+End Sub
+
+Private Function EnsureKnownDocumentIdentity(ByVal Doc As Document) As Long
+    On Error GoTo Missing
     If mKnownDocuments Is Nothing Then
         Set mKnownDocuments = New Collection
         Set mKnownDocumentIds = New Collection
     End If
+    Dim i As Long, identity As Long
     For i = 1 To mKnownDocuments.Count
         If Doc Is mKnownDocuments(i) Then
-            mDocumentIdentity = CLng(mKnownDocumentIds(i))
-            Exit Sub
+            EnsureKnownDocumentIdentity = CLng(mKnownDocumentIds(i))
+            Exit Function
         End If
     Next
-    mDocumentIdentity = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    identity = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    If identity <= 0 Then Exit Function
     mKnownDocuments.Add Doc
-    mKnownDocumentIds.Add mDocumentIdentity
+    mKnownDocumentIds.Add identity
+    EnsureKnownDocumentIdentity = identity
+Missing:
+End Function
+
+Private Sub PublishDocumentWorkspace(ByVal Doc As Document, ByVal identity As Long)
+    On Error GoTo Failed
+    Dim directory As String, result As Long, content As String
+    Dim documentIdentity As Long, candidate As Document, documentName As String, readOnly As String
+    If identity <= 0 Then Exit Sub
+    If Application.Documents.Count > 128 Then Exit Sub
+    content = "ELWORK2" & vbLf & CStr(identity) & vbLf & CStr(Application.Documents.Count) & vbLf
+    For Each candidate In Application.Documents
+        documentIdentity = EnsureKnownDocumentIdentity(candidate)
+        If documentIdentity <= 0 Then Exit Sub
+        documentName = ELWorkspaceSafeName(candidate.Name)
+        readOnly = "0"
+        If candidate.ReadOnly Then readOnly = "1"
+        content = content & CStr(documentIdentity) & vbLf & readOnly & vbLf & documentName & vbLf
+    Next
+    If mPublishedWorkspace = content Then Exit Sub
+    directory = Options.DefaultFilePath(wdStartupPath)
+    Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
+    ELWriteUtf8 directory & "/.EquationLab/active-document.txt", content
+    result = EquationLabNativeCommand("MathTypeBridgePublishWordWorkspace")
+    If result = 0 Then
+        mPublishedIdentity = identity
+        mPublishedName = ELWorkspaceSafeName(Doc.Name)
+        mPublishedWorkspace = content
+    End If
+Failed:
+End Sub
+
+Private Function ELWorkspaceSafeName(ByVal value As String) As String
+    Dim i As Long, code As Long
+    For i = 1 To Len(value)
+        code = AscW(Mid$(value, i, 1))
+        If code < 0 Then code = code + 65536
+        If code < 32 Or (code >= 127 And code <= 159) Then Mid$(value, i, 1) = " "
+    Next
+    If Len(value) > 512 Then value = Left$(value, 512)
+    ELWorkspaceSafeName = value
+End Function
+
+Public Sub ELReportActiveDocument()
+    If Application.Documents.Count > 0 Then
+        ELObserveDocument ActiveDocument
+    Else
+        ELReconcileKnownDocuments
+    End If
 End Sub
 
 Private Sub RememberSnapshot()
@@ -91,7 +223,8 @@ End Sub
 
 Public Sub ELCloseDocumentContext(ByVal Doc As Document)
     On Error Resume Next
-    Dim i As Long, closeIdentity As Long, directory As String
+    Dim i As Long, closeIdentity As Long, directory As String, preserveOtherActivation As Boolean
+    preserveOtherActivation = ELHasPreparedActivationForOtherDocument(Doc)
     If Not mActivationDocument Is Nothing Then
         If mActivationDocument Is Doc Then ELClearActivationAnchor
     End If
@@ -107,6 +240,11 @@ Public Sub ELCloseDocumentContext(ByVal Doc As Document)
         Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
         ELWriteUtf8 directory & "/.EquationLab/document-close.txt", "ELCLOSE1" & vbLf & CStr(closeIdentity)
         i = EquationLabNativeCommand("MathTypeBridgeCloseDocumentIdentity")
+        If preserveOtherActivation Then ELRestoreActivationAnchorAfterIdentityClose
+        If closeIdentity = mPublishedIdentity Then
+            mPublishedIdentity = 0
+            mPublishedName = ""
+        End If
     End If
     If Not mBoundDocuments Is Nothing Then
         For i = mBoundDocuments.Count To 1 Step -1
@@ -125,12 +263,66 @@ Public Sub ELCloseDocumentContext(ByVal Doc As Document)
             End If
         Next
     End If
-    If Doc Is mDocument Then
-        Set mDocument = Nothing
-        Set mEquations = Nothing
+    If Not mDocument Is Nothing Then
+        If Doc Is mDocument Then
+            Set mDocument = Nothing
+            Set mEquations = Nothing
+            ELClearDocumentContext
+        End If
     End If
     If Doc Is mPaintDocument Then Set mPaintDocument = Nothing
-    ELClearDocumentContext
+End Sub
+
+Private Function ELHasPreparedActivationForOtherDocument(ByVal Doc As Document) As Boolean
+    Dim elapsed As Double
+    On Error GoTo Missing
+    If mActivationDocument Is Nothing Or mActivationRange Is Nothing Or mDocument Is Nothing Then Exit Function
+    If mActivationDocument Is Doc Or Not (mActivationDocument Is mDocument) Then Exit Function
+    If Not (mActivationDocument Is ActiveDocument) Or Not ELIsDocumentOpen(mActivationDocument) Then Exit Function
+    If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Exit Function
+    If mRestoredActivationAnchor Then
+        elapsed = Timer - mActivationAt
+        If elapsed < 0 Then elapsed = elapsed + 86400#
+        ELHasPreparedActivationForOtherDocument = (elapsed < 5#)
+    ElseIf mActivationNonce > 0 Then
+        ELHasPreparedActivationForOtherDocument = (EquationLabNativeCommand("MathTypeBridgePreparedDocumentActivationNonce") = mActivationNonce)
+    End If
+Missing:
+End Function
+
+Private Sub ELRestoreActivationAnchorAfterIdentityClose()
+    Dim elapsed As Double, identity As Long, directory As String, path As String, result As Long
+    On Error GoTo Missing
+    If mActivationDocument Is Nothing Or mActivationRange Is Nothing Or mDocument Is Nothing Then Exit Sub
+    If Not (mActivationDocument Is mDocument) Or Not (mActivationDocument Is ActiveDocument) Then Exit Sub
+    If Not ELIsDocumentOpen(mActivationDocument) Then Exit Sub
+    elapsed = Timer - mActivationAt
+    If elapsed < 0 Then elapsed = elapsed + 86400#
+    If elapsed >= 5# Then Exit Sub
+    identity = KnownDocumentIdentity(mActivationDocument)
+    If identity <= 0 Or mActivationSnapshot <= 0 Or mActivationIndex < 0 Then Exit Sub
+    directory = Options.DefaultFilePath(wdStartupPath)
+    Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
+    path = directory & "/.EquationLab/document-activation.txt"
+    ' Native close retires by identity but also clears the process-wide
+    ' activation hint. Restore only this still-live current document's hint;
+    ' the original five-second expiry remains in force.
+    ELWriteUtf8 path, "ELACT1" & vbLf & CStr(identity) & vbLf & CStr(mActivationSnapshot) & vbLf & CStr(mActivationIndex)
+    result = EquationLabNativeCommand("MathTypeBridgePrepareDocumentActivation")
+    If result = 0 Then
+        mActivationNonce = 0
+        mRestoredActivationAnchor = True
+    Else
+        ELClearActivationAnchor
+    End If
+Missing:
+End Sub
+
+Public Sub ELQueueWorkspaceRefresh()
+    On Error Resume Next
+    Dim result As Long
+    mWorkspaceRefreshRecheck = True
+    result = EquationLabNativeCommand("MathTypeBridgeQueueWorkspaceRefresh")
 End Sub
 
 Public Sub ELInvalidateDocumentSnapshot()
@@ -284,6 +476,7 @@ Private Sub ELClearActivationAnchor()
     mActivationNonce = 0
     mActivationSnapshot = 0
     mActivationIndex = 0
+    mRestoredActivationAnchor = False
 End Sub
 
 Private Function SameActivationTarget(ByVal target As InlineShape, ByVal Doc As Document) As Boolean
@@ -652,8 +845,13 @@ End Sub
 Public Sub ELPollNavigation()
     On Error GoTo Failed
     mPollScheduled = False
-    Dim insertionToken As Long
+    ELReconcileKnownDocuments
+    Dim insertionToken As Long, workspaceRefreshResult As Long
     insertionToken = EquationLabNativeCommand("MathTypeBridgeTakeInsertion")
+    If mWorkspaceRefreshRecheck Then
+        mWorkspaceRefreshRecheck = False
+        workspaceRefreshResult = EquationLabNativeCommand("MathTypeBridgeQueueWorkspaceRefresh")
+    End If
     If insertionToken > 0 Then
         ApplyInsertion insertionToken
         SchedulePoll
@@ -782,7 +980,7 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     Get #fileNumber, , content
     Close #fileNumber
     fields = Split(content, vbLf)
-    If UBound(fields) <> 8 Or fields(0) <> "ELDREQ1" Or fields(8) <> "" Then GoTo Failed
+    If UBound(fields) <> 8 Or fields(0) <> "ELDREQ2" Or fields(8) <> "" Then GoTo Failed
     If CLng(fields(1)) <> requestToken Or requestToken <= 0 Then GoTo Failed
     requestId = CStr(fields(2))
     If Not ELIsRequestId(requestId) Then GoTo Failed
@@ -799,6 +997,38 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
         If shape Is Nothing Then
             Set shape = ELFirstSupportedEquation(Doc)
         ElseIf Not Supported(shape) Then
+            Set shape = ELFirstSupportedEquation(Doc)
+        End If
+        If shape Is Nothing Then
+            ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestEmpty"
+            Exit Sub
+        End If
+    ElseIf fields(3) = "2" Then
+        identity = CStr(fields(4))
+        If fields(5) <> "0" Or fields(6) <> "0" Or fields(7) <> "" Then GoTo Failed
+        separator = InStrRev(identity, ":")
+        If separator <= 1 Or separator = Len(identity) Then GoTo Failed
+        If Not ELIsUnsignedInteger(Mid$(identity, separator + 1)) Then GoTo Failed
+        identityToken = CLng(Mid$(identity, separator + 1))
+        If identityToken <= 0 Or mKnownDocuments Is Nothing Or mKnownDocumentIds Is Nothing Then GoTo Failed
+        For Each candidate In mKnownDocuments
+            If KnownDocumentIdentity(candidate) = identityToken Then
+                Set Doc = candidate
+                Exit For
+            End If
+        Next
+        If Doc Is Nothing Or KnownDocumentIdentity(Doc) <> identityToken Then GoTo Failed
+        For Each candidate In Application.Documents
+            If candidate Is Doc Then isOpen = True: Exit For
+        Next
+        If Not isOpen Or Doc.ReadOnly Then GoTo Failed
+        If Not (Doc Is ActiveDocument) Then Doc.Activate
+        If Not (Doc Is ActiveDocument) Then GoTo Failed
+        ELObserveDocument Doc
+        Set shape = ELSelectedEquation(Selection)
+        If shape Is Nothing Then
+            Set shape = ELFirstSupportedEquation(Doc)
+        ElseIf Not Supported(shape) Or Not (shape.Range.Document Is Doc) Then
             Set shape = ELFirstSupportedEquation(Doc)
         End If
         If shape Is Nothing Then

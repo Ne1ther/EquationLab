@@ -25,9 +25,11 @@ xcrun clang++ -std=c++20 -Wall -Wextra -Werror "${probe_flags[@]}" -fobjc-arc -f
   -I "$probe_root/include" -c "$probe_root/src/ribbon_commands.mm" -o "$probe_build/ribbon_commands.o"
 xcrun clang++ -std=c++20 -Wall -Wextra -Werror "${probe_flags[@]}" -fobjc-arc -fvisibility=hidden \
   -I "$probe_root/include" -c "$probe_root/src/word_insertion.mm" -o "$probe_build/word_insertion.o"
+xcrun clang++ -std=c++20 -Wall -Wextra -Werror "${probe_flags[@]}" -fobjc-arc -fvisibility=hidden \
+  -I "$probe_root/include" -c "$probe_root/src/word_host_pump.mm" -o "$probe_build/word_host_pump.o"
 xcrun clang++ -std=c++20 -Wall -Wextra -Werror "${probe_flags[@]}" -fvisibility=hidden -bundle \
   -I "$probe_root/include" "$probe_root/src/bridge.cpp" "$probe_root/src/equation_object.cpp" "$probe_root/src/interop_runtime.cpp" \
-  "$probe_build/editor_transport.o" "$probe_build/word_document_requests.o" "$probe_build/startup_receipt.o" "$probe_build/ribbon_commands.o" "$probe_build/word_insertion.o" -framework AppKit -framework Foundation -framework CoreFoundation -framework CoreGraphics \
+  "$probe_build/editor_transport.o" "$probe_build/word_document_requests.o" "$probe_build/startup_receipt.o" "$probe_build/ribbon_commands.o" "$probe_build/word_insertion.o" "$probe_build/word_host_pump.o" -framework AppKit -framework Foundation -framework CoreFoundation -framework CoreGraphics \
   -o "$probe_bundle/Contents/MacOS/MathTypeBridgeProbe"
 /usr/bin/codesign --force --sign - "$probe_bundle"
 xcrun clang++ -std=c++20 -Wall -Wextra -Werror "${probe_flags[@]}" -I "$probe_root/include" \

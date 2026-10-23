@@ -133,8 +133,12 @@ End Sub
 
 Private Sub NavigateEquation(ByVal forward As Boolean)
     RequireDocument
-    Dim equation As InlineShape, chosen As InlineShape, position As Long
+    Dim equation As InlineShape, chosen As InlineShape, current As InlineShape, position As Long
+    ' Selection.Start can precede an embedded field's InlineShape range. Resolve
+    ' an exact supported selection first, then step from the object boundary.
+    Set current = ELSelectedEquation(Selection)
     position = Selection.Start
+    If Not current Is Nothing Then position = current.Range.Start
     For Each equation In ActiveDocument.InlineShapes
         If IsEquation(equation) Then
             If forward Then

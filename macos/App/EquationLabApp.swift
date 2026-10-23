@@ -19,7 +19,7 @@ struct EquationLabApp: App {
             WorkbenchView(bridge: bridge, updater: updater)
                 .environmentObject(bridge)
                 .environment(\.locale, bridge.language.locale)
-                .onAppear { delegate.bridge = bridge; bridge.ensureNativeService(); bridge.verifyWordPlugin(); updater.start() }
+                .onAppear { delegate.bridge = bridge; bridge.ensureNativeService(); bridge.verifyWordPlugin(); bridge.startWordWorkspaceObservation(); updater.start() }
                 .onOpenURL { bridge.openWordURL($0) }
                 .onChange(of: scenePhase) { _, phase in
                     if phase == .active { bridge.verifyWordPlugin(); updater.checkAutomaticallyIfDue() }
@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidBecomeActive(_ notification: Notification) {
         bridge?.recordApplicationFocus(true)
         bridge?.refreshVisibleWordDocumentIfNeeded()
+        bridge?.syncActiveWordWorkspace()
     }
     func applicationDidResignActive(_ notification: Notification) { bridge?.recordApplicationFocus(false) }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { false }

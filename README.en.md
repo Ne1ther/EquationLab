@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.4 (build73)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.4/Equation-Lab-0.6.4.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.5 (build84)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.5/Equation-Lab-0.6.5.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -20,9 +20,11 @@ Save your documents, quit Word and Equation Lab, then open the installer. Reopen
 
 New equations start on a blank canvas. Choose Done and Insert to add one to Word, or Update Equation when editing. The action and Cancel sit to the right of the editing mode controls, on the same row. Reopening from the Dock refreshes document equations after insertion. You can also select an existing equation while inserting; a changed draft prompts before switching.
 
+The menu on the left lists open Word documents and distinguishes documents by identity, even when names match. Switching protects changed drafts, and background metadata updates do not bring the editor to the front. Refreshing the document menu updates document details; refreshing the formula area rereads equations.
+
 The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads.
 
-![Equation Lab workbench](docs/preview/workbench-0.6.4.png)
+![Equation Lab workbench](docs/preview/workbench-0.6.5.png)
 
 ## Try a document
 

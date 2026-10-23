@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; }
+namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; BOOL emulateDeferredReopen=NO; NSString* reopenedDocumentIdentity=@"process:77"; }
 NSDictionary* EquationLabCapturedDocumentContext(){return fixtureDocumentContext;}
 BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context){return context&&fixtureSelectionPending&&context==fixtureDocumentContext;}
 void EquationLabConsumeDocumentSelection(NSDictionary* context){if(EquationLabDocumentContextIsPendingSelection(context)){fixtureDocumentContext=nil;fixtureSelectionPending=NO;EquationLabDocumentContextDidClearSelection();}}
@@ -28,7 +28,18 @@ void setEditorOwnerWrittenHook(EditorOwnerWritten){}
 std::uint64_t editObjectIdentity(std::uint64_t){return 0;}
 bool bindEditDocument(std::uint64_t,const char*){return true;}
 std::int32_t diagnosticValue(std::uint32_t){return 0;}
-HResult completeEdit(std::uint64_t session,const std::uint8_t*,std::size_t,bool,bool){[transport cleanup:session];return Ok;}
+HResult completeEdit(std::uint64_t session,const std::uint8_t*,std::size_t,bool,bool reopen){
+    ProbeEditState* old=transport.edits[@(session)];std::uint64_t owner=old.ownerIdentity;
+    [transport cleanup:session];
+    if(reopen&&emulateDeferredReopen){
+        ProbeEditState* fresh=[ProbeEditState new];fresh.sessionId=session+1000;fresh.activation=++transport.activation;fresh.ownerIdentity=owner;fresh.ticket=[@"e" stringByPaddingToLength:64 withString:@"e" startingAtIndex:0];
+        fresh.documentContext=@{@"identity":reopenedDocumentIdentity,@"snapshot":@772,@"index":@12};transport.edits[@(fresh.sessionId)]=fresh;
+        NSDictionary* handoff=transport.reopenToolHandoff;transport.reopenToolHandoff=nil;
+        if([handoff[@"owner"] unsignedLongLongValue]==owner)fresh.deferredReopenTool=handoff;
+        [transport openState:fresh];
+    }
+    return Ok;
+}
 HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){return Unexpected;}
 }
 
@@ -58,6 +69,13 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
 @interface CaptureTestTransport : ProbeEditorTransport
 @property(nonatomic) NSUInteger openedContexts;
 @end
+
+@interface ReopenToolHandoffTestTransport : ProbeEditorTransport
+@property(nonatomic,strong) NSString* reopenedURL;
+@end
+@implementation ReopenToolHandoffTestTransport
+- (void)openState:(ProbeEditState*)state {[self applyDeferredReopenTool:state];self.reopenedURL=editorLaunchURL(state);}
+@end
 @implementation CaptureTestTransport
 - (void)openState:(ProbeEditState*)state {if(state.documentContext)++self.openedContexts;}
 @end
@@ -71,6 +89,24 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
     if([path isEqual:@"/api/native-open"])self.submittedBody=body;
     return nil;
 }
+@end
+
+@interface MockTicketLaunchTransport : ProbeEditorTransport
+@property(nonatomic,strong) NSMutableArray<NSString*>* attemptedURLs;
+@property(nonatomic,strong) NSMutableArray* outcomes;
+@property(nonatomic,copy) void(^queuedCompletion)(NSError*);
+@property(nonatomic) NSUInteger scheduledPolls;
+@end
+@implementation MockTicketLaunchTransport
+- (instancetype)init {self=[super init];if(self){_attemptedURLs=[NSMutableArray new];_outcomes=[NSMutableArray new];}return self;}
+- (void)openEditorURL:(NSString*)url completion:(void(^)(NSError*))completion {
+    [self.attemptedURLs addObject:url];
+    if(self.queuedCompletion){self.queuedCompletion=[completion copy];return;}
+    id outcome=self.outcomes.count?self.outcomes.firstObject:NSNull.null;
+    if(self.outcomes.count)[self.outcomes removeObjectAtIndex:0];
+    completion(outcome==NSNull.null?nil:outcome);
+}
+- (void)schedule:(ProbeEditState*)state {++self.scheduledPolls;state.pollScheduled=YES;}
 @end
 
 @interface RejectingPreCaptureTransport : ProbeEditorTransport
@@ -165,6 +201,81 @@ void runTicketToolCases(){
     check([editorLaunchURL(latest) isEqual:[@"equationlab://word-edit/" stringByAppendingString:latest.ticket]],"an ordinary double-click inherited stale document request correlation");
     check(EquationLabQueueEditorTool(@"invalid?tool=export")==-1,"unrecognized tool accepted");
     latest.terminal=YES;check(EquationLabQueueEditorTool(@"export")==-3,"terminal edit accepted a tool intent");transport=saved;
+}
+void runDeferredReopenToolHandoffCases(){
+    ProbeEditorTransport* savedTransport=transport;BOOL savedEmulation=emulateDeferredReopen;NSString* savedIdentity=reopenedDocumentIdentity;
+    ReopenToolHandoffTestTransport* client=[ReopenToolHandoffTestTransport new];client.activation=91;transport=client;emulateDeferredReopen=YES;reopenedDocumentIdentity=@"process:77";
+    ProbeEditState* old=[ProbeEditState new];old.sessionId=910;old.activation=91;old.ownerIdentity=77;old.reopenRequested=YES;old.bindingContext=@{@"identity":@"process:77",@"index":@12};client.edits[@910]=old;
+    check(EquationLabQueueEditorTool(@"spacing")==0,"same-owner deferred reopen rejected a current spacing intent");
+    check([client completeCancelledState:old]==bridge_probe::Ok,"same-owner cancelled reopen did not complete");
+    NSString* expected=[@"equationlab://word-edit/" stringByAppendingFormat:@"%@?tool=spacing",[@"e" stringByPaddingToLength:64 withString:@"e" startingAtIndex:0]];
+    check([client.reopenedURL isEqual:expected],"immediate cancel/reopen lost the queued tool marker on the fresh ticket");
+
+    client.reopenedURL=nil;client.activation=92;reopenedDocumentIdentity=@"process:88";
+    ProbeEditState* wrongDocument=[ProbeEditState new];wrongDocument.sessionId=911;wrongDocument.activation=92;wrongDocument.ownerIdentity=78;wrongDocument.reopenRequested=YES;wrongDocument.bindingContext=@{@"identity":@"process:77",@"index":@12};client.edits[@911]=wrongDocument;
+    check(EquationLabQueueEditorTool(@"export")==0,"mismatched-document test did not queue its tool intent");
+    NSString* expectedWithoutTool=[@"equationlab://word-edit/" stringByAppendingString:[@"e" stringByPaddingToLength:64 withString:@"e" startingAtIndex:0]];
+    check([client completeCancelledState:wrongDocument]==bridge_probe::Ok&&[client.reopenedURL isEqual:expectedWithoutTool],"deferred tool intent crossed a document identity");
+    [client cleanup:1010];[client cleanup:1011];transport=savedTransport;emulateDeferredReopen=savedEmulation;reopenedDocumentIdentity=savedIdentity;
+}
+void pumpUntil(BOOL(^predicate)(void),double seconds,const char* message){
+    const auto deadline=CFAbsoluteTimeGetCurrent()+seconds;
+    while(!predicate()&&CFAbsoluteTimeGetCurrent()<deadline)CFRunLoopRunInMode(kCFRunLoopDefaultMode,.01,true);
+    check(predicate(),message);
+}
+void runTicketLaunchRetryCases(){
+    ProbeEditorTransport* savedTransport=transport;
+    auto make=[&](std::uint64_t session,std::uint64_t activation){
+        MockTicketLaunchTransport* client=[MockTicketLaunchTransport new];client.activation=activation;
+        ProbeEditState* state=[ProbeEditState new];state.sessionId=session;state.activation=activation;
+        state.ticket=[@"d" stringByPaddingToLength:64 withString:@"d" startingAtIndex:0];
+        client.edits[@(session)]=state;transport=client;return std::pair<MockTicketLaunchTransport*,ProbeEditState*>(client,state);
+    };
+    {
+        auto first=make(801,41);auto client=first.first;auto state=first.second;
+        [client.outcomes addObject:[NSError errorWithDomain:@"LaunchServices" code:409 userInfo:@{@"retryable":@YES}]];[client.outcomes addObject:NSNull.null];
+        [client launchTicket:state];
+        pumpUntil(^{return client.attemptedURLs.count==2&&state.pollScheduled;},2,"transient ticket launch failure did not recover");
+        check(client.attemptedURLs.count==2&&[client.attemptedURLs[0] isEqual:client.attemptedURLs[1]],"ticket retry changed its URL");
+        check(state.launchAttempts==2&&[client.attemptedURLs[0] isEqual:editorLaunchURL(state)],"ticket retry did not reuse the original editor URL");
+        [client cleanup:state.sessionId];
+    }
+    {
+        auto second=make(802,42);auto client=second.first;auto state=second.second;
+        [client.outcomes addObject:[NSError errorWithDomain:@"LaunchServices" code:409 userInfo:@{@"retryable":@YES}]];[client.outcomes addObject:[NSError errorWithDomain:@"LaunchServices" code:409 userInfo:@{@"retryable":@YES}]];
+        [client launchTicket:state];
+        pumpUntil(^{return client.attemptedURLs.count==2&&!client.edits[@(state.sessionId)];},2,"exhausted ticket launch did not fail cleanly");
+        check(state.terminal&&client.edits.count==0&&state.launchAttempts==2,"exhausted ticket launch left an active edit");
+    }
+    {
+        auto third=make(803,43);auto client=third.first;auto state=third.second;
+        [client.outcomes addObject:[NSError errorWithDomain:@"LaunchServices" code:409 userInfo:@{@"retryable":@YES}]];
+        [client launchTicket:state];pumpUntil(^{return client.attemptedURLs.count==1&&state.launchAttempts==1;},1,"initial launch failure was not observed");
+        [client cleanup:state.sessionId];CFRunLoopRunInMode(kCFRunLoopDefaultMode,.2,false);
+        check(client.attemptedURLs.count==1,"cancelled ticket launched after delayed retry");
+    }
+    {
+        auto fourth=make(804,44);auto client=fourth.first;auto state=fourth.second;
+        [client.outcomes addObject:[NSError errorWithDomain:@"LaunchServices" code:409 userInfo:@{@"retryable":@YES}]];
+        [client launchTicket:state];pumpUntil(^{return client.attemptedURLs.count==1&&state.launchAttempts==1;},1,"initial launch failure was not observed before owner switch");
+        client.activation=45;ProbeEditState* owner=[ProbeEditState new];owner.sessionId=805;owner.activation=45;client.edits[@805]=owner;
+        CFRunLoopRunInMode(kCFRunLoopDefaultMode,.2,false);
+        check(client.attemptedURLs.count==1&&client.edits[@805]==owner,"stale activation launched after a new owner became current");
+        [client cleanup:state.sessionId];[client cleanup:owner.sessionId];
+    }
+    {
+        auto fifth=make(806,46);auto client=fifth.first;auto state=fifth.second;
+        state.launchURL=@"equationlab://word-edit/test-ticket";client.queuedCompletion=^(NSError*){};
+        [client launchTicket:state];
+        auto delivered=client.queuedCompletion;client.queuedCompletion=nil;
+        check(client.attemptedURLs.count==1&&client.scheduledPolls==0,"queued launch unexpectedly polled before completion");
+        client.activation=47;ProbeEditState* owner=[ProbeEditState new];owner.sessionId=807;owner.activation=47;client.edits[@807]=owner;
+        delivered(nil);
+        pumpUntil(^{return client.scheduledPolls==1;},2,"successful stale-activation launch did not schedule polling");
+        check(client.scheduledPolls==1&&client.edits[@806]==state&&client.edits[@807]==owner,"old delivered ticket did not remain pollable beside the new owner");
+        [client cleanup:owner.sessionId];
+    }
+    transport=savedTransport;
 }
 ProbeEditState* cacheState(std::uint64_t owner,NSUInteger snapshot,NSUInteger index,NSString* xml){
     ProbeEditState* state=[ProbeEditState new];state.ownerIdentity=owner;state.openDigest=@"same-native-sha";
@@ -358,6 +469,8 @@ int main(){@autoreleasepool{
         runRunningCase(urls[1],NO);runRunningCase(urls[1],YES);
         runCooperativeActivationCases();
         runTicketToolCases();
+        runDeferredReopenToolHandoffCases();
+        runTicketLaunchRetryCases();
         ServiceBodyTestTransport* serviceClient=[ServiceBodyTestTransport new];
         ProbeEditState* serviceState=[ProbeEditState new];serviceState.sessionId=9001;serviceState.openNative=[NSData data];
         serviceState.documentContext=@{@"captureToken":@123,@"identity":@"process:1",@"snapshot":@124,@"index":@0,@"name":@"test.docx",@"ooxml":@"<document/>"};
@@ -370,7 +483,7 @@ int main(){@autoreleasepool{
         runPreCapturedActivationCases();
         runSelectionSnapshotCases();
         std::cout<<"{\"on_demand_capture_cases\":16,\"capture_written_owner_anchor_invalidated\":true,\"capture_request_latest_and_deduplicated\":true,\"capture_request_live_anchor_and_native_sha_guard\":true,\"capture_request_document_clear_close_release\":true,\"capture_request_no_xml_in_tiny_binding\":true,\"capture_request_rejects_old_or_foreign_snapshot\":true,\"capture_request_no_saveobject_reentry\":true,\"capture_request_failure_retryable\":true,\"capture_request_rebinds_fresh_index\":true,\"one_shot_activation_hint_consumed_at_DoVerb\":true,\"precaptured_ELCTX4_consumed_at_DoVerb\":true,\"service_rejection_does_not_fallback_to_post_DoVerb_capture\":true,\"ordinary_selection_clear_preserves_activation_anchor\":true,\"document_clear_close_clear_activation_anchor\":true,\"foreign_identical_formula_rejected\":true,\"fresh_ELCTX4_exact_target_after_selection_loss\":true,";
-        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_request_url_cases\":3,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"late_exact_capture_beats_queued_deadline\":true,\"timeout_retirement_not_resurrected\":true,\"stale_legacy_capture_still_expires\":true,\"real_workspace_or_gui_used\":false}\n";
+        std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"deferred_same_owner_reopen_preserves_tool_intent\":true,\"deferred_tool_intent_rejects_other_document\":true,\"ticket_launch_retry_recovers\":true,\"ticket_launch_retry_exhausts_cleanly\":true,\"ticket_launch_retry_stops_after_cancel_or_new_activation\":true,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_request_url_cases\":3,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"late_exact_capture_beats_queued_deadline\":true,\"timeout_retirement_not_resurrected\":true,\"stale_legacy_capture_still_expires\":true,\"real_workspace_or_gui_used\":false}\n";
         return 0;
     }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}
 }}

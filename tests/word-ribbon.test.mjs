@@ -97,7 +97,7 @@ test('requested capture uses retained anchors or an exact first selection withou
  const watch=procedure('Public Sub ELWatchNativeSession');assert.match(watch,/MathTypeBridgeCaptureWatch/);assert.doesNotMatch(watch,/WordOpenXML|\.Range|\.InlineShapes/);
  const close=procedure('Public Sub ELCloseDocumentContext');assert.match(close,/mBoundDocuments.Remove i/);assert.match(close,/mBoundRanges.Remove i/);assert.match(close,/mKnownDocuments.Remove i/);assert.match(close,/ELClearDocumentContext/);
  const events=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabWordEvents.cls',import.meta.url),'utf8');
- assert.match(events,/Host_DocumentBeforeClose[\s\S]*?ELCloseDocumentContext Doc/);
+ assert.match(events,/Host_DocumentBeforeClose[\s\S]*?ELQueueWorkspaceRefresh/);
  const selectionChange=events.slice(events.indexOf('Private Sub Host_WindowSelectionChange'),events.indexOf('End Sub',events.indexOf('Private Sub Host_WindowSelectionChange')));
  assert.match(selectionChange,/MathTypeBridgeTransportActive"\) = 0 Then[\s\S]*?ELCaptureSelection Sel, True[\s\S]*?Else[\s\S]*?ELCaptureSelection Sel\s+End If/);
 });
@@ -117,6 +117,72 @@ test('ordinary selection clearing preserves legacy anchors while exact target an
  const observe=procedure('Public Sub ELObserveDocument');assert.match(observe,/ElseIf Not Doc Is mDocument Then\s+ELClearDocumentContext/);
  const close=procedure('Public Sub ELCloseDocumentContext');assert.match(close,/If mActivationDocument Is Doc Then ELClearActivationAnchor/);
  assert.match(source,/result = EquationLabNativeCommand\("MathTypeBridgePrepareDocumentActivation"\)/);
+});
+
+test('Word workspace reconciliation retires only absent documents after close events return',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const events=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabWordEvents.cls',import.meta.url),'utf8');
+ const procedure=(text,name)=>text.slice(text.indexOf(name),text.indexOf('End Sub',text.indexOf(name))).split('\n').map(line=>line.split("'")[0]).join('\n');
+ const reconcile=procedure(source,'Public Sub ELReconcileKnownDocuments');
+ assert.match(reconcile,/If mReconcilingDocuments Then Exit Sub/);
+ assert.match(reconcile,/mReconcilingDocuments = True[\s\S]*?mReconcilingDocuments = False/);
+ assert.match(reconcile,/documentCount = Application\.Documents\.Count/);
+ assert.match(reconcile,/For i = mKnownDocuments\.Count To 1 Step -1[\s\S]*?If Not ELIsDocumentOpen\(Doc\) Then ELCloseDocumentContext Doc/);
+ assert.match(reconcile,/If Not mWorkspaceClearPublished Then[\s\S]*?MathTypeBridgeClearWordWorkspace[\s\S]*?mWorkspaceClearPublished = True/);
+ assert.doesNotMatch(reconcile,/Selection|WordOpenXML|\.Windows/i);
+ const isOpen=procedure(source,'Private Function ELIsDocumentOpen');
+ assert.match(isOpen,/For Each candidate In Application\.Documents/);assert.match(isOpen,/If candidate Is Doc Then/);
+ assert.doesNotMatch(isOpen,/Selection|WordOpenXML|\.Windows/i);
+ assert.match(source,/Documents remain open while any of their windows remain/,'document membership must be based on Application.Documents, not a single Window');
+ const observe=procedure(source,'Public Sub ELObserveDocument');
+ assert.ok(observe.indexOf('ELReconcileKnownDocuments')<observe.indexOf('If mDocument Is Nothing'));
+ assert.match(observe,/If Not ELIsDocumentOpen\(Doc\) Then Exit Sub/);
+ const report=procedure(source,'Public Sub ELReportActiveDocument');
+ assert.match(report,/If Application\.Documents\.Count > 0 Then[\s\S]*?ELObserveDocument ActiveDocument[\s\S]*?Else[\s\S]*?ELReconcileKnownDocuments/);
+ const activeWorkspace=procedure(source,'Private Sub ELReconcileActiveDocumentWorkspace');
+ assert.match(reconcile,/If Application\.Documents\.Count > 0 Then ELReconcileActiveDocumentWorkspace/);
+ assert.match(activeWorkspace,/Set Doc = ActiveDocument[\s\S]*?EnsureKnownDocumentIdentity\(Doc\)[\s\S]*?PublishDocumentWorkspace Doc, identity/);
+ assert.doesNotMatch(activeWorkspace,/ELObserveDocument|ELCapture|ELClearDocumentContext|ELInvalidateDocumentSnapshot|ELClearActivationAnchor|Set mDocument|Set mEquations|WordOpenXML|Selection|\.Select\b|\.Activate\b/i,'periodic metadata refresh must not replace capture identity or source anchors');
+ const ensureStart=source.indexOf('Private Function EnsureKnownDocumentIdentity');
+ const ensureIdentity=source.slice(ensureStart,source.indexOf('End Function',ensureStart));
+ assert.match(ensureIdentity,/If Doc Is mKnownDocuments\(i\) Then[\s\S]*?CLng\(mKnownDocumentIds\(i\)\)/);
+ assert.match(ensureIdentity,/MathTypeBridgeNewDocumentToken[\s\S]*?mKnownDocuments\.Add Doc[\s\S]*?mKnownDocumentIds\.Add identity/);
+ const publishWorkspace=procedure(source,'Private Sub PublishDocumentWorkspace');
+ assert.match(publishWorkspace,/CStr\(identity\)/);assert.match(publishWorkspace,/mPublishedIdentity = identity/);
+ const poll=procedure(source,'Public Sub ELPollNavigation');
+ assert.ok(poll.indexOf('ELReconcileKnownDocuments')<poll.indexOf('MathTypeBridgeTakeInsertion'),'native pump reconciles before handling queued document work');
+ assert.match(poll,/MathTypeBridgeTakeInsertion[\s\S]*?If mWorkspaceRefreshRecheck Then[\s\S]*?MathTypeBridgeQueueWorkspaceRefresh/,'one bounded follow-up pass covers Word close timing after the first deferred callback');
+ const queue=procedure(source,'Public Sub ELQueueWorkspaceRefresh');assert.match(queue,/mWorkspaceRefreshRecheck = True[\s\S]*?MathTypeBridgeQueueWorkspaceRefresh/);
+ const deactivate=procedure(events,'Private Sub Host_WindowDeactivate');assert.match(deactivate,/ELQueueWorkspaceRefresh/);
+ const beforeClose=procedure(events,'Private Sub Host_DocumentBeforeClose');
+ assert.match(beforeClose,/ELQueueWorkspaceRefresh/);assert.doesNotMatch(beforeClose,/ELCloseDocumentContext/);
+ assert.match(events,/cancelled close stays in Application\.Documents/);
+ const close=procedure(source,'Public Sub ELCloseDocumentContext');
+ assert.match(close,/If Not mDocument Is Nothing Then[\s\S]*?If Doc Is mDocument Then[\s\S]*?ELClearDocumentContext/,'retiring a background document must preserve another document context');
+ assert.match(close,/preserveOtherActivation = ELHasPreparedActivationForOtherDocument\(Doc\)[\s\S]*?If preserveOtherActivation Then ELRestoreActivationAnchorAfterIdentityClose/);
+ const preserve=source.slice(source.indexOf('Private Function ELHasPreparedActivationForOtherDocument'),source.indexOf('End Function',source.indexOf('Private Function ELHasPreparedActivationForOtherDocument')));
+ assert.match(preserve,/mActivationDocument Is mDocument/);assert.match(preserve,/MathTypeBridgePreparedDocumentActivationNonce/);
+ const restore=procedure(source,'Private Sub ELRestoreActivationAnchorAfterIdentityClose');
+ assert.match(restore,/Not \(mActivationDocument Is ActiveDocument\)/);
+ assert.match(restore,/"ELACT1"[\s\S]*?MathTypeBridgePrepareDocumentActivation/);
+ assert.doesNotMatch(restore,/Selection|WordOpenXML|\.Select\b|\.Activate\b/i);
+});
+
+test('workspace sidecar carries bounded metadata only and explicit selector is identity bound',async()=>{
+ const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const ribbon=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
+ const native=await readFile(new URL('../native-word-probe/src/word_document_requests.mm',import.meta.url),'utf8');
+ const publish=context.slice(context.indexOf('Private Sub PublishDocumentWorkspace'),context.indexOf('End Sub',context.indexOf('Private Sub PublishDocumentWorkspace')));
+ assert.match(publish,/ELWORK2[\s\S]*?Application\.Documents\.Count[\s\S]*?EnsureKnownDocumentIdentity\(candidate\)[\s\S]*?candidate\.Name[\s\S]*?candidate\.ReadOnly/);
+ assert.doesNotMatch(publish,/WordOpenXML|InlineShapes|Selection|\.Activate|\.Select/);
+ assert.match(ribbon,/ELWORK1[\s\S]*?ELWORK2/,'native sidecar parser retains ELWORK1 compatibility and ELWORK2 catalog support');
+ assert.match(ribbon,/count>128[\s\S]*?name\.length>512[\s\S]*?publishWordWorkspace\(active,documents\)/);
+ assert.match(ribbon,/ELDREQ2[\s\S]*?documentIdentity[\s\S]*?document-process-mismatch/);
+ assert.match(native,/MaximumReplyBytes=512\*1024/);
+ assert.match(native,/workspaceDocuments/);
+ const request=context.slice(context.indexOf('Private Sub ApplyWordDocumentRequest'),context.indexOf('End Sub',context.indexOf('Private Sub ApplyWordDocumentRequest')));
+ assert.match(request,/fields\(3\) = "2"[\s\S]*?KnownDocumentIdentity\(candidate\)[\s\S]*?For Each candidate In Application\.Documents[\s\S]*?Doc\.ReadOnly[\s\S]*?Doc\.Activate[\s\S]*?ELFirstSupportedEquation/);
+ assert.doesNotMatch(request,/Application\.Activate|ScreenUpdating|Range\.Select/);
 });
 
 test('blue text selection, Ribbon edit and double-click share one exact target and one activation',async()=>{
@@ -153,6 +219,20 @@ test('blue text selection, Ribbon edit and double-click share one exact target a
  assert.doesNotMatch(activation,/\.Select\b|Selection\.|ScreenUpdating/);
  const capture=block(source,'Public Sub ELCaptureSelection');
  assert.ok(capture.indexOf('If mOpeningEquation Then Exit Sub')<capture.indexOf('ELClearSelectionCaptureDuringCapture'));
+});
+
+test('Ribbon Next and Previous step past the exact selected embedded equation range',async()=>{
+ const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const start=ribbon.indexOf('Private Sub NavigateEquation');
+ const navigate=ribbon.slice(start,ribbon.indexOf('End Sub',start)).split('\n').map(line=>line.split("'")[0]).join('\n');
+ assert.match(navigate,/Set current = ELSelectedEquation\(Selection\)/,'use the shared exact supported-object resolver');
+ assert.match(navigate,/position = Selection\.Start\s+If Not current Is Nothing Then position = current\.Range\.Start/,'use the exact object start so an expanded field cannot select itself again');
+ assert.doesNotMatch(navigate,/position = current\.Range\.End/,'using End with a strict comparison would skip an immediately adjacent equation');
+ assert.match(navigate,/If equation\.Range\.Start > position Then/,'Next must choose a later object, including one starting at the current object end');
+ assert.match(navigate,/If equation\.Range\.Start < position Then/,'Previous must move before the selected object start');
+ assert.match(navigate,/For Each equation In ActiveDocument\.InlineShapes/,'navigation remains in the active document');
+ assert.match(navigate,/If Not chosen Is Nothing Then chosen\.Range\.Select/);
+ assert.doesNotMatch(navigate,/ActiveWindow|Documents\(|Selection\.Move|InlineShapes\(\d+\)/,'do not add cross-document or positional fallback targeting');
 });
 
 test('double-click pre-capture nonce precedes forced ELCTX4 serialization and ELACT2 arming',async()=>{

@@ -93,3 +93,117 @@ test('server operations expose the agreed request, status, and cancel routes',as
  assert.equal((await operation('native-document-status',{requestId:created.requestId})).state,'queued');
  assert.equal((await operation('native-document-cancel',{requestId:created.requestId})).state,'cancelled');
 });
+
+test('workspace metadata requires a current host and reports an empty initial status',async()=>{
+ const queue=fixture();
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:false,revision:0,active:null,documents:[],retiredIdentities:[]});
+ assert.throws(()=>queue.handle('native-document-workspace',{hostId:hex(110),active:null}),/current native host/);
+ await queue.take({hostId:hex(110),waitMs:0});
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:0,active:null,documents:[],retiredIdentities:[]});
+ assert.deepEqual(queue.handle('native-document-workspace',{hostId:hex(110),active:{identity:'word-process:73',name:'draft.docx'}}),{connected:true,revision:1,active:{identity:'word-process:73',name:'draft.docx'},documents:[],retiredIdentities:[]});
+});
+
+test('workspace publication heartbeats without changing revision and host takeover resets metadata',async()=>{
+ let time=10_000;const queue=fixture({now:()=>time}),first=hex(111),second=hex(112),active={identity:'word-process:73',name:'draft.docx'},documents=[{...active,readOnly:false}];
+ await queue.take({hostId:first,waitMs:0});
+ queue.handle('native-document-workspace',{hostId:first,active,documents});
+ time+=30_000;
+ assert.deepEqual(queue.handle('native-document-workspace',{hostId:first,active,documents}),{connected:true,revision:1,active,documents,retiredIdentities:[]});
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:1,active,documents,retiredIdentities:[]});
+ await queue.take({hostId:second,waitMs:0});
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:2,active:null,documents:[],retiredIdentities:[]});
+ assert.throws(()=>queue.handle('native-document-workspace',{hostId:first,active}),/current native host/);
+ assert.throws(()=>queue.handle('native-document-workspace',{hostId:second,active:null,extra:true}));
+});
+
+test('workspace status expires after 45 seconds and clears active metadata',async()=>{
+ let time=20_000;const queue=fixture({now:()=>time}),host=hex(113);
+ await queue.take({hostId:host,waitMs:0});
+ queue.handle('native-document-workspace',{hostId:host,active:{identity:'word-process:73',name:'draft.docx'}});
+ time+=44_999;
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:1,active:{identity:'word-process:73',name:'draft.docx'},documents:[],retiredIdentities:[]});
+ time++;
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:false,revision:2,active:null,documents:[],retiredIdentities:[]});
+});
+
+test('workspace retirements are host-bound, revisioned, cumulative-compatible and cleared on reset',async()=>{
+ let time=30_000;const queue=fixture({now:()=>time}),host=hex(116),next=hex(117),active={identity:'word-process:B',name:'B.docx'};
+ await queue.take({hostId:host,waitMs:0});
+ const first=queue.handle('native-document-workspace',{hostId:host,active,documents:[{...active,readOnly:false}],retiredIdentities:['word-process:A']});
+ assert.deepEqual(first,{connected:true,revision:1,active,documents:[{...active,readOnly:false}],retiredIdentities:['word-process:A']});
+ assert.deepEqual(queue.handle('native-document-workspace',{hostId:host,active}),first,'a legacy publisher without the field preserves known retirements');
+ assert.deepEqual(queue.handle('native-document-workspace',{hostId:host,active:{identity:'word-process:A',name:'A.docx'}}),{connected:true,revision:2,active:{identity:'word-process:A',name:'A.docx'},documents:[{...active,readOnly:false}],retiredIdentities:[]},'a legacy publisher without documents preserves the known catalog');
+ queue.handle('native-document-workspace',{hostId:host,active,retiredIdentities:['word-process:A']});
+ await queue.take({hostId:next,waitMs:0});
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:4,active:null,documents:[],retiredIdentities:[]});
+ assert.throws(()=>queue.handle('native-document-workspace',{hostId:host,active,retiredIdentities:['word-process:A']}),/current native host/);
+ time+=45_000;
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:false,revision:4,active:null,documents:[],retiredIdentities:[]});
+});
+
+test('workspace metadata rejects malformed hosts, keys, identities, names, controls and objects',async()=>{
+ const queue=fixture(),host=hex(114);await queue.take({hostId:host,waitMs:0});
+ for(const body of [
+  {hostId:host,active:{identity:'ab',name:'x'}},
+  {hostId:host,active:{identity:'word-process:73',name:'x'.repeat(513)}},
+  {hostId:host,active:{identity:'word-process:73',name:'bad\nname'}},
+  {hostId:host,active:{identity:{value:'word-process:73'},name:'x'}},
+  {hostId:host,active:{identity:'word-process:73',name:'x',path:'/private/a.docx'}},
+  {hostId:host,active:{identity:'word-process:73',name:'x'},path:'/private/a.docx'},
+  {hostId:host,active:{identity:'word-process:73',name:'x'},xml:'<w:doc/>'},
+  {hostId:host,active:null,documents:[{identity:'word-process:73',name:'x',readOnly:0}]},
+  {hostId:host,active:{identity:'word-process:73',name:'x'},documents:[{identity:'word-process:74',name:'x',readOnly:false}]},
+  {hostId:host,active:null,documents:[{identity:'word-process:73',name:'x',readOnly:false},{identity:'word-process:73',name:'y',readOnly:true}]},
+  {hostId:host,active:null,documents:Array.from({length:129},(_,i)=>({identity:`word-process:${i}`,name:'x',readOnly:false}))},
+  {hostId:host,active:null,documents:[{identity:'word-process:73',name:'bad\u007fname',readOnly:false}]},
+  {hostId:host,active:null,retiredIdentities:'word-process:73'},
+  {hostId:host,active:null,retiredIdentities:Array.from({length:129},(_,i)=>`word-process:${i}`)},
+  {hostId:host,active:null,retiredIdentities:['word-process:73','word-process:73']},
+  {hostId:host,active:null,retiredIdentities:['ab']},
+  {hostId:host,active:null,retiredIdentities:[{identity:'word-process:73'}]},
+  {hostId:hex(115),active:null},
+ ])assert.throws(()=>queue.handle('native-document-workspace',body));
+ assert.throws(()=>queue.handle('native-document-workspace-status',{hostId:host}));
+ assert.throws(()=>queue.handle('native-document-workspace-status',null));
+ assert.throws(()=>queue.handle('native-document-workspace-status-extra',{}),/Unknown/);
+});
+
+test('workspace operation names are routed through the server operation dispatcher',async()=>{
+ const status=await operation('native-document-workspace-status',{});
+ assert.deepEqual(status,{connected:false,revision:0,active:null,documents:[],retiredIdentities:[]});
+ await assert.rejects(()=>operation('native-document-workspace-status-extra',{}),/Unknown document request operation/);
+});
+
+test('catalog holds three same-name documents and explicit requests preserve a non-active identity through empty finish',async()=>{
+ const queue=fixture(),host=hex(121),active={identity:'word:41',name:'draft.docx'},documents=[
+  {...active,readOnly:false},{identity:'word:42',name:'draft.docx',readOnly:true},{identity:'word:43',name:'notes.docx',readOnly:false},
+ ];
+ await queue.take({hostId:host,waitMs:0});
+ const status=queue.handle('native-document-workspace',{hostId:host,active,documents});
+ assert.equal(status.documents.length,3);assert.equal(status.documents[0].name,status.documents[1].name);assert.notEqual(status.documents[0].identity,status.documents[1].identity);
+ const created=queue.request({documentIdentity:'word:42'});
+ const claim=await queue.take({hostId:host,waitMs:0});assert.equal(claim.documentIdentity,'word:42');
+ assert.equal(queue.status({requestId:created.requestId}).documentIdentity,'word:42');
+ assert.deepEqual(queue.finish({hostId:host,requestId:created.requestId,state:'empty'}),{requestId:created.requestId,state:'empty',documentIdentity:'word:42'});
+ assert.equal(queue.status({requestId:created.requestId}).documentIdentity,'word:42');
+});
+
+test('closed inactive and retired identities fail without falling back; host reset clears the catalog',async()=>{
+ const queue=fixture(),host=hex(122),nextHost=hex(123),active={identity:'word:51',name:'same.docx'},inactive={identity:'word:52',name:'same.docx',readOnly:false};
+ await queue.take({hostId:host,waitMs:0});
+ queue.handle('native-document-workspace',{hostId:host,active,documents:[{...active,readOnly:false},inactive]});
+ queue.handle('native-document-workspace',{hostId:host,active,documents:[{...active,readOnly:false}],retiredIdentities:[inactive.identity]});
+ assert.throws(()=>queue.request({documentIdentity:inactive.identity}),/not open in the current host/);
+ assert.throws(()=>queue.request({documentIdentity:'word:999'}),/not open in the current host/);
+ await queue.take({hostId:nextHost,waitMs:0});
+ assert.deepEqual(queue.handle('native-document-workspace-status',{}),{connected:true,revision:3,active:null,documents:[],retiredIdentities:[]});
+});
+
+test('malformed and conflicting request bodies are rejected and stale claimed requests cannot finish after cancellation',async()=>{
+ const queue=fixture(),host=hex(124),active={identity:'word:61',name:'doc.docx'};
+ await queue.take({hostId:host,waitMs:0});queue.handle('native-document-workspace',{hostId:host,active,documents:[{...active,readOnly:false}]});
+ for(const body of [null,[],{documentIdentity:''},{documentIdentity:active.identity,target},{documentIdentity:active.identity,extra:true},{target,documentIdentity:active.identity}])assert.throws(()=>queue.request(body));
+ const created=queue.request({documentIdentity:active.identity});await queue.take({hostId:host,waitMs:0});
+ assert.equal(queue.cancel({requestId:created.requestId}).state,'cancelled');
+ assert.deepEqual(queue.finish({hostId:host,requestId:created.requestId,state:'opened'}),{requestId:created.requestId,state:'cancelled',reason:'client-cancelled',documentIdentity:active.identity});
+});

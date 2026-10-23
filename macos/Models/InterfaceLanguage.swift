@@ -44,8 +44,13 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         ("工作台状态读取失败：", "Could not read editor state: ")
     ]
     private static let englishStrings: [String: String] = [
+        "切换到":"Switch to ", "切换 Word 文档":"Switch Word document",
+        "刷新当前 Word 文档":"Refresh current Word document", "刷新 Word 文档列表":"Refresh Word document list",
+        "没有打开的 Word 文档":"No open Word documents", "尚未连接 Word":"Word is not connected", "只读":"Read-only", "Word 文档":"Word document",
+        "文档连接已结束，草稿已保留。":"Document connection ended. Your draft is preserved.",
         "当前公式还有未保存的修改":"This equation has unsaved changes",
         "当前公式尚不能保存":"This equation cannot be saved yet",
+        "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。": "Keep editing, or discard the draft and switch to the selected Word document.",
         "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。":"Keep editing this equation, or discard these changes and open the equation you just activated.",
         "继续编写新公式，或放弃草稿并编辑左侧选中的公式。":"Keep writing the new equation, or discard the draft and edit the equation selected in the sidebar.",
         "可以继续编辑，或放弃本次修改并返回 Word。原公式会保留。":"Keep editing, or discard these changes and return to Word. The original equation will be kept.",

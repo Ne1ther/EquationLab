@@ -5,6 +5,8 @@
 namespace bridge_probe {
 
 std::int32_t installWordDocumentRequests();
+void publishWordWorkspace(NSDictionary* active,NSArray<NSDictionary*>* documents);
+void closeWordWorkspaceIdentity(NSString* identity);
 std::uint32_t wordDocumentRequestWatch();
 std::int32_t takeWordDocumentRequest();
 NSDictionary* wordDocumentRequestEnvelope(std::int32_t token);

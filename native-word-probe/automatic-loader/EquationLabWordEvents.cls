@@ -32,11 +32,15 @@ Private Sub Host_DocumentOpen(ByVal Doc As Document)
 End Sub
 
 Private Sub Host_WindowDeactivate(ByVal Doc As Document, ByVal Wn As Window)
+    EquationLabDocumentContext.ELQueueWorkspaceRefresh
     EquationLabDocumentContext.ELWatchNativeSession
 End Sub
 
 Private Sub Host_DocumentBeforeClose(ByVal Doc As Document, Cancel As Boolean)
-    EquationLabDocumentContext.ELCloseDocumentContext Doc
+    ' Word raises this before the close has committed. Reconcile after the
+    ' event so a cancelled close stays in Application.Documents and retains
+    ' its identity and anchors.
+    EquationLabDocumentContext.ELQueueWorkspaceRefresh
 End Sub
 
 Private Sub Host_WindowBeforeDoubleClick(ByVal Sel As Selection, Cancel As Boolean)

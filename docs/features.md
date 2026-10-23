@@ -8,6 +8,8 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 插入后关闭窗口，从 Dock 重开会重新读取当前 Word 文档。插入过程中也可选择左侧已有公式；未保存的内容或格式设置会先提示保留或放弃。双击已有公式后，编辑窗口会置前，保存后回到 Word。
 
+左侧文件名菜单列出 Word 当前打开的文档，并按文档身份区分同名文件；只读文档不可选。有未保存草稿时，切换前会询问是否放弃。保存忙碌、结果未确定或 Word 状态未知时，切换不可用。Word 当前文档变化时，干净的编辑器会自动跟随；有修改的草稿仍留在原文档。关闭来源文档后会清理其不可用公式列表，并保留草稿。菜单中的刷新更新文档列表与可用状态；公式区的刷新重新读取当前文档公式，有未保存修改时会跳过并保留草稿。Word 提供的文档信息更新，并不等于公式列表已重新读取。
+
 多行公式可用 `\\` 换行，也可输入 `aligned`、`gathered` 或 `cases` 环境。保存时各行一起回到 Word。
 
 ## 编号
@@ -29,3 +31,5 @@ Use the Word ribbon to insert, edit, number, and reference equations. Double-cli
 Insertion starts with a blank editor. Choose Done and Insert to add the equation to Word, or Cancel to leave the document unchanged. Existing equations use Cancel and Update Equation beside the editing mode controls.
 
 Reopening from the Dock refreshes the current Word document after insertion. You can select an existing equation during insertion; changed content or formatting prompts before switching. Double-click brings the editor forward; saving returns to Word.
+
+The filename menu on the left lists open Word documents and distinguishes documents by identity, including files with the same name. Read-only documents cannot be selected. If the draft has changed, switching asks before discarding it. Switching is unavailable while saving, when the save result is unknown, or when Word's state cannot be read. A clean editor follows changes to Word's active document; a changed draft stays with its original document. Closing that document clears its unavailable formula list and keeps the draft. The menu refresh updates document metadata; the formula refresh rereads equations in the current document, but skips the refresh when the draft has unsaved changes. A metadata update does not itself reload the formula list.

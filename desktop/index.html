@@ -2,12 +2,8 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self' data:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'none'">
 <title>Equation Lab</title><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="native.css"><script src="vendor/mathlive.min.js"></script></head>
-<body class="native-layout"><aside><div class="brand"><span class="brand-icon">∑</span><div>Equation Lab<small>Mac 公式工作台</small></div></div>
-<div class="nav-label">工作区</div><button class="nav active" id="nav-new">✦ 公式编辑器</button><button class="nav" id="nav-open">▤ 打开 Word 文档</button>
-<div class="nav-label">模板收藏 <button id="add-favorite" title="收藏当前公式">＋</button></div><div id="favorites"></div>
-<div class="nav-label">文档公式 <span id="count"></span></div><div id="objects" class="objects"><p class="muted">打开 .docx 后，在这里选择要编辑的旧公式。</p></div>
-<div class="aside-foot"><span class="dot"></span> 本机处理 · 离线编辑<br><span>原生 MathType 对象实验版 0.3</span></div></aside>
-<main><header><div><div class="eyebrow" id="eyebrow">FORMULA EDITOR</div><h1 id="title">新建公式</h1><p id="subtitle">点击模板、输入内容，再导出可编辑的 Word 公式。</p></div><button id="favorite-top" class="badge">☆ 收藏公式</button></header>
+<body class="native-layout">
+<main><header><div><div class="eyebrow" id="eyebrow">FORMULA EDITOR</div><h1 id="title">新建公式</h1><p id="subtitle">点击模板、输入内容，再导出可编辑的 Word 公式。</p></div><button id="add-favorite" class="badge">☆ 收藏公式</button></header>
 <div class="tabs" id="categories"></div><section class="palette" id="palette" aria-label="公式模板"></section>
 <section class="editor-card"><div class="editor-toolbar"><span>可视化编辑</span><div><button id="undo">↶ 撤销</button><button id="redo">↷ 重做</button><button id="keyboard">⌨ 数学键盘</button></div></div>
 <div class="math-viewport"><div class="math-wrap"><math-field id="formula" aria-label="公式可视化编辑区"></math-field></div><div class="equation-scrollbar" tabindex="0" aria-label="水平滚动公式" hidden><div></div></div></div>

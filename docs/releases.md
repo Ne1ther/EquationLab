@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.6.5 · build84
+
+- Word 文档菜单按文档身份区分同名文件；后台更新文档信息不抢焦点，切换时保护未保存草稿，并清理已关闭来源的不可用公式。
+- 修复 Word 字段选择和“下一条 / 上一条”切换。
+- 启动失败时才提供重试；重新安装用户服务后会重新启动。
+- 修复新文档插入等待和回调丢失后的恢复。
+- 清理重复的网页侧栏代码，保留原生文档和收藏列表。
+
+[下载 0.6.5](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.5)
+
+This release improves the Word document menu, protects changed drafts while switching, fixes field selection and Next / Previous navigation, retries failed launches, restarts the reinstalled user service, and recovers insertion and document operations after missed callbacks. It removes duplicate web sidebar code and keeps the native document and favorites lists.
+
 ## 0.6.4 · build73
 
 - 插入后关闭窗口，再从 Dock 打开会刷新当前文档的公式列表。

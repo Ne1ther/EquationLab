@@ -83,7 +83,8 @@ function installWordCommit(context){
  const bind=appSource.slice(appSource.indexOf('async function bindSelectedWordFormula()'),appSource.indexOf('window.nativeCommitWordSession=()=>{'));
  const commit=appSource.slice(appSource.indexOf('window.nativeCommitWordSession=()=>{'),appSource.indexOf('async function finishWordSave()'));
  const finish=appSource.slice(appSource.indexOf('async function finishWordSave()'),appSource.indexOf('async function waitForWordSave()'));
- vm.runInContext([bind,commit,finish].join('\n'),context);
+ const unavailable=appSource.split('\n').find(line=>line.startsWith('function wordSourceUnavailable()'));
+ vm.runInContext([unavailable,bind,commit,finish].join('\n'),context);
 }
 
 const snapshot=(activeIndex,marker)=>({hasDocumentContext:true,activeIndex,documentName:'Equation Lab 30 formula test',objects:Array.from({length:30},(_,index)=>({index,latex:`formula-${index+1}-${marker}`}))});

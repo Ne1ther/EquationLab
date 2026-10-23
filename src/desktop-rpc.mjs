@@ -107,6 +107,7 @@ export async function desktopRequest(request) {
  if(action==='wordDocumentOpen')return nativeWordRequest('native-document-request',payload);
  if(action==='wordDocumentStatus')return nativeWordRequest('native-document-status',payload);
  if(action==='wordDocumentCancel')return nativeWordRequest('native-document-cancel',payload);
+ if(action==='wordWorkspaceStatus')return nativeWordRequest('native-document-workspace-status',payload);
  if(action==='numberingPreview')return {text:previewNumberFormat(payload.pattern,payload.values)};
  if(action==='typography-default')return {profile:factoryTypography(),spaces:TYPOGRAPHY_SPACES,extraSizes:TYPOGRAPHY_EXTRA_SIZES,factorySource:MATHTYPE_FACTORY_SOURCE};
  if(action==='preferencesImport'){
@@ -243,7 +244,7 @@ export async function desktopRequest(request) {
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
   let rendering=warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n'));
-  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','typography-default','numberingPreview']),inflight=new Set();
+  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.

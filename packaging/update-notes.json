@@ -1,5 +1,5 @@
 {
-  "version": "0.6.4",
-  "zh": "修复插入后从 Dock 重开时文档公式列表为空的问题；插入过程中可切换已有公式，并保护未保存的草稿。修复双击公式打开编辑器却没有置前的问题，保存后返回 Word。将取消和提交按钮放到编辑模式栏右侧，节省编辑空间。",
-  "en": "Restore the document equation list when reopening from the Dock after insertion. Existing equations can be selected during insertion, with a prompt protecting changed drafts. Fix the editor opening behind Word on double-click and return focus to Word after saving. Move Cancel and the submit action to the right of the editing mode controls."
+  "version": "0.6.5",
+  "zh": "可在文件名菜单中直接选择已打开的 Word 文档，并自动移除已关闭文档。切换会保护未保存草稿，只读或状态不明的文档不会接管编辑。修复新文档插入等待、重新安装后的服务恢复，以及功能区上一公式、下一公式和快速重开工具页的问题。启动通知失败时有限重试，并清理重复的网页侧栏代码。",
+  "en": "Choose among open Word documents from the filename menu, with closed documents removed automatically. Switching protects changed drafts and rejects read-only or unavailable targets. Fix insertion waits, service recovery after reinstall, Previous / Next navigation, and tool selection during rapid reopening. Retry failed launch notifications within a fixed limit and remove duplicate web sidebar code."
 }

@@ -22,7 +22,7 @@ function editor(){
 function installCommit(context){
  const bind=slice('async function bindSelectedWordFormula()','window.nativeCommitWordSession=()=>{');
  const lifecycle=slice('window.nativeCommitWordSession=()=>{',"$('word-session-save').onclick");
- vm.runInContext(bind+'\n'+lifecycle,context);
+ vm.runInContext(code.split('\n').find(line=>line.startsWith('function wordSourceUnavailable()'))+'\n'+bind+'\n'+lifecycle,context);
 }
 test('Thirty direct Word activations replace clean sessions, release every old ticket and bind the selected equation',async()=>{
  const {context,calls,messages}=editor();

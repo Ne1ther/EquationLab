@@ -136,7 +136,7 @@ test('Opening a Word insertion session keeps the editor blank and retains the fu
  assert.deepEqual(editor.changedCalls,[false],'opening must update the editor without scheduling the edit debounce');
  assert.equal(editor.historyResets.length,1);assert.equal(editor.modeRenders.length,1);
  const state=editor.calls.filter(call=>call.action==='state').at(-1).payload;
- assert.equal(state.wordSessionIsInsertion,true);assert.equal(state.selected,null);assert.deepEqual(state.objects.map(object=>object.id),[0,1,2]);
+ assert.equal(state.wordSessionIsInsertion,true);assert.equal(c.selected,null);assert.equal(Object.hasOwn(state,'objects'),false,'formula rows are published only through workbenchState');
  assert.deepEqual(editor.calls.filter(call=>['wordSessionInsert','wordSessionSave','wordSessionCancel'].includes(call.action)),[],'opening an insertion session must not write to Word');
 });
 
@@ -176,7 +176,7 @@ test('Approved selection of an existing row opens a fresh target-bound Word upda
  assert.equal(c.mf.value,documentObjects[1].latex,'the approved draft is discarded once the fresh Word formula is accepted');
  assert.match(c.$('title').textContent,/编辑 Word/);assert.match(c.$('subtitle').textContent,/更新公式/);
  const latestState=editor.calls.filter(call=>call.action==='state').at(-1).payload;
- assert.equal(latestState.wordSessionIsInsertion,false);assert.equal(latestState.selected,1);
+ assert.equal(latestState.wordSessionIsInsertion,false);assert.equal(c.selected.index,1);
  assert.deepEqual(editor.calls.filter(call=>call.action==='wordSessionInsert'||call.action==='wordSessionSave'),[],'switching alone must not insert the old draft or save the target formula');
 });
 
@@ -372,4 +372,47 @@ test('A failed Word insertion acknowledgement retains the draft and still permit
  assert.equal(editor.calls.filter(call=>call.action==='wordSessionSave').length,0);
  assert.ok(editor.messages.some(item=>item.text.includes('Word 未能完成保存')));
  assert.equal(await c.window.nativeCancelWordSession(),true);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');
+});
+
+test('Clean A to B document following keeps old content until a new Word ticket is validated',async()=>{
+ const editor=createEditor(),c=editor.context,requestId='f'.repeat(64),a={...documentSnapshotFor(0),documentIdentity:'word:A',documentName:'A.docx'},b={...documentSnapshotFor(0),documentIdentity:'word:B',documentName:'B.docx'},pending=deferred();
+ editor.setNativeBehavior(async(action,payload={})=>{
+  if(action==='wordSessionRead')return payload.ticket===freshTicket?b:a;
+  if(action==='wordWorkspaceStatus')return {connected:true,revision:2,active:{identity:'word:B',name:'B.docx'}};
+  if(action==='wordDocumentOpen')return {requestId};
+  if(action==='wordDocumentStatus')return pending.promise;
+  return {};
+ });
+ assert.equal(await c.window.nativeOpenWordSession(ticket),true);const baseline=c.mf.value;
+ assert.equal(await c.window.nativeSyncWordWorkspace(),true);
+ assert.equal(c.wordTicket,null);assert.equal(c.mf.value,baseline,'the real detach must retain formula contents while the fresh request is pending');
+ assert.equal(editor.calls.filter(call=>call.action==='confirmWordSessionSwitch').length,0);
+ assert.equal(await c.window.nativeOpenWordSession(freshTicket,requestId),true);
+ assert.equal(c.wordTicket,freshTicket);assert.equal(c.source.documentIdentity,'word:B');assert.equal(c.mf.value,b.objects[0].latex);
+ assert.equal(editor.calls.some(call=>['wordSessionSave','wordSessionInsert'].includes(call.action)),false);
+ pending.resolve({state:'opened'});
+});
+
+test('Manual refresh recaptures the same clean Word document while automatic sync remains a no-op',async()=>{
+ const editor=createEditor(),c=editor.context,requestId='9'.repeat(64),statusStarted=deferred(),pending=deferred(),original=documentSnapshotFor(0),updated=documentSnapshotFor(1,{snapshot:'word-document-snapshot-N-plus-1'});
+ editor.setNativeBehavior(async(action,payload={})=>{
+  if(action==='wordSessionRead')return payload.ticket===freshTicket?updated:original;
+  if(action==='wordWorkspaceStatus')return {connected:true,revision:21,active:{identity:documentIdentity,name:'Word integration fixture'}};
+  if(action==='wordDocumentOpen')return {requestId};
+  if(action==='wordDocumentStatus'){statusStarted.resolve(payload.requestId);return pending.promise;}
+  return {};
+ });
+ assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+ assert.equal(await c.window.nativeSyncWordWorkspace(),false,'the automatic same-identity poll must not reopen Word');
+ assert.equal(editor.calls.filter(call=>call.action==='wordDocumentOpen').length,0);
+ assert.equal(await c.window.nativeRefreshWordWorkspace(),true,'the explicit refresh requests a fresh capture');
+ await statusStarted.promise;
+ assert.equal(c.wordTicket,null);assert.equal(c.source,null);
+ assert.deepEqual(JSON.parse(JSON.stringify(editor.calls.filter(call=>call.action==='wordDocumentOpen').at(-1).payload)),{});
+ assert.equal(editor.calls.filter(call=>call.action==='confirmWordSessionSwitch').length,0,'a clean manual refresh needs no confirmation');
+ assert.equal(await c.window.nativeOpenWordSession(freshTicket,requestId),true);
+ assert.equal(c.wordTicket,freshTicket);assert.equal(c.source.documentSnapshot,updated.documentSnapshot);
+ assert.equal(c.source.activeIndex,1);assert.equal(c.mf.value,updated.objects[1].latex);
+ assert.equal(editor.calls.filter(call=>call.action==='wordSessionCancel'&&call.payload.ticket===ticket).length,1);
+ pending.resolve({state:'opened'});
 });

@@ -1,5 +1,6 @@
 #include "editor_transport.hpp"
 #include "word_document_requests.hpp"
+#include "word_host_pump.hpp"
 #include "diagnostics.hpp"
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
@@ -64,7 +65,15 @@ void launchEquationLabURL(NSWorkspace* workspace,NSURL* url,void(^completion)(NS
     if(source.isActive&&[url.scheme isEqualToString:@"equationlab"]&&([url.host isEqualToString:@"word-edit"]||[url.host isEqualToString:@"word-tool"]))
         [source yieldActivationToApplicationWithBundleIdentifier:@"app.equationlab.mac"];
     [workspace openURLs:@[url] withApplicationAtURL:applicationURL configuration:config completionHandler:^(NSRunningApplication* app,NSError* error){
-        completion(error||!app?[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]:nil);
+        NSError* rawError=error?:(!app?[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]:nil);
+        if(rawError){
+            static os_log_t logger=os_log_create("app.equationlab.mac","WordHostLaunch");
+            // Keep the original LaunchServices error domain/code for diagnosis.
+            // Never log the URL, ticket, document, or NSError userInfo.
+            os_log_error(logger,"word_launch failed domain=%{public}@ code=%ld",rawError.domain,(long)rawError.code);
+            NSError* reported=[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:@{NSUnderlyingErrorKey:rawError,@"retryable":@YES}];
+            completion(reported);
+        }else completion(nil);
     }];
 }
 bool nativeValid(NSData* data) {
@@ -167,8 +176,11 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) std::uint64_t sessionId;
 @property(nonatomic) CFAbsoluteTime started;
 @property(nonatomic,strong) NSString* ticket;
+@property(nonatomic,strong) NSString* launchURL;
+@property(nonatomic) NSUInteger launchAttempts;
 @property(nonatomic,strong) NSString* documentRequestId;
 @property(nonatomic,strong) NSString* toolIntent;
+@property(nonatomic,strong) NSDictionary* deferredReopenTool;
 @property(nonatomic,strong) ProbeJsonRequest* request;
 @property(nonatomic,strong) NSDate* expires;
 @property(nonatomic) NSUInteger failures;
@@ -241,6 +253,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic) std::uint32_t interval;
 @property(nonatomic) BOOL applying;
 @property(nonatomic,strong) ProbeBackgroundSave* backgroundSave;
+@property(nonatomic,strong) NSDictionary* reopenToolHandoff;
 @property(nonatomic,strong) NSDictionary* testDocumentContext;
 @property(nonatomic) std::uint64_t activation;
 @property(nonatomic) std::uint64_t lastOwnerIdentity;
@@ -259,6 +272,10 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic) NSUInteger captureSerial;
 - (void)begin:(std::uint64_t)sessionId native:(NSData*)native;
 - (void)openState:(ProbeEditState*)state;
+- (void)applyDeferredReopenTool:(ProbeEditState*)state;
+- (bridge_probe::HResult)completeCancelledState:(ProbeEditState*)state;
+- (void)launchTicket:(ProbeEditState*)state;
+- (void)openEditorURL:(NSString*)url completion:(void(^)(NSError*))completion;
 - (void)poll:(ProbeEditState*)state;
 - (void)cleanup:(std::uint64_t)sessionId;
 - (void)retireTicket:(NSString*)ticket session:(std::uint64_t)sessionId attempt:(NSUInteger)attempt;
@@ -304,6 +321,8 @@ static ProbeEditorTransport* transport=nil;
 - (void)forgetOwner:(std::uint64_t)owner {
     [self forgetCachedOwner:owner];NSNumber* key=@(owner);[self.ownerCaptureBindings removeObjectForKey:key];[self.ownerCaptureOrder removeObject:key];
     if(self.captureRequest.state.ownerIdentity==owner)self.captureRequest=nil;
+    if([self.reopenToolHandoff[@"owner"] unsignedLongLongValue]==owner)self.reopenToolHandoff=nil;
+    for(ProbeEditState* state in self.edits.allValues)if(state.ownerIdentity==owner)state.deferredReopenTool=nil;
 }
 - (void)rememberCaptureOwner:(std::uint64_t)owner context:(NSDictionary*)context digest:(NSString*)digest {
     if(!owner||![context[@"identity"] isKindOfClass:NSString.class]||![context[@"snapshot"] isKindOfClass:NSNumber.class]||[context[@"snapshot"] intValue]<=0||![context[@"index"] isKindOfClass:NSNumber.class]||!digest)return;
@@ -348,7 +367,7 @@ static ProbeEditorTransport* transport=nil;
     state.captureRequested=YES;state.requiresDocumentCapture=YES;
     ProbeCaptureRequest* request=[ProbeCaptureRequest new];request.state=state;request.binding=binding;request.token=EquationLabNewDocumentToken();request.activation=state.activation;request.epoch=self.documentEpoch;
     os_log_info(OS_LOG_DEFAULT,"WordHostCapture request anchored=%d attempt=%lu",binding!=nil,static_cast<unsigned long>(state.captureAttempts));
-    self.captureRequest=request;lastCaptureState=CapturePending;
+    self.captureRequest=request;lastCaptureState=CapturePending;EquationLabWakeWordHost();
 }
 - (std::int32_t)takeCaptureRequest {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
@@ -487,6 +506,10 @@ static ProbeEditorTransport* transport=nil;
         return;
     }
     [self expireWrittenDocuments];ProbeEditState* state=[ProbeEditState new];state.started=CFAbsoluteTimeGetCurrent();logOpenPhase("verb",state.started);state.sessionId=sessionId;state.activation=++self.activation;state.openNative=native;state.openDigest=nativeDigest(native);state.ownerIdentity=bridge_probe::editObjectIdentity(sessionId);self.lastOwnerIdentity=state.ownerIdentity;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.expires=[NSDate dateWithTimeIntervalSinceNow:20*60];self.edits[@(sessionId)]=state;
+    // completeEdit(reopen:true) invokes this next DoVerb synchronously. Consume
+    // its one-shot handoff here so it cannot leak to a later, unrelated open.
+    NSDictionary* handoff=self.reopenToolHandoff;self.reopenToolHandoff=nil;
+    if(handoff&&[handoff[@"owner"] unsignedLongLongValue]==state.ownerIdentity)state.deferredReopenTool=handoff;
     state.documentRequestId=documentRequestId;
     if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
     state.activationBinding=activationHint;
@@ -578,9 +601,41 @@ static ProbeEditorTransport* transport=nil;
     }
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(),^{ProbeEditState* current=weak;if(current&&[self active:current]&&current.wakePending)[self fail:current code:NetworkFailure];});
 }
+- (void)launchTicket:(ProbeEditState*)state {
+    if(![self active:state]||state.activation!=self.activation)return;
+    if(!state.launchURL)state.launchURL=editorLaunchURL(state);
+    if(state.launchAttempts>=2){[self fail:state code:LaunchFailure];return;}
+    ++state.launchAttempts;
+    __weak ProbeEditState* weak=state;
+    auto completed=^(NSError* error){dispatch_async(dispatch_get_main_queue(),^{
+        ProbeEditState* current=weak;
+        if(!current||![self active:current])return;
+        // A successful launch has already handed this ticket to the editor.
+        // Keep polling that exact live edit even if Word activated a newer
+        // owner while LaunchServices was completing asynchronously.
+        if(!error){[self schedule:current];return;}
+        // Failed launches have no delivered editor session to preserve. Retire
+        // a stale activation instead of retrying it after ownership changed.
+        if(current.activation!=self.activation){[self fail:current code:LaunchFailure];return;}
+        if([error.userInfo[@"retryable"] boolValue]&&current.launchAttempts<2){
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+                ProbeEditState* retry=weak;
+                if(retry&&[self active:retry]&&retry.activation==self.activation)[self launchTicket:retry];
+            });
+        }else [self fail:current code:LaunchFailure];
+    });};
+    [self openEditorURL:state.launchURL completion:completed];
+}
+- (void)openEditorURL:(NSString*)url completion:(void(^)(NSError*))completion {
+    if(self.launch){
+        BOOL opened=self.launch(url.UTF8String,self.launchContext);
+        completion(opened?nil:[NSError errorWithDomain:@"NativeEquationTransport" code:LaunchFailure userInfo:nil]);
+    }else launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],completion);
+}
 - (void)openState:(ProbeEditState*)state {
     if(![self active:state])return;
     if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);return;}
+    [self applyDeferredReopenTool:state];
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(state.documentContext){
         // ELCTX4's one-shot token belongs to the Word/native handshake. The
@@ -632,12 +687,30 @@ static ProbeEditorTransport* transport=nil;
         // ownership until the App confirms a draft switch.
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         logOpenPhase("editor-launch",current.started);
-        NSString* launchURL=editorLaunchURL(current);
-        if(self.launch){if(!self.launch([launchURL UTF8String],self.launchContext)){[self fail:current code:LaunchFailure];return;}[self schedule:current];}
-        else {
-            launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:launchURL],^(NSError* launchError){dispatch_async(dispatch_get_main_queue(),^{ProbeEditState* active=state;if(![self active:active])return;if(launchError)[self fail:active code:LaunchFailure];else[self schedule:active];});});
-        }
+        [self launchTicket:current];
     }];
+}
+- (void)applyDeferredReopenTool:(ProbeEditState*)state {
+    NSDictionary* handoff=state.deferredReopenTool;state.deferredReopenTool=nil;
+    if(!handoff||!state.ownerIdentity||[handoff[@"owner"] unsignedLongLongValue]!=state.ownerIdentity)return;
+    NSDictionary* context=state.documentContext;
+    if([context[@"identity"] isKindOfClass:NSString.class]&&[context[@"identity"] isEqual:handoff[@"identity"]]&&
+       [context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] isEqual:handoff[@"index"]]&&
+       [@[@"typography",@"spacing",@"export"] containsObject:handoff[@"tool"]])state.toolIntent=handoff[@"tool"];
+}
+- (bridge_probe::HResult)completeCancelledState:(ProbeEditState*)state {
+    NSDictionary* handoff=nil;
+    NSDictionary* binding=state.bindingContext;
+    if(state.reopenRequested&&state.ownerIdentity&&[@[@"typography",@"spacing",@"export"] containsObject:state.toolIntent]&&
+       [binding[@"identity"] isKindOfClass:NSString.class]&&[binding[@"index"] isKindOfClass:NSNumber.class]){
+        handoff=@{@"owner":@(state.ownerIdentity),@"identity":binding[@"identity"],@"index":binding[@"index"],@"tool":state.toolIntent};
+        self.reopenToolHandoff=handoff;
+    }
+    bridge_probe::HResult result=bridge_probe::completeEdit(state.sessionId,nullptr,0,false,state.reopenRequested);
+    // The real object reopens synchronously. If it did not consume the token,
+    // retire it here so a cancelled/failed reopen cannot affect another edit.
+    if(self.reopenToolHandoff==handoff)self.reopenToolHandoff=nil;
+    return result;
 }
 - (void)poll:(ProbeEditState*)state {
     if(![self active:state]||state.request)return;if(state.expires.timeIntervalSinceNow<=0){[self fail:state code:Expired];return;}
@@ -651,7 +724,7 @@ static ProbeEditorTransport* transport=nil;
             [self schedule:current];return;
         }
         if([status isEqual:@"navigate"]){id index=json[@"index"];if(![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]){[self fail:current code:InvalidReply];return;}if(!current.reopenRequested)EquationLabSetNavigationTarget([index intValue]);bridge_probe::completeEdit(current.sessionId,nullptr,0,false,current.reopenRequested);return;}
-        if([status isEqual:@"cancelled"]){bridge_probe::completeEdit(current.sessionId,nullptr,0,false,current.reopenRequested);return;}
+        if([status isEqual:@"cancelled"]){[self completeCancelledState:current];return;}
         if(![status isEqual:@"complete"]){[self fail:current code:InvalidReply];return;}
         id source=json[@"native"],preview=json[@"pdf"],width=json[@"width"],height=json[@"height"];
         const NSUInteger maxB64=((MaxBlob+2)/3)*4;
@@ -680,6 +753,7 @@ static ProbeEditorTransport* transport=nil;
             // is allowed to supply a client site for the prepared save.
             auto hr=bridge_probe::completeEdit(current.sessionId,nullptr,0,false);
             if(hr!=bridge_probe::Ok){[self ackBackground:save ok:NO];return;}
+            EquationLabWakeWordHost();
             dispatch_after(dispatch_time(DISPATCH_TIME_NOW,10*NSEC_PER_SEC),dispatch_get_main_queue(),^{if(self.backgroundSave==save)[self ackBackground:save ok:NO];});
             return;
         }
@@ -732,6 +806,7 @@ HResult installEditorTransport(){
     if(!NSThread.isMainThread)return WrongThread;
     if(!transport)transport=[ProbeEditorTransport new];
     if(inWord()){
+        EquationLabInstallWordHostPump();
         auto requestResult=installWordDocumentRequests();if(requestResult!=0)return static_cast<HResult>(requestResult);
     }
     setEditorHooks(openTransport,nullptr);setEditorCancelHook(cancelTransport);setEditorOwnerForgetHook(forgetTransportOwner);setEditorOwnerWrittenHook(writtenTransportOwner);return Ok;

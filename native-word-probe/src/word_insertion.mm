@@ -1,3 +1,4 @@
+#include "word_host_pump.hpp"
 #import <AppKit/AppKit.h>
 #include "word_insertion.hpp"
 #include <cstring>
@@ -196,7 +197,7 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
             NSString* encoded=[result[@"docx"] isKindOfClass:NSString.class]?result[@"docx"]:nil;
             NSData* fragment=encoded.length<=24*1024*1024?[[NSData alloc] initWithBase64EncodedString:encoded options:0]:nil;
             if(fragment.length<4||memcmp(fragment.bytes,"PK\x03\x04",4)){EquationLabFinishWordInsertion(false);return;}
-            state.mode=mode;state.fragment=fragment;return;
+            state.mode=mode;state.fragment=fragment;EquationLabWakeWordHost();return;
         }else if([result[@"state"] isEqual:@"cancelled"]){endInsertion(state,0,false);return;}
         else if(![result[@"state"] isEqual:@"editing"]){endInsertion(state,5,true);return;}
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,200*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak poll];});

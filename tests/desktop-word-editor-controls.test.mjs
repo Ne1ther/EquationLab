@@ -11,7 +11,7 @@ function setup(){
  const context=vm.createContext({window:{},busy:false,wordNavigating:false,wordOutcomeUnknown:false,wordTicket:'a'.repeat(64),source:{insertion:true},selected:null,
   $:id=>{if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,setAttribute(name,value){this[name]=value;}});return elements.get(id);}
  });
- vm.runInContext(sync,context);return {context,elements,refresh:()=>context.window.syncWordEditorControls()};
+ vm.runInContext(source.split('\n').find(line=>line.startsWith('function wordSourceUnavailable()'))+'\n'+sync,context);return {context,elements,refresh:()=>context.window.syncWordEditorControls()};
 }
 test('Blank insertion keeps its shared action row visible and cancel usable',()=>{
  const e=setup();e.refresh();

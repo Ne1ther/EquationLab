@@ -38,6 +38,21 @@ struct RulerTab: Identifiable, Codable, Equatable {
 }
 struct MatrixContext: Decodable { let rows: Int; let columns: Int }
 
+struct OpenWordDocument: Decodable, Identifiable, Equatable {
+    let identity: String
+    let name: String
+    let readOnly: Bool
+    var id: String { identity }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        identity = try values.decode(String.self, forKey: .identity)
+        name = try values.decodeIfPresent(String.self, forKey: .name) ?? "Word 文档"
+        readOnly = try values.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+    }
+    private enum CodingKeys: String, CodingKey { case identity, name, readOnly }
+}
+
 struct EditorOption: Identifiable, Decodable {
     let value: String
     let label: String
@@ -79,6 +94,10 @@ struct DocumentNumbering: Decodable {
 
 struct WorkbenchState: Decodable {
     var documentName = "新建公式"
+    var otherWordDocumentName: String? = nil
+    var openWordDocuments: [OpenWordDocument] = []
+    var wordWorkspaceConnected = false
+    var wordDocumentIdentity: String? = nil
     var documentPath = ""
     var latex = ""
     var selected: Int? = nil
@@ -101,6 +120,7 @@ struct WorkbenchState: Decodable {
     var valid = false
     var canExport = false
     var wordOutcomeUnknown = false
+    var wordDocumentUnavailable = false
     var busy = false
     var mode = "rebuild"
     var readOnly = false
@@ -120,6 +140,10 @@ struct WorkbenchState: Decodable {
             return try JSONDecoder().decode(type, from: JSONSerialization.data(withJSONObject: raw, options: [.fragmentsAllowed]))
         }
         if let v = try value("documentName", String.self) { documentName = v }
+        if payload["otherWordDocumentName"] is NSNull { otherWordDocumentName = nil } else if let v = try value("otherWordDocumentName", String.self) { otherWordDocumentName = v }
+        if payload["openWordDocuments"] is NSNull { openWordDocuments = [] } else if let v = try value("openWordDocuments", [OpenWordDocument].self) { openWordDocuments = v }
+        if payload["wordWorkspaceConnected"] is NSNull { wordWorkspaceConnected = false } else if let v = try value("wordWorkspaceConnected", Bool.self) { wordWorkspaceConnected = v }
+        if payload["wordDocumentIdentity"] is NSNull { wordDocumentIdentity = nil } else if let v = try value("wordDocumentIdentity", String.self) { wordDocumentIdentity = v }
         if let v = try value("documentPath", String.self) { documentPath = v }
         if let v = try value("latex", String.self) { latex = v }
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
@@ -142,6 +166,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("valid", Bool.self) { valid = v }
         if let v = try value("canExport", Bool.self) { canExport = v }
         if let v = try value("wordOutcomeUnknown", Bool.self) { wordOutcomeUnknown = v }
+        if let v = try value("wordDocumentUnavailable", Bool.self) { wordDocumentUnavailable = v }
         if let v = try value("busy", Bool.self) { busy = v }
         if let v = try value("mode", String.self) { mode = v }
         if let v = try value("readOnly", Bool.self) { readOnly = v }

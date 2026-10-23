@@ -91,6 +91,22 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var wordDocumentRequestIDs: [String: String] = [:]
     private var deliveringWordTicket: String?
     private var refreshWordDocumentAfterLoad = false
+    private var wordWorkspaceTimer: Timer?
+    func startWordWorkspaceObservation() {
+        guard wordWorkspaceTimer == nil else { return }
+        wordWorkspaceTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            Task { @MainActor [weak self] in self?.syncActiveWordWorkspace() }
+        }
+    }
+    func syncActiveWordWorkspace() {
+        guard editorReady, let webView, editorWindow?.isVisible == true,
+              deliveringWordTicket == nil, pendingWordTickets.isEmpty, !wordDocumentRequestPending else { return }
+        // Keep the picker current while the window is visible behind Word.
+        // Only a foreground editor may follow another document into an edit.
+        let editorIsFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
+        let operation = editorIsFrontmost ? "nativeSyncWordWorkspace" : "nativeRefreshWordDocumentList"
+        webView.evaluateJavaScript("window.\(operation)?.()", completionHandler: nil)
+    }
     private(set) var pendingEditorReveal: (reason: String, ticket: String?, generation: Int)?
     private(set) var wordPresentationGeneration = 0
     private var focusEventSequence = 0
@@ -346,6 +362,12 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if refreshWordDocumentAfterLoad { refreshVisibleWordDocumentIfNeeded() }
     }
     func invoke(_ function: String, argument: Int? = nil) { webView?.evaluateJavaScript("window.\(function)?.(\(argument.map(String.init) ?? ""))", completionHandler: nil) }
+    func invoke(_ function: String, argument: String) {
+        guard let data = try? JSONSerialization.data(withJSONObject: [argument], options: [.fragmentsAllowed]),
+              let encoded = String(data: data, encoding: .utf8),
+              let webView else { return }
+        webView.evaluateJavaScript("window.\(function)?.(\(encoded.dropFirst().dropLast()))", completionHandler: nil)
+    }
     func prepareToClose(_ completion: @escaping (Bool) -> Void) {
         recordWindowEvent("close_requested", reason: wordSessionActive ? "word-session" : "standalone")
         guard hasWordSessionOrRequest else { completion(true); return }
@@ -462,8 +484,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             let alert = NSAlert()
             let closing = payload["closing"] as? Bool == true
             let browsing = payload["browsing"] as? Bool == true
+            let switchingDocument = payload["document"] as? Bool == true
             alert.messageText = t(closing ? "当前公式尚不能保存" : "当前公式还有未保存的修改")
-            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : switchingDocument ? "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
             alert.addButton(withTitle: t("继续编辑当前公式"))
             alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : "放弃修改并打开"))
             let answer: NSApplication.ModalResponse

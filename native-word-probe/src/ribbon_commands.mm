@@ -1,3 +1,4 @@
+#include "word_host_pump.hpp"
 #import <AppKit/AppKit.h>
 #import <Foundation/Foundation.h>
 #include <dlfcn.h>
@@ -77,18 +78,18 @@ BOOL wordRequestTarget(id value){
     return [identity isKindOfClass:NSString.class]&&[identity length]>=3&&[identity length]<=256&&[identity rangeOfString:@":"].location!=NSNotFound&&[snapshot isKindOfClass:NSNumber.class]&&[snapshot intValue]>0&&[snapshot doubleValue]==[snapshot intValue]&&[index isKindOfClass:NSNumber.class]&&[index intValue]>=0&&[index intValue]<=10000&&[index doubleValue]==[index intValue]&&wordRequestHexId(digest);
 }
 BOOL wordRequestFieldsMatch(NSArray<NSString*>* fields,NSDictionary* envelope){
-    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ1"]||fields[8].length||![envelope[@"requestId"] isEqual:fields[2]])return NO;
-    NSDictionary* target=envelope[@"target"];
-    if([fields[3] isEqual:@"0"])return !target&&!fields[4].length&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
-    return [fields[3] isEqual:@"1"]&&wordRequestTarget(target)&&[target[@"identity"] isEqual:fields[4]]&&
-        [[target[@"snapshot"] stringValue] isEqual:fields[5]]&&[[target[@"index"] stringValue] isEqual:fields[6]]&&[target[@"nativeSha256"] isEqual:fields[7]];
+    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length||![envelope[@"requestId"] isEqual:fields[2]])return NO;
+    NSDictionary* target=envelope[@"target"];NSString* documentIdentity=envelope[@"documentIdentity"];
+    if([fields[3] isEqual:@"0"])return !target&&!documentIdentity&&!fields[4].length&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
+    if([fields[3] isEqual:@"1"])return wordRequestTarget(target)&&!documentIdentity&&[target[@"identity"] isEqual:fields[4]]&&[[target[@"snapshot"] stringValue] isEqual:fields[5]]&&[[target[@"index"] stringValue] isEqual:fields[6]]&&[target[@"nativeSha256"] isEqual:fields[7]];
+    return [fields[3] isEqual:@"2"]&&!target&&[documentIdentity isKindOfClass:NSString.class]&&[documentIdentity isEqual:fields[4]]&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
 }
 NSDictionary* wordDocumentRequestFromFile(NSInteger* tokenOut=nullptr){
     if(!validHost())return nil;
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"native-document-request.txt");if(!data)return nil;
     NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
-    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ1"]||fields[8].length)return nil;
+    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length)return nil;
     NSScanner* tokenScanner=[NSScanner scannerWithString:fields[1]];NSInteger token=0;
     if(![tokenScanner scanInteger:&token]||!tokenScanner.isAtEnd||token<=0||token>INT32_MAX||!wordRequestHexId(fields[2]))return nil;
     NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(static_cast<std::int32_t>(token));
@@ -101,14 +102,20 @@ std::int32_t takeWordDocumentRequest(){
     auto token=bridge_probe::takeWordDocumentRequest();if(token<=0)return token;
     NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(token);NSString* requestId=envelope[@"requestId"];
     if(!wordRequestHexId(requestId)){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-request-id");return -2;}
-    NSDictionary* target=envelope[@"target"];NSString* targetIdentity=@"",*digest=@"";NSNumber* snapshot=@0,*index=@0;NSString* targetFlag=@"0";
+    NSDictionary* target=envelope[@"target"];NSString* documentIdentity=envelope[@"documentIdentity"];NSString* targetIdentity=documentIdentity?:@"",*digest=@"";NSNumber* snapshot=@0,*index=@0;NSString* targetFlag=documentIdentity?@"2":@"0";
     if(target){
         if(!wordRequestTarget(target)){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-target");return -2;}
         NSString* expectedPrefix=[documentProcessIdentity() stringByAppendingString:@":"];
         if(![target[@"identity"] hasPrefix:expectedPrefix]){bridge_probe::finishWordDocumentRequest(token,@"failed",@"document-process-mismatch");return -2;}
         targetFlag=@"1";targetIdentity=target[@"identity"];snapshot=target[@"snapshot"];index=target[@"index"];digest=target[@"nativeSha256"];
     }
-    NSString* text=[NSString stringWithFormat:@"ELDREQ1\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
+    if(documentIdentity){
+        NSString* expectedPrefix=[documentProcessIdentity() stringByAppendingString:@":"];
+        if(![documentIdentity hasPrefix:expectedPrefix]){bridge_probe::finishWordDocumentRequest(token,@"failed",@"document-process-mismatch");return -2;}
+        NSString* tokenText=[documentIdentity substringFromIndex:expectedPrefix.length];NSScanner* scanner=[NSScanner scannerWithString:tokenText];int identityToken=0;
+        if(![scanner scanInt:&identityToken]||!scanner.isAtEnd||identityToken<=0){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-document-identity");return -2;}
+    }
+    NSString* text=[NSString stringWithFormat:@"ELDREQ2\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
     NSData* bytes=[text dataUsingEncoding:NSUTF8StringEncoding];
     if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"native-document-request.txt",bytes)){
         bridge_probe::finishWordDocumentRequest(token,@"failed",@"request-file-write");return -2;
@@ -294,7 +301,8 @@ std::int32_t closeDocumentIdentity(){
     NSData* data=inputFile(directory,@"document-close.txt");unlink([directory URLByAppendingPathComponent:@"document-close.txt"].fileSystemRepresentation);
     NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
     if(fields.count!=2||![fields[0] isEqual:@"ELCLOSE1"])return -2;NSScanner* scanner=[NSScanner scannerWithString:fields[1]];int identity=0;
-    if(![scanner scanInt:&identity]||!scanner.isAtEnd||identity<=0)return -3;EquationLabDocumentContextDidCloseIdentity(identity);return 0;
+    if(![scanner scanInt:&identity]||!scanner.isAtEnd||identity<=0)return -3;EquationLabDocumentContextDidCloseIdentity(identity);
+    bridge_probe::closeWordWorkspaceIdentity([NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),identity]);return 0;
 }
 bool scanActivationInteger(NSString* value,int minimum,int maximum,int* result){
     if(!value.length||!result)return false;
@@ -450,6 +458,7 @@ RIBBON_EXPORT(MathTypeBridgeUncertainInsertion,([&](){EquationLabFinishWordInser
 RIBBON_EXPORT(MathTypeBridgeInsertionError,EquationLabWordInsertionError())
 RIBBON_EXPORT(MathTypeBridgeTakeInsertion,([&](){
     if(!validHost())return -1;
+    EquationLabWordHostDidPoll();
     std::int32_t token=0;NSData* data=EquationLabClaimWordInsertion(&token);if(!data)return 0;
     if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-complete-insert.docx",data)){EquationLabFinishWordInsertion(false);return -2;}
     return token;
@@ -472,6 +481,36 @@ RIBBON_EXPORT(MathTypeBridgeCaptureTimingFileReady,([&](){if(!validHost()||captu
 RIBBON_EXPORT(MathTypeBridgeEditGeneration,bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration)))
 RIBBON_EXPORT(MathTypeBridgeNewDocumentToken,EquationLabNewDocumentToken())
 RIBBON_EXPORT(MathTypeBridgeTakeNavigation,([](){auto target=navigationTarget;navigationTarget=0;return target;})())
+RIBBON_EXPORT(MathTypeBridgeClearWordWorkspace,([&](){if(!validHost())return -1;bridge_probe::publishWordWorkspace(nil,@[]);return 0;})())
+RIBBON_EXPORT(MathTypeBridgeQueueWorkspaceRefresh,([&](){if(!validHost())return -1;EquationLabWakeWordHost();return 0;})())
+RIBBON_EXPORT(MathTypeBridgePublishWordWorkspace,([&](){
+    if(!validHost())return -1;
+    NSData* data=inputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"active-document.txt");
+    if(!data||data.length>512*1024)return -2;
+    NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+    NSArray* lines=[text componentsSeparatedByString:@"\n"];
+    if(lines.count==3&&[lines[0] isEqual:@"ELWORK1"]&&[lines[2] length]<=512){
+        NSScanner* scanner=[NSScanner scannerWithString:lines[1]];int token=0;
+        if(![scanner scanInt:&token]||!scanner.isAtEnd||token<=0)return -3;
+        NSString* identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),token];
+        bridge_probe::publishWordWorkspace(@{@"identity":identity,@"name":lines[2]},nil);return 0;
+    }
+    if(lines.count<4||![lines[0] isEqual:@"ELWORK2"])return -2;
+    NSScanner* activeScanner=[NSScanner scannerWithString:lines[1]];int activeToken=0;
+    if(![activeScanner scanInt:&activeToken]||!activeScanner.isAtEnd||activeToken<0)return -3;
+    NSScanner* countScanner=[NSScanner scannerWithString:lines[2]];int count=0;
+    NSString* finalField=lines.lastObject;
+    if(![countScanner scanInt:&count]||!countScanner.isAtEnd||count<0||count>128||lines.count!=static_cast<NSUInteger>(4+count*3)||finalField.length)return -4;
+    NSMutableArray* documents=[NSMutableArray arrayWithCapacity:count];NSMutableSet* identities=[NSMutableSet set];NSDictionary* active=nil;
+    for(int i=0;i<count;i++){
+        NSString* tokenText=lines[3+i*3],*readOnly=lines[4+i*3],*name=lines[5+i*3];NSScanner* tokenScanner=[NSScanner scannerWithString:tokenText];int token=0;
+        if(![tokenScanner scanInt:&token]||!tokenScanner.isAtEnd||token<=0||![@[@"0",@"1"] containsObject:readOnly]||name.length>512||[name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return -5;
+        NSString* identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),token];if([identities containsObject:identity])return -5;[identities addObject:identity];
+        NSDictionary* document=@{@"identity":identity,@"name":name,@"readOnly":@([readOnly isEqual:@"1"])};[documents addObject:document];if(token==activeToken)active=@{@"identity":identity,@"name":name};
+    }
+    if((count==0&&activeToken!=0)||(count>0&&!active))return -6;
+    bridge_probe::publishWordWorkspace(active,documents);return 0;
+})())
 RIBBON_EXPORT(MathTypeBridgeTakeWordDocumentRequest,takeWordDocumentRequest())
 RIBBON_EXPORT(MathTypeBridgeWordDocumentRequestCurrent,currentWordDocumentRequest())
 RIBBON_EXPORT(MathTypeBridgeBeginWordDocumentRequest,beginCurrentWordDocumentRequest())
