@@ -1,16 +1,17 @@
 # 版本记录
 
-## 0.6.5 · build84
+## 0.6.5 · build85
 
 - Word 文档菜单按文档身份区分同名文件；后台更新文档信息不抢焦点，切换时保护未保存草稿，并清理已关闭来源的不可用公式。
 - 修复 Word 字段选择和“下一条 / 上一条”切换。
 - 启动失败时才提供重试；重新安装用户服务后会重新启动。
 - 修复新文档插入等待和回调丢失后的恢复。
 - 清理重复的网页侧栏代码，保留原生文档和收藏列表。
+- Word 正文普通段落中选中已有公式后，可用“右侧编号”或“左侧编号”添加或移动编号；“独立编号”添加右侧编号。仅支持每段一个公式，不支持表格、列表、修订或受保护内容。重复点击同一侧不会重复编号；“更新编号”刷新自动序号和交叉引用。编辑器中的编号格式只作预览，保存编辑保留现有 Word 编号。
 
 [下载 0.6.5](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.5)
 
-This release improves the Word document menu, protects changed drafts while switching, fixes field selection and Next / Previous navigation, retries failed launches, restarts the reinstalled user service, and recovers insertion and document operations after missed callbacks. It removes duplicate web sidebar code and keeps the native document and favorites lists.
+This release improves the Word document menu, protects changed drafts while switching, fixes field selection and Next / Previous navigation, retries failed launches, restarts the reinstalled user service, and recovers insertion and document operations after missed callbacks. In a plain body paragraph, Right Number and Left Number add or move a number on the selected existing equation; Independent Number adds one on the right. This supports one equation per paragraph and excludes tables, lists, tracked changes, and protected content. Repeating the same side does not duplicate it. Update Numbers refreshes automatic sequence numbers and cross-references. The editor's number formatting is a preview; saving an edit preserves existing Word numbering. It removes duplicate web sidebar code and keeps the native document and favorites lists.
 
 ## 0.6.4 · build73
 
