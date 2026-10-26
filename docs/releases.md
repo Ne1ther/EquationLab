@@ -10,6 +10,8 @@
 
 在 Apple Silicon、Word 16.114.1 上，用长文档副本测试了公式保存、字号修改、删除后的重编号、引用更新和保存重开；也测试了三份文档之间的选择和来源关闭后的列表清理。测试文档与记录留在本地，不随安装包或源码发布。此次没有逐条完成长文档中所有公式的手工编辑，也没有进行 Windows 往返验证。
 
+发行包已检查结构、内置组件哈希和更新签名。本次没有完成本机系统安装，不把这些检查写成安装验收通过。
+
 [下载 0.6.6](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.6)
 
 This update focuses on the wait when opening long documents. The selected equation opens first in a long document with unsaved changes; the rest load in batches, with thumbnails appearing as you browse. Typing and point-size changes stay in place when the list finishes loading. Clean saved documents use a faster reading path.
@@ -17,6 +19,8 @@ This update focuses on the wait when opening long documents. The selected equati
 More legacy blackboard/script characters, colors, and multiline structures now display correctly. Template synchronization no longer causes a false unsaved-change warning. Unrecognized legacy font characters still show a square and a warning, with original data retained. Update Numbers now recognizes MTEqn, MTChap, MTSec, and related fields inside MTPlaceRef, preserving reset/repeat settings and updating equation references without changing unrelated figure/table sequences.
 
 Tested on Apple Silicon with Word 16.114.1 using a long-document copy: equation save-back, point-size changes, renumbering after deletion, cross-reference updates, and save/reopen. Three-document selection and source-closure cleanup were also tested. Private test documents and records stay local. Every equation was not manually edited, and Windows round trips were not tested.
+
+Package structure, bundled component hashes, and the update signature were checked. The full system installation was not completed for this release, so those checks are not an installer acceptance result.
 
 ## 0.6.5 · build85
 
