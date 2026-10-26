@@ -40,3 +40,13 @@ test('Unmodified structure editing keeps every original native and companion byt
  assert.deepEqual(replaceOleLatex(original,oleLatex(original)),original);
  assert.deepEqual(inspectOle(replaceOleLatex(original,oleLatex(original))).native,before);
 });
+test('Image/PDF size limits fail with actionable guidance and preserve the native formula',async()=>{
+ const svg='<svg viewBox="0 0 1 1"><path d="M0 0L1 1"/></svg>';
+ assert.equal(vectorPdfRequest(svg,10000,10000).width,10000);
+ for(const [width,height] of [[10000.01,1],[1,10000.01]])assert.throws(()=>vectorPdfRequest(svg,width,height),/10,000 pt.*add line breaks or reduce the font size/);
+ for(const [width,height] of [[0,1],[1,NaN],[-1,1]])assert.throws(()=>vectorPdfRequest(svg,width,height),/Invalid vector output dimensions/);
+ const ole=makeNewOle(Array.from({length:400},(_,i)=>`x_{${i}}`).join('+')),before=Buffer.from(ole),preview=await renderNative(ole,{raster:false});
+ assert.ok(preview.width>10000);assert.ok(preview.svg.includes('<path'));
+ await assert.rejects(nativePdf(ole),/10,000 pt.*add line breaks or reduce the font size/);
+ assert.deepEqual(ole,before);
+});

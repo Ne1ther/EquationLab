@@ -13,8 +13,24 @@ function setup(){
   calls.push({action,payload});if(behavior){const result=await behavior(action,payload);if(result!==undefined)return result;}
   if(action==='confirmWordSessionSwitch')return {discard};if(action==='wordDocumentOpen')return {requestId,state:'queued'};if(action==='wordDocumentStatus')return {state:'queued'};return {};
  }};
- const workspace=context.window.createWordDocumentWorkspace(api);return {workspace,state,calls,messages,discard:()=>{discard=true;},behavior:fn=>{behavior=fn;}};
+ const workspace=context.window.createWordDocumentWorkspace(api);return {workspace,api,state,calls,messages,discard:()=>{discard=true;},behavior:fn=>{behavior=fn;}};
 }
+
+test('A large cold Word capture stays valid past 25 seconds and still has a bounded cancellation deadline',async()=>{
+ for(const elapsed of [30000,60001]){
+  const e=setup();let now=0,wake;
+  e.api.now=()=>now;e.api.pause=()=>new Promise(resolve=>{wake=resolve;});
+  assert.equal(await e.workspace.resume(),true);await new Promise(resolve=>setImmediate(resolve));
+  now=elapsed;wake();await new Promise(resolve=>setImmediate(resolve));
+  if(elapsed===30000){
+   assert.equal(e.workspace.pending,true);assert.equal(e.calls.some(c=>c.action==='wordDocumentCancel'),false);
+   assert.equal(await e.workspace.prepareIncoming({...document(),insertion:false,activeIndex:0},requestId),false);
+  }else{
+   assert.equal(e.workspace.pending,false);assert.ok(e.calls.some(c=>c.action==='wordDocumentCancel'));
+   await assert.rejects(e.workspace.prepareIncoming({...document(),activeIndex:0},requestId),/请求已经结束/);
+  }
+ }
+});
 
 test('Ended insertion keeps display metadata, then Dock refresh accepts a new N+1 Word capture',async()=>{
  const e=setup(),before=document();e.workspace.remember(before);

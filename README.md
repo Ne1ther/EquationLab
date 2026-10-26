@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.5 安装包（build85）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.5/Equation-Lab-0.6.5.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.6 安装包（build86）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.6/Equation-Lab-0.6.6.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -22,9 +22,15 @@
 
 左侧菜单列出 Word 打开的文档，并按文档身份区分同名文件。切换会保护未保存草稿，后台更新文档信息不会把窗口抢到前台。刷新文档菜单只更新文档信息；公式区刷新才会重读公式。
 
+这次主要花时间处理了长文档。打开尚未保存的长文档时，先载入正在编辑的公式，其余公式分批读取，缩略图也会随着浏览补齐。列表还在加载时可以继续写公式、改字号；加载完成会保留这些修改。已保存且没有改动的文档会走更快的读取路径。
+
+也用长文档副本测试了公式保存、字号修改、删除公式后的重编号、交叉引用更新和保存重开。补充了部分旧 MathType 字符、颜色和多行结构的显示支持。仍有无法识别的旧字体字符会显示方框和提示，原始数据会保留；目前还不能说完整兼容所有 MathType 公式。
+
 默认每天检查一次更新，有新版时会在工具栏显示更新按钮。也可在 **Equation Lab → 检查更新…** 中手动检查、设置自动下载。
 
 ![Equation Lab 工作台](docs/preview/workbench-0.6.5.png)
+
+上图来自 0.6.5，主要界面沿用至今。
 
 ## 试一份文档
 

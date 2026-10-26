@@ -30,6 +30,8 @@ test('Only exact selections reuse saved snapshots durably; ordinary fallback kee
  assert.doesNotMatch(reuse,/CaptureTiming/);
  const full=source.slice(source.indexOf("ELCaptureTimingMarker \"MathTypeBridgeCaptureTimingStart\""),source.indexOf('If result = 0 Then RememberSnapshot'));
  assert.ok(full.indexOf('MathTypeBridgeCaptureTimingStart')<full.indexOf('mDocument.Content.WordOpenXML'));
- assert.ok(full.indexOf('MathTypeBridgeCaptureTimingXMLReady')<full.indexOf('ELWriteUtf8 directory & "/.EquationLab/document-context.txt"'));
- assert.ok(full.indexOf('ELWriteUtf8 directory & "/.EquationLab/document-context.txt"')<full.indexOf('MathTypeBridgeCaptureTimingFileReady'));
+ assert.ok(full.indexOf('MathTypeBridgeCaptureTimingXMLReady')<full.indexOf('ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt"'));
+ assert.ok(full.indexOf('ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt"')<full.lastIndexOf('MathTypeBridgeCaptureTimingFileReady'));
+ assert.match(source,/If Not Doc\.Saved Then Exit Function/);
+ assert.match(full,/SavedDocumentCaptureHeader[\s\S]*?ELWriteUtf8 directory & "\/.EquationLab\/document-context.txt"[\s\S]*?MathTypeBridgeCaptureDocument[\s\S]*?xml = mDocument\.Content\.WordOpenXML/,'saved-file capture falls back to live XML only when unavailable');
 });

@@ -296,8 +296,9 @@ export async function flatOpc(buffer) {
   return `<pkg:package xmlns:pkg="${NS.pkg}">${parts.join('')}</pkg:package>`;
 }
 
+export const MAX_FLAT_OPC_BYTES=128*1024*1024;
 export async function fromFlatOpc(xml) {
-  if(xml.length>30_000_000 || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw Error('Invalid or oversized OOXML');
+  if(typeof xml!=='string'||xml.length>MAX_FLAT_OPC_BYTES||Buffer.byteLength(xml,'utf8')>MAX_FLAT_OPC_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw Error('Invalid or oversized OOXML');
   const doc=parseXml(xml),zip=new JSZip(),types=[];
   for(const part of Array.from(doc.getElementsByTagNameNS(NS.pkg,'part'))) {
     const name=part.getAttributeNS(NS.pkg,'name').replace(/^\//,''),type=part.getAttributeNS(NS.pkg,'contentType');

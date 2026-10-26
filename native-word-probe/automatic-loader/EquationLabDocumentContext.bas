@@ -39,6 +39,18 @@ Private mActivationNonce As Long
 Private mActivationSnapshot As Long
 Private mActivationIndex As Long
 Private mRestoredActivationAnchor As Boolean
+Private mChunkDocument As Document
+Private mChunkToken As Long
+Private mChunkPart As Long
+Private mChunkStart As Long
+Private mChunkEnd As Long
+Private mChunkShapeCount As Long
+Private mChunkGeneration As Long
+Private mChunkIdentity As Long
+Private mChunkSnapshot As Long
+Private mChunkSelected As Long
+Private mChunkEquations As Collection
+Private mChunkText As String
 
 Public Sub ELObserveDocument(ByVal Doc As Document)
     If Not mReconcilingDocuments Then ELReconcileKnownDocuments
@@ -527,6 +539,15 @@ Public Sub ELCaptureSelection(ByVal selected As Selection, Optional ByVal prepar
         ELClearSelectionCaptureDuringCapture
         Exit Sub
     End If
+    If Not prepareActivation Then
+        If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then
+            ' An active editor already owns its capture. Ordinary selection
+            ' callbacks must not serialize the entire document a second time.
+            ' Explicit activation and token-bound recaptures keep their paths.
+            ELClearSelectionCapture
+            Exit Sub
+        End If
+    End If
     Dim shape As InlineShape
     Set shape = ELSelectedEquation(selected)
     If shape Is Nothing Then GoTo Missing
@@ -575,6 +596,18 @@ Failed:
     mOpeningEquation = False
     Err.Raise number, "Equation Lab", description
 End Sub
+
+Private Function SavedDocumentCaptureHeader(ByVal Doc As Document, ByVal identity As Long, ByVal snapshot As Long, ByVal index As Long, ByVal count As Long, ByVal requestToken As Long) As String
+    On Error GoTo Missing
+    If Not Doc.Saved Then Exit Function
+    Dim name As String, path As String
+    name = LCase$(Doc.Name)
+    If Right$(name, 5) <> ".docx" And Right$(name, 5) <> ".docm" Then Exit Function
+    path = Doc.FullName
+    If Left$(path, 1) <> "/" Or InStr(path, vbLf) > 0 Or InStr(path, vbCr) > 0 Then Exit Function
+    SavedDocumentCaptureHeader = "ELFILE1" & vbLf & CStr(requestToken) & vbLf & CStr(identity) & vbLf & CStr(snapshot) & vbLf & CStr(index) & vbLf & CStr(count) & vbLf & Replace(Replace(Doc.Name, vbCr, " "), vbLf, " ") & vbLf & path
+Missing:
+End Function
 
 Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False, Optional ByVal selectionBound As Boolean = False, Optional ByVal captureRequestToken As Long = 0, Optional ByVal prepareActivation As Boolean = False)
     On Error GoTo Failed
@@ -638,10 +671,54 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     ' WordOpenXML reflects the live document, including unsaved edits. Never
     ' save, rename, or alter the user's document to obtain this snapshot.
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingStart"
+    mSnapshotToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    contextHeader = SavedDocumentCaptureHeader(mDocument, mDocumentIdentity, mSnapshotToken, selected, mEquations.Count, captureRequestToken)
+    If Len(contextHeader) > 0 Then
+        ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader
+        ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
+        ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
+        result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
+        If result = 0 Then
+            If Not mDocument.Saved Then GoTo Failed
+            GoTo SnapshotCaptured
+        End If
+    End If
+    If forceSnapshot And captureRequestToken > 0 And (mEquations.Count > 20 Or contentEnd > 20000) Then
+        If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureIsEnrichment") <> 0 Then
+            Set mChunkDocument = mDocument
+            Set mChunkEquations = mEquations
+            mChunkToken = captureRequestToken
+            mChunkPart = 0
+            mChunkStart = mDocument.Content.Start
+            mChunkEnd = contentEnd
+            mChunkShapeCount = shapeCount
+            mChunkGeneration = generation
+            mChunkIdentity = mDocumentIdentity
+            mChunkSnapshot = mSnapshotToken
+            mChunkSelected = selected
+            mChunkText = mDocument.Content.Text
+            mSnapshotReady = False
+            mCapturing = False
+            ELContinueDocumentChunks
+            Exit Sub
+        End If
+    End If
+    ' Large unsaved documents open the exact owner first. The native transport
+    ' requests a fresh full capture only after the editor is ready. A forced
+    ' capture always takes the complete live document, never this fragment.
+    If captureRequestToken > 0 And (mEquations.Count > 20 Or contentEnd > 20000) Then
+        xml = target.Range.WordOpenXML
+        ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
+        If Len(xml) > 134217728 Then GoTo Failed
+        contextHeader = "ELFRAG1" & vbLf & CStr(captureRequestToken) & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & CStr(mEquations.Count) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf
+        ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", contextHeader & xml
+        ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
+        result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
+        GoTo SnapshotCaptured
+    End If
     xml = mDocument.Content.WordOpenXML
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
-    If Len(xml) > 30000000 Then GoTo Failed
-    mSnapshotToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    If Len(xml) > 134217728 Then GoTo Failed
     ' Word does not emit another selection/double-click event when an already
     ' selected OLE object is opened. An exact selection remains eligible until
     ' the selection changes or one activation consumes it. Other captures keep
@@ -650,12 +727,13 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     If selectionBound Then contextHeader = "ELCTX3"
     If captureRequestToken > 0 Then contextHeader = "ELCTX4"
     If captureRequestToken > 0 Then
-        ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(captureRequestToken) & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+        ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(captureRequestToken) & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
     Else
-        ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+        ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", contextHeader & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mSnapshotToken) & vbLf & CStr(selected) & vbLf & Replace(Replace(mDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
     End If
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
     result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
+SnapshotCaptured:
     If result = 0 Then RememberSnapshot
     mSnapshotReady = (result = 0)
     mSnapshotAt = Timer
@@ -759,11 +837,18 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String)
     RememberDocumentRanges mInsertionDocument, mInsertionToken, insertionAnchors
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
+    xml = SavedDocumentCaptureHeader(mInsertionDocument, mDocumentIdentity, mInsertionToken, 0, insertionEquations.Count, 0)
+    If Len(xml) > 0 Then
+        ELWriteUtf8 directory & "/.EquationLab/ribbon-insertion-context.txt", xml
+        result = EquationLabNativeCommand("MathTypeBridgeRibbon" & kind)
+        If result = 0 Then GoTo InsertionPrepared
+    End If
     xml = mInsertionDocument.Content.WordOpenXML
-    If Len(xml) > 30000000 Then Err.Raise vbObjectError + 7361, "Equation Lab", "This document is too large to open for insertion."
-    ELWriteUtf8 directory & "/.EquationLab/ribbon-insertion-context.txt", "ELCTX2" & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mInsertionToken) & vbLf & "0" & vbLf & Replace(Replace(mInsertionDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+    If Len(xml) > 134217728 Then Err.Raise vbObjectError + 7361, "Equation Lab", "This document exceeds the 128 MiB Word capture limit."
+    ELWriteDocumentCapture directory & "/.EquationLab/ribbon-insertion-context.txt", "ELCTX2" & vbLf & CStr(mDocumentIdentity) & vbLf & CStr(mInsertionToken) & vbLf & "0" & vbLf & Replace(Replace(mInsertionDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
     result = EquationLabNativeCommand("MathTypeBridgeRibbon" & kind)
     If result <> 0 Then Err.Raise vbObjectError + 7362, "Equation Lab", "The blank equation editor could not be opened."
+InsertionPrepared:
     SchedulePoll
     Exit Sub
 Failed:
@@ -866,6 +951,11 @@ Public Sub ELPollNavigation()
     saveToken = EquationLabNativeCommand("MathTypeBridgeTakeBackgroundSave")
     If saveToken > 0 Then
         ApplyBackgroundSave saveToken
+        ELWatchNativeSession
+        Exit Sub
+    End If
+    If mChunkToken > 0 Then
+        ELContinueDocumentChunks
         ELWatchNativeSession
         Exit Sub
     End If
@@ -1182,6 +1272,76 @@ Private Function ResolveBoundEquation(ByVal Doc As Document, ByVal anchor As Ran
 Missing:
 End Function
 
+Private Sub ELClearDocumentChunks()
+    Set mChunkDocument = Nothing
+    Set mChunkEquations = Nothing
+    mChunkToken = 0
+    mChunkText = ""
+    mCapturing = False
+End Sub
+
+Private Sub ELContinueDocumentChunks()
+    On Error GoTo Failed
+    Dim token As Long, result As Long, last As Long, span As Range, directory As String, xml As String, header As String, final As Long
+    token = mChunkToken
+    If token <= 0 Then Exit Sub
+    If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> token Then ELClearDocumentChunks: Exit Sub
+    If Not ELIsDocumentOpen(mChunkDocument) Then GoTo Failed
+    If KnownDocumentIdentity(mChunkDocument) <> mChunkIdentity Then GoTo Failed
+    If mChunkDocument.Content.End <> mChunkEnd Or mChunkDocument.InlineShapes.Count <> mChunkShapeCount Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeEditGeneration") <> mChunkGeneration Then GoTo Failed
+    If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+    ' Never serialize a range while the user is actively working in Word.
+    ' The next host tick resumes the same bound request, without selecting it.
+    If EquationLabNativeCommand("MathTypeBridgeCanReadDocumentChunk") = 0 Then SchedulePoll: Exit Sub
+    mCapturing = True
+    last = mChunkStart + 3000
+    If last > mChunkEnd Then last = mChunkEnd
+    Set span = mChunkDocument.Range(mChunkStart, last)
+    If last < mChunkEnd Then
+        If span.Paragraphs.Last.Range.Start > mChunkStart Then last = span.Paragraphs.Last.Range.Start
+    End If
+    Set span = mChunkDocument.Range(mChunkStart, last)
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingStart"
+    xml = span.WordOpenXML
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
+    If Len(xml) > 134217728 Then GoTo Failed
+    final = 0
+    If last = mChunkEnd Then final = 1
+    header = "ELPART1" & vbLf & CStr(token) & vbLf & CStr(mChunkIdentity) & vbLf & CStr(mChunkSnapshot) & vbLf & CStr(mChunkSelected) & vbLf & CStr(mChunkEquations.Count) & vbLf & CStr(mChunkPart) & vbLf & CStr(final) & vbLf & Replace(Replace(mChunkDocument.Name, vbCr, " "), vbLf, " ") & vbLf
+    directory = Options.DefaultFilePath(wdStartupPath)
+    ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", header & xml
+    ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
+    result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
+    If final = 0 Then
+        If result <> 1 Then GoTo Failed
+        mChunkStart = last
+        mChunkPart = mChunkPart + 1
+        mCapturing = False
+        result = EquationLabNativeCommand("MathTypeBridgeQueueDocumentChunk")
+        If result <> 0 Then GoTo Failed
+        Exit Sub
+    End If
+    If result <> 0 Then GoTo Failed
+    Dim anchors As Collection, shape As InlineShape
+    Set anchors = New Collection
+    For Each shape In mChunkEquations
+        anchors.Add shape.Range.Duplicate
+    Next
+    RememberDocumentRanges mChunkDocument, mChunkSnapshot, anchors
+    ' This segmented snapshot is intentionally not reusable by an ordinary
+    ' selection event; every future activation still gets its own fresh nonce.
+    mSnapshotReady = False
+    result = EquationLabNativeCommand("MathTypeBridgeFinishDocumentCaptureRequest")
+    ELClearDocumentChunks
+    Exit Sub
+Failed:
+    If token > 0 Then
+        If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") = token Then result = EquationLabNativeCommand("MathTypeBridgeFailDocumentCaptureRequest")
+    End If
+    ELClearDocumentChunks
+End Sub
+
 Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
     On Error GoTo Failed
     Dim snapshot As Long, index As Long, identity As Long, result As Long
@@ -1225,6 +1385,7 @@ Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
     ' Unbound requests use only the exact current OLE selection in ActiveDocument.
     ' Both paths carry a one-shot token into the fresh full-document capture.
     ELCaptureEquation shape, True, True, requestToken
+    If mChunkToken = requestToken Then Exit Sub
     If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> requestToken Then Exit Sub
     result = EquationLabNativeCommand("MathTypeBridgeFinishDocumentCaptureRequest")
     Exit Sub

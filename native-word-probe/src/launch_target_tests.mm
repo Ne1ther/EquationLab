@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; BOOL emulateDeferredReopen=NO; NSString* reopenedDocumentIdentity=@"process:77"; }
+void EquationLabDiscardDocumentParts(){}
 NSDictionary* EquationLabCapturedDocumentContext(){return fixtureDocumentContext;}
 BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context){return context&&fixtureSelectionPending&&context==fixtureDocumentContext;}
 void EquationLabConsumeDocumentSelection(NSDictionary* context){if(EquationLabDocumentContextIsPendingSelection(context)){fixtureDocumentContext=nil;fixtureSelectionPending=NO;EquationLabDocumentContextDidClearSelection();}}
@@ -87,6 +88,16 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
 - (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
     (void)reply;
     if([path isEqual:@"/api/native-open"])self.submittedBody=body;
+    return nil;
+}
+@end
+
+@interface EnrichmentTestTransport : ProbeEditorTransport
+@property(nonatomic,strong) NSDictionary* enrichmentBody;
+@end
+@implementation EnrichmentTestTransport
+- (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
+    if([path isEqual:@"/api/native-enrich"]){self.enrichmentBody=body;if(body[@"document"])reply(@{@"ok":@YES},nil);}
     return nil;
 }
 @end
@@ -482,6 +493,15 @@ int main(){@autoreleasepool{
         runCaptureRequestCases();
         runPreCapturedActivationCases();
         runSelectionSnapshotCases();
+        EnrichmentTestTransport* enrichment=[EnrichmentTestTransport new];ProbeEditState* partial=[ProbeEditState new];
+        partial.sessionId=99001;partial.ownerIdentity=77;partial.openDigest=@"native-sha";partial.ticket=[@"d" stringByPaddingToLength:64 withString:@"d" startingAtIndex:0];
+        partial.documentContext=@{@"scope":@"selection",@"count":@112,@"index":@25,@"identity":@"live:42",@"snapshot":@900,@"ooxml":@"fragment"};
+        partial.documentEpoch=enrichment.documentEpoch;partial.editGeneration=enrichment.cacheGeneration;enrichment.edits[@99001]=partial;
+        [enrichment rememberDocument:partial];check(enrichment.ownerCaptureBindings.count==1&&enrichment.documentSnapshots.count==0,"partial owner was cached as a complete document");
+        partial.bindingContext=partial.documentContext;partial.enrichingDocument=YES;partial.awaitingDocument=YES;
+        [enrichment captureFailed:partial];check([enrichment active:partial]&&!partial.awaitingDocument&&[enrichment.enrichmentBody[@"failed"] boolValue],"list failure cancelled the live owner instead of reporting metadata failure");
+        partial.enrichingDocument=YES;partial.documentContext=@{@"count":@112,@"index":@25,@"identity":@"live:42",@"snapshot":@901,@"captureToken":@902,@"ooxml":@"full"};
+        [enrichment enrichDocument:partial];check([enrichment active:partial]&&!partial.enrichingDocument&&[partial.bindingContext[@"snapshot"] isEqual:@901]&&!enrichment.enrichmentBody[@"document"][@"captureToken"],"full list changed owner or lost the fresh snapshot binding");
         std::cout<<"{\"on_demand_capture_cases\":16,\"capture_written_owner_anchor_invalidated\":true,\"capture_request_latest_and_deduplicated\":true,\"capture_request_live_anchor_and_native_sha_guard\":true,\"capture_request_document_clear_close_release\":true,\"capture_request_no_xml_in_tiny_binding\":true,\"capture_request_rejects_old_or_foreign_snapshot\":true,\"capture_request_no_saveobject_reentry\":true,\"capture_request_failure_retryable\":true,\"capture_request_rebinds_fresh_index\":true,\"one_shot_activation_hint_consumed_at_DoVerb\":true,\"precaptured_ELCTX4_consumed_at_DoVerb\":true,\"service_rejection_does_not_fallback_to_post_DoVerb_capture\":true,\"ordinary_selection_clear_preserves_activation_anchor\":true,\"document_clear_close_clear_activation_anchor\":true,\"foreign_identical_formula_rejected\":true,\"fresh_ELCTX4_exact_target_after_selection_loss\":true,";
         std::cout<<"\"cases\":16,\"cooperative_focus_yield_cases\":6,\"deferred_same_owner_reopen_preserves_tool_intent\":true,\"deferred_tool_intent_rejects_other_document\":true,\"ticket_launch_retry_recovers\":true,\"ticket_launch_retry_exhausts_cleanly\":true,\"ticket_launch_retry_stops_after_cancel_or_new_activation\":true,\"wake_and_inactive_host_do_not_yield\":true,\"stable_bundle_id\":\"app.equationlab.mac\",\"running_copy_preferred\":true,\"wake_and_edit_use_explicit_application\":true,\"foreground_deferred_until_app_accepts_ticket\":true,\"missing_app_is_launch_failure\":true,\"open_error_is_launch_failure\":true,\"missing_running_app_is_launch_failure\":true,\"default_handler_never_used\":true,\"document_request_url_cases\":3,\"document_cache_shared_snapshot\":true,\"document_cache_owner_limit\":32,\"document_cache_snapshot_limit\":4,\"document_cache_byte_limit\":33554432,\"document_cache_clear_and_close_release_xml\":true,\"document_cache_sha_guard\":true,\"elctx3_survives_ttl_once\":true,\"elctx3_requires_live_capture_timestamp\":true,\"selection_clear_preserves_owned_cache\":true,\"elctx2_ttl_unchanged\":true,\"late_exact_capture_beats_queued_deadline\":true,\"timeout_retirement_not_resurrected\":true,\"stale_legacy_capture_still_expires\":true,\"real_workspace_or_gui_used\":false}\n";
         return 0;

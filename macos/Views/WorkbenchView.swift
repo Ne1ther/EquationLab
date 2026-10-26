@@ -116,11 +116,11 @@ struct WorkbenchStatusBar: View {
     @ObservedObject var bridge: DesktopBridge
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: bridge.state.statusError || bridge.state.messageError ? "exclamationmark.triangle" : bridge.state.valid ? "checkmark.circle" : "clock")
-                .foregroundStyle(bridge.state.statusError || bridge.state.messageError ? .orange : bridge.state.valid ? .green : .secondary)
-                Text(bridge.t(bridge.state.statusError ? bridge.state.statusDetail : bridge.state.message.isEmpty ? bridge.state.statusTitle : bridge.state.message))
+            Image(systemName: bridge.state.statusError || bridge.state.statusWarning || bridge.state.messageError ? "exclamationmark.triangle" : bridge.state.valid ? "checkmark.circle" : "clock")
+                .foregroundStyle(bridge.state.statusError || bridge.state.statusWarning || bridge.state.messageError ? .orange : bridge.state.valid ? .green : .secondary)
+                Text(bridge.t(bridge.state.statusError || bridge.state.statusWarning && !bridge.state.messageError ? bridge.state.statusDetail : bridge.state.message.isEmpty ? bridge.state.statusTitle : bridge.state.message))
                 .font(.caption).lineLimit(1)
-                .foregroundStyle(bridge.state.messageError || bridge.state.statusError ? .orange : .secondary)
+                .foregroundStyle(bridge.state.messageError || bridge.state.statusError || bridge.state.statusWarning ? .orange : .secondary)
                 .help(bridge.t(bridge.state.statusDetail))
             Spacer(minLength: 8)
             Button { bridge.action("click", ["id": "copy-latex"]) } label: {

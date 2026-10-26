@@ -106,6 +106,7 @@ test('ordinary selection clearing preserves legacy anchors while exact target an
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const procedure=name=>source.slice(source.indexOf(name),source.indexOf('End Sub',source.indexOf(name))).split('\n').map(line=>line.split("'")[0]).join('\n');
  const selection=procedure('Public Sub ELCaptureSelection');
+ assert.match(selection,/If Not prepareActivation Then\s+If EquationLabNativeCommand\("MathTypeBridgeTransportActive"\) <> 0 Then[\s\S]*?ELClearSelectionCapture\s+Exit Sub/);
  const reentry=selection.slice(selection.indexOf('If mCapturing Then'),selection.indexOf('    End If',selection.indexOf('If mCapturing Then')));
  const missing=selection.slice(selection.lastIndexOf('Missing:'));
  assert.match(reentry,/ELClearSelectionCaptureDuringCapture/);assert.doesNotMatch(reentry,/ELClearActivationAnchor/);
@@ -326,5 +327,33 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(source,/Len\("\\\* MERGEFORMAT"\)/,'Word formatting switch is accepted');
  assert.match(source,/cursor = field\.Result\.End \+ 1/,'literals and following fields are inserted outside the field end delimiter');
  assert.match(source,/Case "C": sequence = "ELChapter": command = "\\c"[\s\S]*?Case "S": sequence = "ELSection": command = "\\c"[\s\S]*?Case Else: sequence = "EquationLab": command = "\\n"/);
- assert.match(source,/If Left\$\(Trim\$\(field\.Code\.Text\), 7\) = "REF EL_" Then field\.Update/,'reference fields are refreshed after movement');
+ assert.match(source,/If IsEquationReference\(field, Doc\) And Not field\.Locked Then field\.Update/,'reference fields are refreshed through the shared document-bound updater');
+});
+
+test('Legacy MathType numbering visits nested code fields and preserves macrobuttons and hidden reference names',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const collect=source.slice(source.indexOf('Private Sub CollectEquationFields'),source.indexOf('Private Function IsEquationReference'));
+ assert.match(collect,/CollectEquationFields field\.Code, fields, seen/);assert.match(collect,/CollectEquationFields field\.Result, fields, seen/);assert.match(collect,/field\.Type <> wdFieldEmbed/);assert.match(collect,/seen\.Add field, key/);assert.doesNotMatch(collect,/field\.Update|Selection|ActiveDocument/);
+ const update=source.slice(source.indexOf('Private Sub UpdateNumbersForDocument'),source.indexOf('Private Sub InsertPreparedFragment'));
+ const entry=source.slice(source.indexOf('Public Sub UpdateNumbers()'),source.indexOf('Private Sub SetNumberFormat'));
+ assert.match(entry,/Set Doc = ActiveDocument\s+UpdateNumbersForDocument Doc\s+ELInvalidateDocumentSnapshot/);assert.doesNotMatch(entry,/\.Fields|\.Update/);
+ assert.match(source,/"MTEQN", "MTCHAP", "MTSEC"/);assert.match(update,/Doc\.Bookmarks\.ShowHidden = True/);assert.equal((update.match(/Doc\.Bookmarks\.ShowHidden = showHidden/g)||[]).length,2);assert.match(update,/IsEquationSequence\(field\).*field\.Update[\s\S]*IsEquationReference\(field, Doc\).*field\.Update/);assert.doesNotMatch(update,/\.Delete|\.Unlink|Selection|ActiveDocument|MTPlaceRef.*\.Update/);
+ const reference=source.slice(source.indexOf('Private Function IsEquationReference'),source.indexOf('Private Sub UpdateNumbersForDocument'));
+ for(const guard of [/target\.Paragraphs\.Count <> 1/,/target\.Tables\.Count <> 0/,/target\.InlineShapes\.Count <> 0/,/target\.Characters\.Count > 256/])assert.match(reference,guard,'a whole table or prose bookmark must not qualify just because it contains a formula');
+});
+
+test('large unsaved enrichment yields between bound main-story ranges and pauses for foreground Word',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const start=source.indexOf('Private Sub ELContinueDocumentChunks()'),chunk=source.slice(start,source.indexOf('End Sub',start));
+ assert.match(chunk,/MathTypeBridgeDocumentCaptureRequestToken"\) <> token/);
+ assert.match(chunk,/KnownDocumentIdentity\(mChunkDocument\) <> mChunkIdentity/);
+ assert.match(chunk,/mChunkDocument\.Content\.Text <> mChunkText/);
+ assert.match(chunk,/mChunkDocument\.Content\.End <> mChunkEnd/);
+ assert.match(chunk,/MathTypeBridgeCanReadDocumentChunk"\) = 0 Then SchedulePoll: Exit Sub/);
+ assert.match(chunk,/last = mChunkStart \+ 3000/);
+ assert.match(chunk,/span\.Paragraphs\.Last\.Range\.Start/);
+ assert.match(chunk,/xml = span\.WordOpenXML/);
+ assert.match(chunk,/MathTypeBridgeQueueDocumentChunk/);
+ assert.doesNotMatch(chunk,/DoEvents|\.Select\b|ActiveDocument|\.Save\b|\.Content\.WordOpenXML/);
+ assert.match(source,/If mChunkToken = requestToken Then Exit Sub/);
 });

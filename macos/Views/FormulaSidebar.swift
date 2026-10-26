@@ -102,13 +102,20 @@ struct FormulaSidebar: View {
                 Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式"))
                     .font(showingFavorites ? .headline : .subheadline.weight(.medium))
                 Spacer()
-                Text(query.isEmpty ? "\(allItems.count)" : "\(items.count) / \(allItems.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                Text(query.isEmpty ? "\(showingFavorites ? allItems.count : max(allItems.count, bridge.state.wordDocumentTotal))" : "\(items.count) / \(allItems.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
                 if !showingFavorites {
                     Button { bridge.invoke("nativeRefreshWordWorkspace") } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.plain).disabled(bridge.state.busy)
                         .accessibilityLabel(bridge.t("刷新当前 Word 文档")).help(bridge.t("刷新当前 Word 文档"))
                 }
             }.padding(.horizontal, 18).padding(.vertical, 8)
+            if !showingFavorites && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed) {
+                HStack(spacing: 7) {
+                    if bridge.state.wordDocumentLoading { ProgressView().controlSize(.small) }
+                    Text(bridge.t(bridge.state.wordDocumentLoading ? "当前公式可编辑，正在加载其余公式…" : "列表未能载入，当前公式仍可编辑。"))
+                        .font(.caption).foregroundStyle(.secondary)
+                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8)
+            }
             if !allItems.isEmpty || !query.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary)
@@ -136,7 +143,7 @@ struct FormulaSidebar: View {
                             bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
                         } label: {
                             HStack(spacing: 12) {
-                                Text("\(item.id + 1)")
+                                Text("\(item.position ?? item.id + 1)")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
                                     .foregroundStyle(.secondary).frame(width: 17)
                                 if let thumbnail = item.thumbnail {
@@ -155,6 +162,11 @@ struct FormulaSidebar: View {
                         }
                         .buttonStyle(.plain)
                         .disabled(selectionUnavailable)
+                        .background {
+                            FormulaThumbnailVisibility(key: "\(bridge.state.documentPath):\(item.id)", enabled: !showingFavorites && bridge.wordSessionActive && item.image == nil && !item.readOnly) {
+                                bridge.invoke("nativeRequestWordThumbnail", argument: item.id)
+                            }
+                        }
                         .listRowBackground(!showingFavorites && bridge.state.selected == item.id ? Color.accentColor.opacity(0.16) : Color.clear)
                         .contextMenu {
                             Button(bridge.t(showingFavorites ? "使用此收藏" : "编辑公式")) {

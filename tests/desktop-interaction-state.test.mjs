@@ -53,3 +53,13 @@ test('Cross-formula save refuses an untrusted document target while retaining it
  assert.deepEqual(calls,[]);assert.equal(context.wordNavigating,false);assert.equal(context.wordTicket,'a'.repeat(64));
  assert.equal(context.selected.index,1);assert.equal(context.mf.value,'important edited formula');
 });
+
+test('Loading a legacy macro records its normalized editor baseline before dirty checks',()=>{
+ const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',replaceChildren(){},querySelectorAll:()=>[]});return elements.get(id);};
+ const object={index:0,latex:'legacy macro spelling',progId:'Equation.DSMT4',ruler:[],characters:[]},mf={value:''};
+ const context=vm.createContext({window:{syncEquationMacros(field){if(field.value==='legacy macro spelling')field.value='canonical macro spelling';}},source:{objects:[object]},selected:null,mode:'rebuild',editingRuler:undefined,mf,$:element,loadObjectLayout(){},renderModes(){},renderObjects(){},changed(){context.window.syncEquationMacros(mf);},controls(){},status(){}});
+ const select=source.split('\n').find(line=>line.startsWith('function selectObject(')),dirty=source.slice(source.indexOf('function wordSessionChanged(){'),source.indexOf('\nwindow.nativePrepareToClose=')),mode=source.split('\n').find(line=>line.startsWith('function sourceEditMode('));
+ vm.runInContext(select+'\n'+dirty+'\n'+mode,context);vm.runInContext('selectObject(0)',context);
+ assert.equal(object.editorBaseline,'canonical macro spelling');assert.equal(vm.runInContext('wordSessionChanged()',context),false);assert.equal(vm.runInContext('sourceEditMode()',context),'characters','normalization alone retains native bytes');
+ mf.value+=' + user edit';assert.equal(vm.runInContext('wordSessionChanged()',context),true);assert.equal(vm.runInContext('sourceEditMode()',context),'rebuild');
+});

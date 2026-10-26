@@ -1,5 +1,23 @@
 # 版本记录
 
+## 0.6.6 · build86
+
+这次主要解决了长文档打开时的等待。尚未保存的长文档会先打开正在编辑的公式，其余内容分批读取，缩略图随着浏览补齐。列表加载期间，输入的内容和字号修改都会保留。已保存且没有修改的文档使用更快的读取路径。
+
+旧公式也补了一些：黑板体、花体、颜色和部分多行结构现在可以正常显示；修复了模板同步后误报“有未保存更改”的情况。无法识别的旧字体字符仍会显示方框和提示，保留原始数据，暂时还不能承诺完整兼容。
+
+“更新编号”开始识别旧 MathType 的 MTEqn、MTChap、MTSec，以及 MTPlaceRef 内的编号字段和相关交叉引用，保留原有的重置和重复序号设置，不修改无关的图表编号。
+
+在 Apple Silicon、Word 16.114.1 上，用长文档副本测试了公式保存、字号修改、删除后的重编号、引用更新和保存重开；也测试了三份文档之间的选择和来源关闭后的列表清理。测试文档与记录留在本地，不随安装包或源码发布。此次没有逐条完成长文档中所有公式的手工编辑，也没有进行 Windows 往返验证。
+
+[下载 0.6.6](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.6)
+
+This update focuses on the wait when opening long documents. The selected equation opens first in a long document with unsaved changes; the rest load in batches, with thumbnails appearing as you browse. Typing and point-size changes stay in place when the list finishes loading. Clean saved documents use a faster reading path.
+
+More legacy blackboard/script characters, colors, and multiline structures now display correctly. Template synchronization no longer causes a false unsaved-change warning. Unrecognized legacy font characters still show a square and a warning, with original data retained. Update Numbers now recognizes MTEqn, MTChap, MTSec, and related fields inside MTPlaceRef, preserving reset/repeat settings and updating equation references without changing unrelated figure/table sequences.
+
+Tested on Apple Silicon with Word 16.114.1 using a long-document copy: equation save-back, point-size changes, renumbering after deletion, cross-reference updates, and save/reopen. Three-document selection and source-closure cleanup were also tested. Private test documents and records stay local. Every equation was not manually edited, and Windows round trips were not tested.
+
 ## 0.6.5 · build85
 
 - Word 文档菜单按文档身份区分同名文件；后台更新文档信息不抢焦点，切换时保护未保存草稿，并清理已关闭来源的不可用公式。

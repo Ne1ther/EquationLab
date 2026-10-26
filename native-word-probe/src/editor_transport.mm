@@ -14,6 +14,7 @@
 #include <os/log.h>
 
 NSDictionary* EquationLabCapturedDocumentContext();
+void EquationLabDiscardDocumentParts();
 BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context);
 void EquationLabConsumeDocumentSelection(NSDictionary* context);
 void EquationLabSetNavigationTarget(std::int32_t index);
@@ -196,6 +197,9 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) std::uint64_t documentEpoch;
 @property(nonatomic) std::int32_t editGeneration;
 @property(nonatomic) BOOL awaitingDocument;
+@property(nonatomic) BOOL enrichingDocument;
+@property(nonatomic) BOOL enrichmentStarted;
+@property(nonatomic,strong) ProbeJsonRequest* enrichmentRequest;
 @property(nonatomic) BOOL reopenRequested;
 @property(nonatomic) NSUInteger pollGeneration;
 @property(nonatomic) BOOL pollScheduled;
@@ -334,6 +338,9 @@ static ProbeEditorTransport* transport=nil;
     [self expireWrittenDocuments];NSDictionary* context=state.documentContext;
     if(!state.ownerIdentity||state.documentEpoch!=self.documentEpoch||state.editGeneration!=self.cacheGeneration||![context[@"identity"] isKindOfClass:NSString.class]||![context[@"snapshot"] isKindOfClass:NSNumber.class]||![context[@"ooxml"] isKindOfClass:NSString.class])return;
     [self rememberCaptureOwner:state.ownerIdentity context:context digest:state.openDigest];
+    // A current-formula fragment authorizes only its retained OLE owner.
+    // Never publish it as a complete, reusable document snapshot.
+    if([context[@"scope"] isEqual:@"selection"])return;
     NSString* key=[NSString stringWithFormat:@"%@:%@",context[@"identity"],context[@"snapshot"]];NSUInteger bytes=[context[@"ooxml"] length]*sizeof(unichar);
     NSNumber* owner=@(state.ownerIdentity);NSString* previous=self.ownerDocuments[owner][@"snapshot"];
     if(previous&&![previous isEqual:key])[self forgetCachedOwner:state.ownerIdentity];
@@ -363,46 +370,68 @@ static ProbeEditorTransport* transport=nil;
     }
     if(binding&&![binding[@"digest"] isEqual:state.openDigest])return;
     if(!binding&&!state.requiresDocumentCapture)return;
-    if(state.captureAttempts>=3){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+    if(state.captureAttempts>=3){[self captureFailed:state];return;}
     state.captureRequested=YES;state.requiresDocumentCapture=YES;
     ProbeCaptureRequest* request=[ProbeCaptureRequest new];request.state=state;request.binding=binding;request.token=EquationLabNewDocumentToken();request.activation=state.activation;request.epoch=self.documentEpoch;
     os_log_info(OS_LOG_DEFAULT,"WordHostCapture request anchored=%d attempt=%lu",binding!=nil,static_cast<unsigned long>(state.captureAttempts));
-    self.captureRequest=request;lastCaptureState=CapturePending;EquationLabWakeWordHost();
+    EquationLabDiscardDocumentParts();self.captureRequest=request;lastCaptureState=CapturePending;EquationLabWakeWordHost();
 }
 - (std::int32_t)takeCaptureRequest {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||request.claimed||self.applying||self.backgroundSave.claimed)return 0;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return 0;}
-    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return 0;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;[self captureFailed:state];if(!enriching)lastCaptureState=CaptureTimedOut;return 0;}
     request.claimed=YES;request.serial=self.captureSerial;++state.captureAttempts;return request.token;
 }
 - (std::int32_t)finishCaptureRequest:(BOOL)success {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||!request.claimed||self.applying||self.backgroundSave.claimed)return -1;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return -2;}
-    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;lastCaptureState=CaptureTimedOut;[self fail:state code:InvalidReply];return -4;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;[self captureFailed:state];if(!enriching)lastCaptureState=CaptureTimedOut;return -4;}
     NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();NSDictionary* binding=request.binding;
     BOOL hasBinding=[binding[@"identity"] isKindOfClass:NSString.class]&&[binding[@"snapshot"] isKindOfClass:NSNumber.class]&&[binding[@"index"] isKindOfClass:NSNumber.class]&&[binding[@"digest"] isEqual:state.openDigest];
     BOOL commonMatch=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"captureToken"] isKindOfClass:NSNumber.class]&&[context[@"captureToken"] intValue]==request.token&&[context[@"identity"] isKindOfClass:NSString.class]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&[context[@"snapshot"] intValue]>0&&[context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] intValue]>=0;
     BOOL matches=commonMatch&&(!binding||(hasBinding&&[context[@"identity"] isEqual:binding[@"identity"]]&&[context[@"snapshot"] intValue]!=[binding[@"snapshot"] intValue]&&[context[@"index"] isEqual:binding[@"index"]]));
-    self.captureRequest=nil;
+    self.captureRequest=nil;EquationLabDiscardDocumentParts();
     if(!matches){
         state.captureRequested=NO;
         if(state.activation==self.activation&&state.captureAttempts<3){[self requestCapture:state];return -3;}
-        lastCaptureState=CaptureRejected;
-        [self fail:state code:InvalidReply];return -3;
+        [self captureFailed:state];return -3;
     }
     // ELCTX4 is created only after this activation's one-shot request. For a
     // bound owner VBA resolves its retained Document+Range; otherwise it must
     // resolve the exact current OLE selection. The service still verifies the
     // opening Native SHA before attaching document-wide context.
     EquationLabConsumeDocumentSelection(context);
-    state.documentContext=context;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;[self openState:state];return 0;
+    state.documentContext=context;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;
+    if(state.enrichingDocument)[self enrichDocument:state];else [self openState:state];return 0;
+}
+- (void)captureFailed:(ProbeEditState*)state {
+    if(!state.enrichingDocument){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+    // Metadata failure must never cancel an already editable OLE transaction.
+    // The user can continue writing or save the original owner immediately.
+    state.awaitingDocument=NO;state.captureRequested=NO;state.enrichingDocument=NO;lastCaptureState=CaptureReady;
+    if(self.captureRequest.state==state){self.captureRequest=nil;EquationLabDiscardDocumentParts();}
+    if(![self active:state]||!state.ticket)return;
+    [self request:@"/api/native-enrich" body:@{@"ticket":state.ticket,@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"initialSnapshot":state.bindingContext[@"snapshot"],@"failed":@YES} reply:^(NSDictionary*,NSError*){}];
+}
+- (void)enrichDocument:(ProbeEditState*)state {
+    NSDictionary* context=state.documentContext;
+    if([context[@"scope"] isEqual:@"selection"]||![context[@"identity"] isEqual:state.bindingContext[@"identity"]]||![context[@"index"] isEqual:state.bindingContext[@"index"]]){[self captureFailed:state];return;}
+    NSMutableDictionary* document=[context mutableCopy];[document removeObjectForKey:@"captureToken"];
+    state.enrichmentRequest=[self request:@"/api/native-enrich" body:@{@"ticket":state.ticket,@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"initialSnapshot":state.bindingContext[@"snapshot"],@"document":document} reply:^(NSDictionary* result,NSError* error){
+        state.enrichmentRequest=nil;
+        if(![self active:state])return;
+        if(error||![result[@"ok"] boolValue]){state.documentContext=nil;[self captureFailed:state];return;}
+        [self rememberDocument:state];NSMutableDictionary* binding=[context mutableCopy];[binding removeObjectForKey:@"ooxml"];state.bindingContext=binding;
+        state.documentContext=nil;state.enrichingDocument=NO;logOpenPhase("document-list-ready",state.started);
+    }];
 }
 - (void)scheduleCaptureDeadline:(ProbeEditState*)state {
     const auto delay=std::max(.001,state.documentDeadline.timeIntervalSinceNow);__weak ProbeEditState* weak=state;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(delay*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
         ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
+        if(current.enrichingDocument){[self captureFailed:current];return;}
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         lastCaptureState=CaptureTimedOut;
         if(current.requiresDocumentCapture)[self fail:current code:InvalidReply];
@@ -435,6 +464,7 @@ static ProbeEditorTransport* transport=nil;
     ProbeEditState* state=self.edits[@(sessionId)];if(!state)return;
     if(self.captureRequest.state==state)self.captureRequest=nil;
     state.terminal=YES;state.openNative=nil;state.documentContext=nil;
+    [state.enrichmentRequest cancel];state.enrichmentRequest=nil;
     if(!state.opening){[state.request cancel];state.request=nil;}
     [self.edits removeObjectForKey:@(sessionId)];
     if(state.ticket)[self retireTicket:state.ticket session:sessionId attempt:0];
@@ -542,7 +572,7 @@ static ProbeEditorTransport* transport=nil;
         // capture while the state still awaits it; the queued timeout callback or
         // cleanup retires the state, while context freshness and identity checks still apply.
         if(!state.awaitingDocument||state.request)continue;
-        if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);continue;}
+        if(state.activation!=self.activation){if(state.enrichingDocument)[self captureFailed:state];else{lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);}continue;}
         if(self.captureRequest.claimed&&self.captureRequest.state==state)continue;
         if(state.requiresDocumentCapture){[self requestCapture:state];continue;}
         NSDictionary* owned=[self documentForOwner:state];NSDictionary* candidate=context;
@@ -720,6 +750,11 @@ static ProbeEditorTransport* transport=nil;
         if(error){if(++current.failures<=3)[self schedule:current];else[self fail:current code:NetworkFailure];return;}current.failures=0;
         id status=json[@"state"];
         if([status isEqual:@"editing"]){
+            if([json[@"loadDocument"] boolValue]&&!current.enrichmentStarted&&[current.bindingContext[@"scope"] isEqual:@"selection"]){
+                current.enrichmentStarted=YES;current.enrichingDocument=YES;current.awaitingDocument=YES;current.requiresDocumentCapture=YES;current.captureRequested=NO;current.captureAttempts=0;
+                current.activationBinding=current.bindingContext;current.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:60];
+                if(current.activation==self.activation){[self requestCapture:current];[self scheduleCaptureDeadline:current];}else [self captureFailed:current];
+            }
             if(current.reopenRequested){current.reopenRequested=NO;NSString* url=editorLaunchURL(current);if(self.launch)self.launch(url.UTF8String,self.launchContext);else launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],^(NSError*){});}
             [self schedule:current];return;
         }
@@ -860,6 +895,8 @@ extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeCaptureWatch(){return NSThread.isMainThread&&transport&&(bridge_probe::wordDocumentRequestWatch()||transport.ownerCaptureBindings.count||transport.edits.count||transport.backgroundSave||EquationLabPreCapturedActivationIsPending()||EquationLabActivationAnchorIsPending())?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeTakeDocumentCaptureRequest(){return NSThread.isMainThread?[transport takeCaptureRequest]:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureIsEnrichment(){return NSThread.isMainThread&&transport.captureRequest.claimed&&transport.captureRequest.state.enrichingDocument?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return NSThread.isMainThread&&transport.captureRequest.claimed?transport.captureRequest.token:0;}
 extern "C" __attribute__((visibility("default")))

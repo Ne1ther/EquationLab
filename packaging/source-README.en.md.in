@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.5 (build85)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.5/Equation-Lab-0.6.5.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.6 (build86)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.6/Equation-Lab-0.6.6.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -22,9 +22,15 @@ New equations start on a blank canvas. Choose Done and Insert to add one to Word
 
 The menu on the left lists open Word documents and distinguishes documents by identity, even when names match. Switching protects changed drafts, and background metadata updates do not bring the editor to the front. Refreshing the document menu updates document details; refreshing the formula area rereads equations.
 
+Most of the work in this update went into long documents. In a long document with unsaved changes, the selected equation opens first, then the rest load in batches. Thumbnails fill in as you browse. You can keep typing and change the point size while the list loads; those edits stay in place when loading finishes. Saved documents with no pending changes use a faster reading path.
+
+I also tested saving equations, changing point sizes, renumbering after a deletion, updating cross-references, and reopening a long-document copy. Display support now covers more legacy MathType characters, colors, and multiline structures. Some unrecognized legacy font characters still show a square and a warning, with their original data retained. Full compatibility with every MathType equation is still unfinished.
+
 The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads.
 
 ![Equation Lab workbench](docs/preview/workbench-0.6.5.png)
+
+This screenshot is from 0.6.5; the main interface is still the same.
 
 ## Try a document
 

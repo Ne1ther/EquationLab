@@ -1,6 +1,7 @@
 import CFB from 'cfb';
 import { readFileSync } from 'node:fs';
 import {integralMacroName,integralMacroVariation,integralGlyphs} from './integral-templates.mjs';
+import {legacyGlyph} from './legacy-glyphs.mjs';
 
 export const template = JSON.parse(readFileSync(new URL('./resources/ole-template.json', import.meta.url)));
 const b64 = s => Buffer.from(s, 'base64');
@@ -51,7 +52,7 @@ export class MtefReader {
       else { n.logicalSize = size; n.delta = this.byte()-128; }
     }
     else if (type === 15) n.color = this.uint();
-    else if (type === 16) { n.options = this.byte(); this.skip(n.options & 1 ? 8 : 6); if (n.options & 4) this.zstr(); }
+    else if (type === 16) { n.options = this.byte(); n.components=Array.from({length:n.options&1?4:3},()=>this.word()); if (n.options & 4) n.name=this.zstr(); }
     else if (type === 7) { const count=this.byte(); n.tabs=Array.from({length:count},()=>({type:this.byte(),position:this.word()})); }
     else if (type >= 100) this.skip(this.uint());
     else if ([1,2,3,4,5,6].includes(type)) {
@@ -126,6 +127,7 @@ export function wrapNative(native, sourceOle) {
 // errata (big-operator limit bits and slot order) are anchored to actual MathType
 // toolbar records; see evidence/mtef-extended-validation.json.
 const glyphs = {
+ centerdot:'\ue98f',
  alpha:'α',beta:'β',gamma:'γ',delta:'δ',epsilon:'ϵ',varepsilon:'ε',zeta:'ζ',eta:'η',theta:'θ',vartheta:'ϑ',iota:'ι',kappa:'κ',varkappa:'ϰ',lambda:'λ',mu:'μ',nu:'ν',xi:'ξ',omicron:'ο',pi:'π',varpi:'ϖ',rho:'ρ',varrho:'ϱ',sigma:'σ',varsigma:'ς',tau:'τ',upsilon:'υ',phi:'ϕ',varphi:'φ',chi:'χ',psi:'ψ',omega:'ω',
  Gamma:'Γ',Delta:'Δ',Theta:'Θ',Lambda:'Λ',Xi:'Ξ',Pi:'Π',Sigma:'Σ',Upsilon:'Υ',Phi:'Φ',Psi:'Ψ',Omega:'Ω',
   times:'×',cdot:'⋅',div:'÷',pm:'±',mp:'∓',le:'≤',leq:'≤',ge:'≥',geq:'≥',ne:'≠',neq:'≠',approx:'≈',equiv:'≡',sim:'∼',simeq:'≃',propto:'∝',ll:'≪',gg:'≫',infty:'∞',partial:'∂',nabla:'∇',ell:'ℓ',hbar:'ℏ',Re:'ℜ',Im:'ℑ',emptyset:'∅',varnothing:'∅',forall:'∀',exists:'∃',nexists:'∄',in:'∈',notin:'∉',ni:'∋',subset:'⊂',supset:'⊃',subseteq:'⊆',supseteq:'⊇',cup:'∪',cap:'∩',setminus:'∖',land:'∧',lor:'∨',neg:'¬',lnot:'¬',oplus:'⊕',otimes:'⊗',odot:'⊙',circ:'∘',bullet:'•',star:'⋆',ast:'∗',perp:'⊥',parallel:'∥',angle:'∠',triangle:'△',square:'□',therefore:'∴',because:'∵',to:'→',rightarrow:'→',leftarrow:'←',leftrightarrow:'↔',Rightarrow:'⇒',Leftarrow:'⇐',Leftrightarrow:'⇔',mapsto:'↦',uparrow:'↑',downarrow:'↓',updownarrow:'↕',dots:'…',ldots:'…',cdots:'⋯',vdots:'⋮',ddots:'⋱',prime:'′',degree:'°',colon:':',langle:'⟨',rangle:'⟩',lfloor:'⌊',rfloor:'⌋',lceil:'⌈',rceil:'⌉',lbrace:'{',rbrace:'}',vert:'|',lvert:'|',rvert:'|',Vert:'‖',lVert:'‖',rVert:'‖',backslash:'\\'
@@ -141,6 +143,7 @@ const nativeGreekGlyphs=new Set(['ϰ','ϱ','ϵ']);
 // BMP script letters fit MTEF's 16-bit character field. Persist their actual
 // outline font in the equation rather than substituting only in the preview.
 const scriptLetters={B:'ℬ',E:'ℰ',F:'ℱ',H:'ℋ',I:'ℐ',L:'ℒ',M:'ℳ',R:'ℛ',e:'ℯ',g:'ℊ',o:'ℴ'};
+for(let i=0;i<26;i++)scriptLetters[String.fromCharCode(65+i)]??=String.fromCharCode(0xf100+i);
 for(const value of Object.values(scriptLetters))nativeMathGlyphs.add(value);
 // Actual CoreText checks against the shipping macOS Symbol face show these
 // existing commands have no glyph. Author their real native font explicitly;
@@ -245,6 +248,21 @@ export function latexAst(input) {
       p--;const command=control();
       if(command==='eltab')return {kind:'char',value:'\t'};
       if(command==='displaystyle')return {kind:'mathstyle',style:'display'};
+      if(command==='mtmissing'){
+        const code=textGroup(),position=Number(textGroup()),font=textGroup(),encoding=textGroup(),bits=Number(textGroup());
+        if(code.toLowerCase()!=='f700'||!Number.isInteger(position)||position<0||position>255||!['Euclid Math One','Euclid Math Two','MT Extra','Symbol','Times New Roman'].includes(font)||!['EuclidMath1','EuclidMath2','MTExtra','Symbol','WinAllBasicCodePages','MTCode'].includes(encoding)||![0,1,2,3].includes(bits))throw Error('Invalid preserved missing glyph');
+        return {kind:'missingGlyph',position,font,encoding,bits};
+      }
+      if(command==='textcolor'){
+        const color=textGroup();if(!/^#[0-9a-f]{6}$/i.test(color))throw Error('Color must be a six-digit RGB value');
+        return {kind:'color',color:color.toLowerCase(),body:group()};
+      }
+      if(command==='mtpile'){
+        const halign=Number(textGroup()),valign=Number(textGroup()),body=group();let pile=body;
+        while(pile?.kind==='seq'&&pile.items.length===1)pile=pile.items[0];
+        if(![1,2,3,4].includes(halign)||![1,3,4].includes(valign)||pile?.kind!=='matrix'||!['gathered','aligned'].includes(pile.env))throw Error('Invalid native pile settings');
+        Object.assign(pile,{pileHalign:halign,valign});return body;
+      }
       if(command==='elrows'){
         const raw=textGroup(),values=raw===''?[]:raw.split(',').map(Number),body=group();let matrix=body;
         while(matrix?.kind==='seq'&&matrix.items.length===1)matrix=matrix.items[0];
@@ -312,6 +330,10 @@ export function latexAst(input) {
         return {kind:'fence',left,right:delimiter(),body};
       }
       if(command==='begin')return environment();
+      if(command==='mathbb'){
+        const letters=textGroup();if(!/^[A-Z]+$/.test(letters))throw Error('Blackboard letters must be capital Latin letters');
+        return seqNode([...letters].map(value=>({kind:'char',value:String.fromCharCode(0xf080+value.charCodeAt(0)-65)})));
+      }
       if(command==='mathcal'||command==='mathscr'){
         const letters=textGroup();
         return seqNode([...letters].map(value=>{if(!scriptLetters[value])throw Error(`Script letter ${value} has no supported native character`);return {kind:'char',value:scriptLetters[value]};}));
@@ -392,13 +414,13 @@ export function latexAst(input) {
 const uintRecord=n=>n<255?Buffer.from([n]):cat([255],u16(n));
 const signedRecord=n=>n>=-128&&n<127?Buffer.from([n+128]):cat([255],u16(n+32768));
 const signedWord=n=>{const b=Buffer.alloc(2);b.writeInt16LE(n);return b;};
-function charRecord(value,{typeface,options=0,embellishments=[]}={}){
+function charRecord(value,{typeface,options=0,embellishments=[],fontPosition}={}){
   let code=value.codePointAt(0);if([...value].length!==1||code>65535||code===0)throw Error('Unsupported native character');
   if(code===9)return cat([2,4],signedRecord(23),u16(9),[9]);
   if(typeface===undefined)typeface=/^[0-9]$/.test(value)?8:/^[A-Za-z]$/.test(value)?3:(code>=0x3b1&&code<=0x3d6)||[0x3f0,0x3f1,0x3f5].includes(code)?4:code>=0x391&&code<=0x3a9?5:reverseSpaces[value]?1:6;
   // A math-mode keyboard '-' denotes minus. Text-style hyphens stay U+002D.
   if(code===0x2d&&typeface===6)code=0x2212;
-  return cat([2,options|(embellishments.length?1:0)],signedRecord(typeface),u16(code),...(embellishments.length?[...embellishments.map(e=>Buffer.from([6,0,e])),Buffer.from([0])]:[]));
+  return cat([2,options|(embellishments.length?1:0)|(fontPosition===undefined?0:4)],signedRecord(typeface),u16(code),...(fontPosition===undefined?[]:[[fontPosition]]),...(embellishments.length?[...embellishments.map(e=>Buffer.from([6,0,e])),Buffer.from([0])]:[]));
 }
 const inheritedSize=ctx=>10+(ctx.logicalSize??0);
 const scriptSize=ctx=>10+([1,2,2,4,4,5,6][ctx.logicalSize??0]??1);
@@ -408,9 +430,9 @@ function pileLine(node,ctx,style,lineSpacing=0){
   const empty=emptyNode(node),options=(empty?1:0)|(lineSpacing?4:0),line=cat([1,options],...(lineSpacing?[signedWord(lineSpacing)]:[]),...(empty?[]:[emit(node,{...ctx,logicalSize:ctx.logicalSize??0},style),[0]]));
   return cat([inheritedSize(ctx)],line);
 }
-function pileRecord(rows,ctx,style,{rowSpacing=[],ruler=[]}={}){
+function pileRecord(rows,ctx,style,{rowSpacing=[],ruler=[],halign=2,valign=4}={}){
   const hasRuler=!!ruler.length,lines=rows.map((row,index)=>pileLine(row,ctx,style,index?rowSpacing[index-1]??0:0));
-  return cat([4,hasRuler?2:0,2,4],...(hasRuler?[rulerRecord(ruler)]:[]),...lines,[0]);
+  return cat([4,hasRuler?2:0,halign,valign],...(hasRuler?[rulerRecord(ruler)]:[]),...lines,[0]);
 }
 function tabbedPileRows(n){
   let ruler=null;
@@ -441,13 +463,18 @@ function sourceContext(parsed){
   for(const n of parsed.records){if(n.type===17)fonts.push(n);if(n.type===8)styles.push(n);if(n.type===18)preferenceStyles.splice(0,preferenceStyles.length,...n.styles);}
   const extras=[];
   const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;
-  return {fonts,styles,preferenceStyles,extras,fullPointSize,explicit(style,value){
+  const encodings=parsed.records.filter(n=>n.type===19).map(n=>n.name),colors=parsed.records.filter(n=>n.type===16).map(n=>n.components);
+  return {fonts,styles,preferenceStyles,extras,fullPointSize,color(color){
+    const components=[1,3,5].map(i=>Math.round(parseInt(color.slice(i,i+2),16)*1000/255));let index=colors.findIndex(c=>JSON.stringify(c)===JSON.stringify(components));
+    if(index<0){index=colors.length;colors.push(components);extras.push(cat([16,0],...components.map(u16)));}return index+1;
+  },explicit(style,value){
     if(typeof style==='string')style=combineStyle(null,style);
     const symbolic=!/^[\x20-\x7e]$/.test(value)&&!reverseSpaces[value];
-    let family=style.family==='math'?'STIX Two Math':style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman';
+    let family=style.font??(style.family==='math'?'STIX Two Math':style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman');
     let font=fonts.findIndex(f=>f.name.toLowerCase()===family.toLowerCase())+1;
     if(!font){
-      const encoding=family==='Symbol'?3:parsed.records.some(n=>n.type===19&&n.name==='WinAllBasicCodePages')?5:1;
+      let encoding=family==='Symbol'?3:family==='MT Extra'?4:parsed.records.some(n=>n.type===19&&n.name==='WinAllBasicCodePages')?5:1;
+      if(style.encoding&&style.encoding!=='MTExtra'){let i=encodings.indexOf(style.encoding);if(i<0){i=encodings.length;encodings.push(style.encoding);extras.push(cat([19],Buffer.from(style.encoding+'\0','utf8')));}encoding=i+5;}
       fonts.push({name:family,encoding});font=fonts.length;extras.push(cat([17],uintRecord(encoding),Buffer.from(family+'\0','utf8')));
     }
     const bits=style.bits;
@@ -472,9 +499,11 @@ function authoredTypeface(ctx,value,style){
 function emit(n,ctx,style){
   if(n.displayStyle&&!ctx.displayStyle){const {displayStyle,...body}=n;return cat([10],emit(body,{...ctx,logicalSize:0,displayStyle:true},style),[inheritedSize(ctx)]);}
   if(n.kind==='seq')return cat(...n.items.map(x=>cat(emit(x,ctx,style),['bigop','custombigop','expandedintegral','limit','limitbox','hbrace','arrow'].includes(x.kind)||x.kind==='sqrt'&&x.index||x.kind==='fraction'&&x.small?[inheritedSize(ctx)]:[])));
-  if(n.kind==='char')return charRecord(n.value,{typeface:authoredTypeface(ctx,n.value,style)});
+  if(n.kind==='char'){const legacy=legacyGlyph(n.value.codePointAt(0));return charRecord(n.value,legacy?{typeface:ctx.explicit({font:legacy.font,encoding:legacy.encoding,bits:style?.bits??0},n.value),fontPosition:legacy.position}:{typeface:authoredTypeface(ctx,n.value,style)});}
+  if(n.kind==='missingGlyph')return charRecord('\uf700',{typeface:ctx.explicit({font:n.font,encoding:n.encoding,bits:n.bits},'\uf700'),fontPosition:n.position});
   if(n.kind==='text')return cat(...[...n.value].map(c=>charRecord(c,{typeface:/[^\x00-\u024f]/.test(n.value)?ctx.explicit({family:'textUnicode',bits:0},c):1})));
   if(n.kind==='style')return emit(n.body,ctx,combineStyle(style,n.style));
+  if(n.kind==='color'){const color=ctx.color(n.color);return cat([15],uintRecord(color),emit(n.body,{...ctx,currentColor:color},style),[15],uintRecord(ctx.currentColor??0));}
   if(n.kind==='tabbedRow')throw Error('Native ruler rows must be inside a gathered pile');
   if(n.kind==='function')return cat(...[...n.value].map((c,i)=>charRecord(c,{typeface:2,options:i===0?2:0})));
   if(n.kind==='fraction')return tmpl(11,[slot(n.num,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style),slot(n.den,ctx,n.small?scriptSize(ctx):inheritedSize(ctx),style)],n.variation??(n.small?1:0));
@@ -541,7 +570,7 @@ function emit(n,ctx,style){
         if(lhs.items.some(x=>x.kind==='char'&&['=','<','>','≤','≥','≠','≈','≡','∼'].includes(x.value)))throw Error('Aligned rows contain an earlier relation that would change native alignment');
         return slot(seqNode([...lhs.items,...rhs.items]),ctx,undefined,style);
       });
-      return cat([4,0,4,4],...rows,[0]);
+      return cat([4,0,n.pileHalign??4,n.valign??4],...rows,[0]);
     }
     if(n.env==='cases'&&n.rowSpacing?.some(value=>value!==0)){
       const rows=n.rows.map(([left,right])=>seqNode([...left.items,{kind:'char',value:'\t'},...right.items])),pile=pileRecord(rows,ctx,style,{rowSpacing:n.rowSpacing,ruler:caseRuler(ctx)}),body=cat([inheritedSize(ctx),1,0],pile,[0]);
@@ -549,8 +578,8 @@ function emit(n,ctx,style){
     }
     if(n.env==='gathered'){
       const decoded=tabbedPileRows(n),spaced=n.rowSpacing?.some(value=>value!==0),ruler=decoded.ruler;
-      if(spaced||ruler.length)return pileRecord(decoded.rows,ctx,style,{rowSpacing:n.rowSpacing,ruler});
-      return cat([4,0,2,4],...decoded.rows.map(row=>slot(row,ctx,undefined,style)),[0]);
+      if(spaced||ruler.length)return pileRecord(decoded.rows,ctx,style,{rowSpacing:n.rowSpacing,ruler,halign:n.pileHalign??2,valign:n.valign??4});
+      return cat([4,0,n.pileHalign??2,n.valign??4],...decoded.rows.map(row=>slot(row,ctx,undefined,style)),[0]);
     }
     // MatrixSpec column_align wire enums: left0, center1, right2. Original
     // 0x679330 writes these bytes directly; 1..5 belongs to the UI mapping.
@@ -701,6 +730,10 @@ function characterEditing(n,ctx){
 function previewError(message){throw Error(`${message}; original native data remains unchanged`);}
 function glyphLatex(n){
   if(n.code===undefined)previewError('Character has no MTCode mapping');const c=String.fromCharCode(n.code);
+  const legacy=legacyGlyph(n.code);if(legacy)return legacy.latex;
+  if(n.code===0x2119)return '\\mathbb{P}';
+  if(n.code===0x7e)return '\\sim ';
+  if(n.code===0x27)return '\\prime ';
   if(c==='\t'&&n.typeface===23&&n.fontPosition===9)return '\\eltab ';
   if(reverseSpaces[c])return reverseSpaces[c];
   if(c==='−')return '-';
@@ -716,7 +749,9 @@ function glyphLatex(n){
 function decoderContext(parsed){
   const fonts=[],styles=[],preferences=[],encodings=[];
   function walk(nodes){for(const n of nodes){if(n.type===17)fonts.push(n);else if(n.type===8)styles.push(n);else if(n.type===18)preferences.splice(0,preferences.length,...n.styles);else if(n.type===19)encodings.push(n);if(n.children)walk(n.children);}}
-  walk(parsed.records);const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize};
+  walk(parsed.records);const colors=['#000000'],charColors=new Map();let color=colors[0];
+  function colorWalk(nodes){for(const n of nodes){if(n.type===16){if(n.options&~7||n.options&1||n.components.some(v=>v>1000))previewError('Unsupported native color definition');colors.push('#'+n.components.map(v=>Math.round(v*255/1000).toString(16).padStart(2,'0')).join(''));}else if(n.type===15){color=colors[n.color];if(!color)previewError('Missing native color definition');}else if(n.type===2)charColors.set(n.start,color);if(n.children)colorWalk(n.children);}}colorWalk(parsed.records);
+  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize,charColors};
 }
 function characterStyle(n,ctx){
   if(n.typeface===23&&n.code===9&&n.fontPosition===9)return null;
@@ -728,11 +763,12 @@ function characterStyle(n,ctx){
     const s=ctx.preferences[n.typeface-1];if(s){style=s.style;font=s.font;}
     defaultBits=[3,4].includes(n.typeface)?2:n.typeface===7?1:0;
     if(style===undefined)style=defaultBits;
-    if(n.typeface===12)previewError('East Asian text font preview is unsupported');
+    if(n.typeface===12){if(nativeMathGlyphs.has(String.fromCharCode(n.code)))return null;previewError('East Asian text font preview is unsupported');}
   }
   if(style&~3)previewError('Unknown character style bits');
   const family=font?ctx.fonts[font-1]?.name:undefined;
   if(font&&!family)previewError(`Missing font definition ${font}`);
+  if(legacyGlyph(n.code)&&style===0)return null;
   if(family==='STIX Two Math'&&(style===0&&n.code>=128||style===2&&nativeGreekGlyphs.has(String.fromCharCode(n.code))))return null;
   if(family==='Arial Unicode MS'&&style===0)return 'text';
   // Editable LaTeX describes content and broad styles; exact family names stay
@@ -751,6 +787,11 @@ function renderChar(n,ctx){
   if(n.options&0xc0)previewError('Unparsed/bad input character styling is unsupported');
   if(n.options&8)previewError('Nudged characters cannot be faithfully represented');
   if(n.code===undefined)previewError('Character has no MTCode mapping');
+  if(n.code===0xf700&&!ctx.fontToken){
+    const definition=n.typeface<0?ctx.styles[-n.typeface-1]:ctx.preferences[n.typeface-1],font=ctx.fonts[definition?.font-1]?.name,encoding=characterEncoding(n,ctx);
+    if(!font||!encoding||n.fontPosition===undefined)previewError('Missing glyph has no recoverable font position');
+    return `\\mtmissing{f700}{${n.fontPosition}}{${font}}{${encoding}}{${definition.style}}`;
+  }
   const style=ctx.fontToken?null:characterStyle(n,ctx);
   let text=ctx.fontToken?ctx.fontToken(n,reverseSpaces[String.fromCharCode(n.code)]||''):style==='text'&&!reverseSpaces[String.fromCharCode(n.code)]?'':glyphLatex(n);
   if(reverseSpaces[String.fromCharCode(n.code)]){}
@@ -771,23 +812,24 @@ function renderChar(n,ctx){
     else previewError(`Unknown embellishment ${e.embellishment}`);
     if(ctx.embellishment)text=ctx.embellishment(e,text,ctx);
   }}
-  return text;
+  const color=ctx.charColors?.get(n.start);
+  return !ctx.fontToken&&color&&color!=='#000000'?`\\textcolor{${color}}{${text}}`:text;
 }
 function contentChildren(n){
-  const defs=new Set([8,17,18,19]);
-  for(const c of n.children||[])if(![1,2,5,9,10,11,12,13,14].includes(c.type)&&!defs.has(c.type))previewError(`Unsupported template child record ${c.type}`);
-  return (n.children||[]).filter(c=>[1,2,5].includes(c.type));
+  const defs=new Set([8,15,16,17,18,19]);
+  for(const c of n.children||[])if(![1,2,4,5,9,10,11,12,13,14].includes(c.type)&&!defs.has(c.type))previewError(`Unsupported template child record ${c.type}`);
+  return (n.children||[]).filter(c=>[1,2,4,5].includes(c.type));
 }
 function slotsFor(n,count,{chars=0,oldRoot=false}={}){
-  const kids=contentChildren(n),slots=kids.filter(c=>c.type===1),decor=kids.filter(c=>c.type===2);
-  if(kids.some(c=>c.type===5)||slots.length!==count&&!(oldRoot&&slots.length===1)||decor.length!==chars)previewError(`Unexpected slot/decoration count in template ${n.selector}`);
+  const kids=contentChildren(n),slots=kids.filter(c=>[1,4,5].includes(c.type)),decor=kids.filter(c=>c.type===2);
+  if(slots.length!==count&&!(oldRoot&&slots.length===1)||decor.length!==chars)previewError(`Unexpected slot/decoration count in template ${n.selector}`);
   return {slots,decor};
 }
 function renderTemplate(n,ctx){
   if(n.options)previewError('Nudged templates cannot be faithfully represented');
   const selector=n.selector,variation=n.variation;
   if(n.templateOptions&&!([0,1,2,3,4,5,6,7,8,9].includes(selector)&&[1,2].includes(n.templateOptions))&&!(selector===15&&n.templateOptions===1))previewError('Unknown template options');
-  const value=s=>s?renderNodes(s.children,ctx):'';
+  const value=s=>s?renderNodes(s.type===1?s.children:[s],ctx):'';
   if(selector<=9){
     let left,right;
     if(selector===9){if(variation&~0x33)previewError('Unknown interval variation');const d=['(',')','[',']'];left=d[variation&3];right=d[variation>>4&3];}
@@ -896,7 +938,7 @@ function renderNodes(nodes,ctx,{top=false}={}){
   if(!ctx.fontToken&&nodes.length>=3&&nodes[0].type===10&&nodes.at(-1).type===10){
     const body=renderNodes(nodes.slice(1,-1),ctx);return `{\\displaystyle ${body}}`;
   }
-  const out=[];
+  const out=[];let lastScriptCombined=false;
   for(let i=0;i<nodes.length;i++){
     const n=nodes[i];
     if(n.type===1){if(n.options&8)previewError('Nudged line position is unsupported');if(n.lineSpacing&&!ctx.line)previewError('Custom line spacing requires native renderer');const local={...ctx,currentRuler:n.ruler||ctx.currentRuler},latex=renderNodes(n.children,local);out.push(ctx.line?ctx.line(n,latex,local):rulerLatex(latex,local));}
@@ -908,10 +950,13 @@ function renderNodes(nodes,ctx,{top=false}={}){
         let name=String.fromCharCode(n.code),j=i+1;
         for(;j<nodes.length;j++){const c=nodes[j];if(c.type!==2||c.typeface!==2||c.children?.length||c.options&10||!/[A-Za-z]/.test(String.fromCharCode(c.code))||characterStyle(c,ctx)!=='function')break;name+=String.fromCharCode(c.code);}
         characterStyle(n,ctx);
-        if(/^[A-Za-z]+$/.test(name)){out.push(functions.has(name)||['lim','limsup','liminf','sup','inf','max','min'].includes(name)?`\\${name} `:`\\operatorname{${name}}`);i=j-1;}else out.push(renderChar(n,ctx));
+        if(/^[A-Za-z]+$/.test(name)){const expression=functions.has(name)||['lim','limsup','liminf','sup','inf','max','min'].includes(name)?`\\${name} `:`\\operatorname{${name}}`,color=ctx.charColors?.get(n.start);out.push(color&&color!=='#000000'?`\\textcolor{${color}}{${expression}}`:expression);i=j-1;}else out.push(renderChar(n,ctx));
       }else out.push(renderChar(n,ctx));
     }
-    else if(n.type===3){const latex=renderTemplate(n,ctx);out.push(ctx.template?ctx.template(n,latex,ctx):latex);}
+    else if(n.type===3){const latex=renderTemplate(n,ctx),rendered=ctx.template?ctx.template(n,latex,ctx):latex,previous=nodes.slice(0,i).findLast(c=>[1,2,3,4,5].includes(c.type)),script=[27,28,29].includes(n.selector)&&!n.variation,previousScript=previous?.type===3&&[27,28,29].includes(previous.selector)&&!previous.variation;
+      if(script&&previousScript){let base=out.pop()??'';if(!lastScriptCombined)base=(out.pop()??'{}')+base;out.push(`{${base}}${rendered}`);lastScriptCombined=true;}
+      else {out.push(rendered);lastScriptCombined=false;}
+    }
     else if(n.type===5){
       if(n.options)previewError('Nudged matrices are unsupported');
       const hjust=n.hjust&0x7f,vjust=n.vjust&0x7f;
@@ -924,17 +969,17 @@ function renderNodes(nodes,ctx,{top=false}={}){
       const latex=`\\begin{${env}}${columns}${rows.join('\\\\')}${rowRules[n.rows]?'\\\\\\hline ':''}\\end{${env}}`;out.push(ctx.matrix?ctx.matrix(n,latex,ctx):(n.hjust|n.vjust)&0x80||n.valign!==4?`\\mtmatrix{${n.hjust}}{${n.vjust}}{${n.valign}}{${latex}}`:latex);
     }
     else if(n.type===4){
-      if(n.options&8||![2,4].includes(n.halign)||n.valign!==4||n.children.some(c=>![1,10,11,12,13,14].includes(c.type)))previewError('Custom equation pile is unsupported');
+      if(n.options&8||![1,2,3,4].includes(n.halign)||![1,3,4].includes(n.valign)||n.children.some(c=>![1,10,11,12,13,14,15,16].includes(c.type)))previewError('Custom equation pile is unsupported');
       const local={...ctx,currentRuler:n.ruler||ctx.currentRuler};
       let hasAlignment=false;const lineRecords=n.children.filter(c=>c.type===1),rows=lineRecords.map(c=>{
-        if(n.halign===2){const latex=renderNodes(c.children,local);if(ctx.line)return ctx.line(c,latex,local);if(ctx.fontToken)return rulerLatex(latex,local);const parts=rulerParts(latex,local);hasAlignment||=parts.length>1;return parts.join('&');}
+        if(n.halign!==4){const latex=renderNodes(c.children,local);if(ctx.line)return ctx.line(c,latex,local);if(ctx.fontToken)return rulerLatex(latex,local);const parts=rulerParts(latex,local);hasAlignment||=parts.length>1;return parts.join('&');}
         const at=c.children.findIndex(x=>x.type===2&&['=','<','>','≤','≥','≠','≈','≡','∼'].includes(String.fromCharCode(x.code)));
         if(at<0)previewError('Relationally aligned pile has no supported relation');
         return renderNodes(c.children.slice(0,at),local)+'&'+renderNodes(c.children.slice(at),local);
-      });const env=n.halign===4||hasAlignment?'aligned':'gathered',spaced=lineRecords.slice(1).some(line=>line.lineSpacing??0),body=ctx.fontToken?`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`:`\\begin{${env}}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lineRecords,index):'')).join('')}\\end{${env}}`,latex=ctx.fontToken&&spaced?`\\elrows{${lineRecords.slice(1).map(line=>line.lineSpacing??0).join(',')}}{${body}}`:body;out.push(ctx.pile?ctx.pile(n,latex,local):latex);
+      });const env=n.halign===4||hasAlignment?'aligned':'gathered',spaced=lineRecords.slice(1).some(line=>line.lineSpacing??0),body=ctx.fontToken?`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`:`\\begin{${env}}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lineRecords,index):'')).join('')}\\end{${env}}`,latex=ctx.fontToken&&spaced?`\\elrows{${lineRecords.slice(1).map(line=>line.lineSpacing??0).join(',')}}{${body}}`:body;out.push(ctx.pile?ctx.pile(n,latex,local):n.halign===1||n.halign===3||n.valign!==4?`\\mtpile{${n.halign}}{${n.valign}}{${latex}}`:latex);
     }
     else if(n.type===9){if(!ctx.fontToken)previewError('Explicit character-size overrides cannot be faithfully represented');}
-    else if([15,16].includes(n.type)){if(!ctx.fontToken)previewError('Explicit native colors cannot be faithfully represented');}
+    else if([15,16].includes(n.type)){}
     else if([10,11,12,13,14].includes(n.type)){}
     else if([8,17,18,19].includes(n.type)){if(n.type===18&&n.options)previewError('Unknown equation preference options');}
     else previewError(`Preview of record ${n.type} is not supported`);

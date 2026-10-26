@@ -61,7 +61,7 @@ async function readWordSession(ticket){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -130,11 +130,16 @@ export async function desktopRequest(request) {
   await writeFile(payload.output,bytes);return {path:payload.output,bytes:bytes.length};
  }
  if(action==='wordSessionRead')return readWordSession(payload.ticket);
+ if(action==='wordSessionDocument'){
+  const status=await wordSession('native-enrich-request',{ticket:payload.ticket});
+  return status.state==='available'?{state:'available',document:await readWordSession(payload.ticket)}:status;
+ }
  if(action==='wordSessionInsert')return insertWordEquation(payload);
  if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
  if(action==='wordSessionThumbnails'){
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
   const session=await wordSession('native-read',{ticket:payload.ticket});
+  if(payload.documentIdentity!==undefined&&payload.documentIdentity!==session.document?.identity||payload.documentSnapshot!==undefined&&payload.documentSnapshot!==session.document?.snapshot)throw Error('Word thumbnail snapshot is no longer current');
   const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices}});
   return {images:result.objects.filter(o=>payload.indices.includes(o.index)).map(o=>({index:o.index,image:o.image}))};
  }
@@ -169,7 +174,7 @@ export async function desktopRequest(request) {
  if(action==='validate') {
   const ole=applyRuler(makeNewOle(payload.latex,payload.typography),payload),o=inspectOle(ole),latex=oleLatex(ole);
   const p=await renderNative(ole,{raster:false});
-  return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg};
+  return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
  if(action==='inspect') {
   const {objects,zip}=await readDocument(payload.path);
@@ -215,7 +220,7 @@ export async function desktopRequest(request) {
   const {objects}=await readDocument(payload.input),o=objects[payload.index];
   if(!o||o.parseError)throw Error(o?.parseError||'公式不存在');
   const changed=payload.mode==='rebuild'?replaceOleLatex(o.ole,payload.latex):editCharacters(o.ole,payload.replacements),updated=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),latex=oleLatex(updated),p=await renderNative(updated,{raster:false});
-  return {latex,nativeSha256:hash(inspectOle(updated).native),svg:p.svg};
+  return {latex,nativeSha256:hash(inspectOle(updated).native),svg:p.svg,warnings:p.warnings};
  }
  if(action==='edit') {
   const input=await realpath(payload.input),output=await realpath(payload.output).catch(()=>resolve(payload.output));

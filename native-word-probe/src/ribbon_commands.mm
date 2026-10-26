@@ -13,6 +13,7 @@
 #include "diagnostics.hpp"
 #include "word_insertion.hpp"
 #include "word_document_requests.hpp"
+#include "word_snapshot_zip.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
@@ -56,7 +57,8 @@ NSString* documentProcessIdentity(){static NSString* identity=NSUUID.UUID.UUIDSt
 NSData* inputFile(NSURL* directory,NSString* name){
     NSURL* file=[directory URLByAppendingPathComponent:name];int fd=open(file.fileSystemRepresentation,O_RDONLY|O_NOFOLLOW|O_CLOEXEC);
     if(fd<0)return nil;struct stat st{};
-    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=geteuid()||st.st_size>30*1024*1024){close(fd);return nil;}
+    const off_t limit=([name isEqual:@"document-context.txt"]||[name isEqual:@"ribbon-insertion-context.txt"])?256*1024*1024+8192:30*1024*1024;
+    if(fstat(fd,&st)||!S_ISREG(st.st_mode)||st.st_uid!=geteuid()||st.st_size<0||st.st_size>limit){close(fd);return nil;}
     NSMutableData* data=[NSMutableData dataWithLength:static_cast<NSUInteger>(st.st_size)];auto* bytes=static_cast<unsigned char*>(data.mutableBytes);std::size_t used=0;
     while(used<data.length){auto n=read(fd,bytes+used,data.length-used);if(n<=0){close(fd);return nil;}used+=static_cast<std::size_t>(n);}close(fd);return data;
 }
@@ -186,7 +188,95 @@ std::int32_t prepare(NSString* layout,NSString* operation=@"ribbon-create"){
     return 0;
 }
 std::int32_t prepareInsertion(NSString* layout);
+NSString* documentCaptureText(NSData* data){
+    if(!data)return nil;
+    const auto* bytes=static_cast<const unsigned char*>(data.bytes);
+    if(data.length>=2&&bytes[0]==0xff&&bytes[1]==0xfe){
+        if(data.length%2)return nil;
+        return [[NSString alloc] initWithBytes:bytes+2 length:data.length-2 encoding:NSUTF16LittleEndianStringEncoding];
+    }
+    return [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];
+}
+NSMutableArray<NSString*>* documentParts=nil;
+NSString* documentPartsBinding=nil;
+NSUInteger documentPartsBytes=0;
+void clearDocumentParts(){documentParts=nil;documentPartsBinding=nil;documentPartsBytes=0;}
+NSString* withoutSnapshotPictures(NSString* xml){
+    static NSSet<NSString*>* extensions=[NSSet setWithArray:@[@"png",@"jpg",@"jpeg",@"emf",@"wmf",@"gif",@"tif",@"tiff",@"bmp",@"svg"]];
+    NSUInteger cursor=0,kept=0;NSMutableString* result=nil;
+    // A literal scan is linear even when a part contains megabytes of base64.
+    // XML/relationship/OLE parts are copied byte-for-byte; only cached pictures
+    // from Word's fixed Flat OPC writer are omitted from this private snapshot.
+    while(cursor<xml.length){
+        NSRange part=[xml rangeOfString:@"<pkg:part " options:0 range:NSMakeRange(cursor,xml.length-cursor)];if(part.location==NSNotFound)break;
+        NSRange end=[xml rangeOfString:@">" options:0 range:NSMakeRange(NSMaxRange(part),xml.length-NSMaxRange(part))];if(end.location==NSNotFound)return nil;
+        NSRange close=[xml rangeOfString:@"</pkg:part>" options:0 range:NSMakeRange(NSMaxRange(end),xml.length-NSMaxRange(end))];if(close.location==NSNotFound)return nil;
+        NSRange name=[xml rangeOfString:@"pkg:name=\"" options:0 range:NSMakeRange(NSMaxRange(part),end.location-NSMaxRange(part))];
+        if(name.location!=NSNotFound){
+            NSRange quote=[xml rangeOfString:@"\"" options:0 range:NSMakeRange(NSMaxRange(name),end.location-NSMaxRange(name))];if(quote.location==NSNotFound)return nil;
+            NSString* path=[xml substringWithRange:NSMakeRange(NSMaxRange(name),quote.location-NSMaxRange(name))];
+            if([extensions containsObject:path.pathExtension.lowercaseString]){
+                if(!result)result=[NSMutableString stringWithCapacity:xml.length/4];
+                [result appendString:[xml substringWithRange:NSMakeRange(kept,part.location-kept)]];kept=NSMaxRange(close);
+            }
+        }
+        cursor=NSMaxRange(close);
+    }
+    if(!result)return xml;
+    [result appendString:[xml substringFromIndex:kept]];return result;
+}
+NSDictionary* decodeDocumentPart(NSString* text,BOOL* selectionBound){
+    NSMutableArray<NSString*>* fields=[NSMutableArray array];NSUInteger offset=0;
+    for(NSUInteger i=0;i<9;i++){NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound){clearDocumentParts();return nil;}[fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);}
+    NSInteger values[7]{};
+    for(NSUInteger i=0;i<7;i++){NSString* field=fields[i+1];NSScanner* scanner=[NSScanner scannerWithString:field];if(!field.length||[field rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location!=NSNotFound||![scanner scanInteger:&values[i]]||!scanner.isAtEnd||values[i]<0||values[i]>INT32_MAX){clearDocumentParts();return nil;}}
+    if(!values[0]||!values[1]||!values[2]||!values[4]||values[4]>10000||values[3]>=values[4]||values[5]>=256||values[6]>1||fields[8].length>512){clearDocumentParts();return nil;}
+    NSString* binding=[NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%@",fields[1],fields[2],fields[3],fields[4],fields[5],fields[8]];
+    if(values[5]==0&&![documentPartsBinding isEqual:binding]){clearDocumentParts();documentParts=[NSMutableArray array];documentPartsBinding=binding;}
+    if(!documentParts||![documentPartsBinding isEqual:binding]||static_cast<NSUInteger>(values[5])!=documentParts.count){clearDocumentParts();return nil;}
+    NSString* xml=[text substringFromIndex:offset];
+    xml=withoutSnapshotPictures(xml);
+    documentPartsBytes+=[xml lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    if(!xml.length||documentPartsBytes>128*1024*1024){clearDocumentParts();return nil;}
+    [documentParts addObject:xml];
+    if(!values[6])return @{@"partPending":@YES};
+    NSData* json=[NSJSONSerialization dataWithJSONObject:documentParts options:0 error:nil];
+    NSData* packed=[json compressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
+    clearDocumentParts();if(!packed||packed.length>34000000)return nil;
+    if(selectionBound)*selectionBound=YES;
+    return @{@"captureToken":@(values[0]),@"identity":[NSString stringWithFormat:@"%@:%ld",documentProcessIdentity(),static_cast<long>(values[1])],@"snapshot":@(values[2]),@"index":@(values[3]),@"count":@(values[4]),@"name":fields[8],@"encoding":@"parts-deflate-base64",@"ooxml":[packed base64EncodedStringWithOptions:0]};
+}
 NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr){
+    if([text hasPrefix:@"ELPART1\n"])return decodeDocumentPart(text,selectionBound);
+    if([text hasPrefix:@"ELFRAG1\n"]){
+        NSMutableArray<NSString*>* fields=[NSMutableArray array];NSUInteger offset=0;
+        for(NSUInteger i=0;i<7;i++){NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound)return nil;[fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);}
+        NSScanner* scanner=[NSScanner scannerWithString:fields[5]];NSInteger count=0;
+        if(![scanner scanInteger:&count]||!scanner.isAtEnd||count<1||count>10000)return nil;
+        NSString* header=[NSString stringWithFormat:@"ELCTX4\n%@\n%@\n%@\n%@\n%@\n",fields[1],fields[2],fields[3],fields[4],fields[6]];
+        NSDictionary* parsed=decodeDocumentContext([header stringByAppendingString:[text substringFromIndex:offset]],selectionBound);
+        if(!parsed||[parsed[@"index"] integerValue]>=count)return nil;
+        NSMutableDictionary* context=[parsed mutableCopy];context[@"scope"]=@"selection";context[@"count"]=@(count);return context;
+    }
+    if([text hasPrefix:@"ELFILE1\n"]){
+        NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
+        if(fields.count!=8)return nil;
+        NSInteger values[5]{};
+        for(NSUInteger i=0;i<5;i++){
+            NSScanner* scanner=[NSScanner scannerWithString:fields[i+1]];
+            if(![scanner scanInteger:&values[i]]||!scanner.isAtEnd||values[i]<0||values[i]>INT32_MAX)return nil;
+        }
+        if(!values[1]||!values[2]||values[3]>10000||values[4]>10000||fields[6].length>512)return nil;
+        bridge_probe::WordSnapshotStats stats;
+        NSData* zip=bridge_probe::compactSavedWordDocument(fields[7],&stats);
+        if(!zip)return nil;
+        NSMutableDictionary* context=[@{@"index":@(values[3]),@"count":@(values[4]),@"name":fields[6],@"ooxml":[zip base64EncodedStringWithOptions:0],@"encoding":@"docx-base64",@"identity":[NSString stringWithFormat:@"%@:%ld",documentProcessIdentity(),static_cast<long>(values[1])],@"snapshot":@(values[2])} mutableCopy];
+        if(values[0])context[@"captureToken"]=@(values[0]);
+        if(selectionBound)*selectionBound=values[0]>0;
+        static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
+        os_log_info(logger,"WordSavedSnapshot source_bytes=%llu read_bytes=%llu snapshot_bytes=%lu entries=%u",static_cast<unsigned long long>(stats.sourceBytes),static_cast<unsigned long long>(stats.readBytes),static_cast<unsigned long>(zip.length),stats.entries);
+        return context;
+    }
     NSRange first=[text rangeOfString:@"\n"];if(!text||first.location==NSNotFound)return nil;
     NSRange second=[text rangeOfString:@"\n" options:0 range:NSMakeRange(NSMaxRange(first),text.length-NSMaxRange(first))];if(second.location==NSNotFound)return nil;
     NSString* index=[text substringToIndex:first.location];NSString* identity=nil;NSNumber* snapshot=nil;NSNumber* captureToken=nil;BOOL selected=[index isEqualToString:@"ELCTX3"],requested=[index isEqualToString:@"ELCTX4"];
@@ -207,6 +297,18 @@ NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr)
     NSScanner* scanner=[NSScanner scannerWithString:index];NSInteger number=-1;
     if(![scanner scanInteger:&number]||!scanner.isAtEnd||number<0||number>10000)return nil;
     NSMutableDictionary* context=[@{@"index":@(number),@"name":[text substringWithRange:NSMakeRange(NSMaxRange(first),second.location-NSMaxRange(first))],@"ooxml":[text substringFromIndex:NSMaxRange(second)]} mutableCopy];
+    NSString* xml=context[@"ooxml"];
+    if(xml.length>128*1024*1024)return nil;
+    NSData* utf8=[xml dataUsingEncoding:NSUTF8StringEncoding];
+    if(!utf8||utf8.length>128*1024*1024)return nil;
+    // Foundation's zlib codec emits raw DEFLATE. Keep large captures compressed
+    // in every retained snapshot and on the HTTP wire; never expand JSON to a
+    // second 100 MB copy. Node validates the codec and bounds decompression.
+    if(utf8.length>4*1024*1024){
+        NSData* packed=[utf8 compressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
+        if(!packed||packed.length>34000000)return nil;
+        context[@"ooxml"]=[packed base64EncodedStringWithOptions:0];context[@"encoding"]=@"deflate-base64";
+    }
     if(identity){context[@"identity"]=identity;context[@"snapshot"]=snapshot;}
     if(captureToken)context[@"captureToken"]=captureToken;
     if(selectionBound)*selectionBound=selected||requested;
@@ -215,7 +317,7 @@ NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr)
 std::int32_t prepareInsertion(NSString* layout){
     if(!validHost())return -1;NSURL* startup=startupDirectory();if(!startup)return -2;
     NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
-    NSString* text=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-insertion-context.txt") encoding:NSUTF8StringEncoding];
+    NSString* text=documentCaptureText(inputFile(directory,@"ribbon-insertion-context.txt"));
     NSDictionary* context=decodeDocumentContext(text);if(!context[@"identity"]||!context[@"snapshot"])return -3;
     NSMutableDictionary* document=[context mutableCopy];document[@"index"]=@(-1);
     NSString* settings=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-settings.txt") encoding:NSUTF8StringEncoding];
@@ -266,6 +368,7 @@ std::int32_t applySelectionEquation(NSString* text){
     }
     NSMutableDictionary* next=[source mutableCopy];next[@"index"]=@(index);pendingDocument=next;pendingDocumentSelection=selectionBound;EquationLabDocumentContextDidCapture();return 0;
 }
+extern "C" std::int32_t MathTypeBridgeDocumentCaptureRequestToken();
 std::int32_t captureDocument(){
     if(!validHost())return -1;clearDocumentSelectionState();explicitSelectionBase=nil;EquationLabDocumentContextWillCapture();
     const CFAbsoluteTime readStarted=CFAbsoluteTimeGetCurrent();
@@ -274,7 +377,14 @@ std::int32_t captureDocument(){
     if(!data)return -2;
     const CFAbsoluteTime decodeStarted=CFAbsoluteTimeGetCurrent();
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
-    BOOL selectionBound=NO;NSDictionary* context=decodeDocumentContext([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding],&selectionBound);
+    NSString* text=documentCaptureText(data);
+    if([text hasPrefix:@"ELPART1\n"]){NSArray* lines=[text componentsSeparatedByString:@"\n"];if(lines.count<2||[lines[1] intValue]!=MathTypeBridgeDocumentCaptureRequestToken()){clearDocumentParts();return -3;}}
+    BOOL selectionBound=NO;NSDictionary* context=decodeDocumentContext(text,&selectionBound);
+    if([context[@"partPending"] boolValue]){
+        const CFAbsoluteTime completed=CFAbsoluteTimeGetCurrent();
+        os_log_info(OS_LOG_DEFAULT,"WordHostChunk xml_ms=%.3f write_ms=%.3f decode_ms=%.3f total_ms=%.3f",(captureTiming.xmlReady-captureTiming.started)*1000.0,(captureTiming.fileReady-captureTiming.xmlReady)*1000.0,(completed-decodeStarted)*1000.0,(completed-captureTiming.started)*1000.0);
+        captureTiming={};return 1;
+    }
     const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();
     if(!context)return -3;
     std::int32_t preCaptured=EquationLabCapturePreCapturedDocumentContext(context);
@@ -293,7 +403,7 @@ std::int32_t captureDocument(){
     captureTiming={};
     return 0;
 }
-void clearDocumentCaptureState(){clearDocumentContextState();EquationLabClearDocumentActivationAnchor();}
+void clearDocumentCaptureState(){clearDocumentParts();clearDocumentContextState();EquationLabClearDocumentActivationAnchor();}
 std::int32_t clearDocument(){if(!validHost())return -1;clearDocumentCaptureState();EquationLabDocumentContextDidClear();return 0;}
 std::int32_t closeDocumentIdentity(){
     if(!validHost())return -1;NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
@@ -438,6 +548,7 @@ NSDictionary* EquationLabTakeDocumentActivationAnchor(){
     EquationLabClearDocumentActivationAnchor();
     return result;
 }
+void EquationLabDiscardDocumentParts(){clearDocumentParts();}
 #define RIBBON_EXPORT(name,expression) extern "C" __attribute__((visibility("default"))) std::int32_t name(){@autoreleasepool{return expression;}}
 RIBBON_EXPORT(MathTypeBridgeRibbonOpen,openTool(@"editor"))
 RIBBON_EXPORT(MathTypeBridgeRibbonTypography,openTool(@"typography"))
@@ -518,3 +629,6 @@ RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestOpened,finishCurrentWordDoc
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestEmpty,finishCurrentWordDocumentRequest(@"empty"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestNoDocument,finishCurrentWordDocumentRequest(@"no-document"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestFailed,finishCurrentWordDocumentRequest(@"failed"))
+
+RIBBON_EXPORT(MathTypeBridgeQueueDocumentChunk,([&](){if(!validHost())return -1;const auto token=MathTypeBridgeDocumentCaptureRequestToken();if(token<=0){clearDocumentParts();return -2;}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(MathTypeBridgeDocumentCaptureRequestToken()==token)EquationLabWakeWordHost();});return 0;})())
+RIBBON_EXPORT(MathTypeBridgeCanReadDocumentChunk,([&](){if(!validHost())return 0;const double idle=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState,kCGAnyInputEventType);return NSRunningApplication.currentApplication.isActive&&idle>=0&&idle<0.6?0:1;})())

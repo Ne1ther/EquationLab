@@ -1,0 +1,12 @@
+import fs from 'node:fs/promises';import os from 'node:os';import path from 'node:path';import assert from 'node:assert/strict';import {fileURLToPath} from 'node:url';import {execFile} from 'node:child_process';import {promisify} from 'node:util';import JSZip from 'jszip';import {checkedWordSnapshotZip} from '../../src/word-snapshot.mjs';
+const exec=promisify(execFile),root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..'),scratch=await fs.mkdtemp(path.join(os.tmpdir(),'equationlab-snapshot-'));
+try{
+ const zip=new JSZip();for(const [name,value]of [['_rels/.rels','<Relationships/>'],['[Content_Types].xml','<Types/>'],['word/document.xml','<document/>'],['word/embeddings/equation.bin','OLE fixture']])zip.file(name,value,{createFolders:false});zip.file('word/media/large-image.png',Buffer.alloc(24*1024*1024,42),{compression:'STORE',createFolders:false});
+ const bytes=await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'}),source=path.join(scratch,'source.docx'),output=path.join(scratch,'compact.docx'),bad=path.join(scratch,'bad.docx'),binary=path.join(scratch,'test');await fs.writeFile(source,bytes);await fs.symlink(source,source+'.link');const broken=Buffer.from(bytes);broken.writeUInt32LE(0xffffffff,broken.length-6);await fs.writeFile(bad,broken);
+ await exec('xcrun',['clang++','-std=c++20','-Wall','-Wextra','-Werror','-fobjc-arc','-I',path.join(root,'include'),path.join(root,'src/snapshot_zip_tests.mm'),'-framework','Foundation','-o',binary]);const {stdout}=await exec(binary,[source,output,bad],{timeout:10000});process.stdout.write(stdout);
+ const compact=await fs.readFile(output),checked=await checkedWordSnapshotZip(compact.toString('base64')),back=await JSZip.loadAsync(checked);assert.deepEqual(Object.keys(back.files).sort(),['_rels/.rels','[Content_Types].xml','word/document.xml','word/embeddings/equation.bin'].sort());assert.equal(await back.file('word/embeddings/equation.bin').async('string'),'OLE fixture');
+ // The same native reader also supports Word's data-descriptor bit without
+ // retaining the descriptor in the compact archive.
+ const streamBytes=await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE',streamFiles:true});await fs.writeFile(source,streamBytes);const repeated=await exec(binary,[source,output,bad],{timeout:10000});process.stdout.write(repeated.stdout);await checkedWordSnapshotZip((await fs.readFile(output)).toString('base64'));
+ console.log('Saved Word ZIP snapshot tests passed.');
+}finally{await fs.rm(scratch,{recursive:true,force:true});}

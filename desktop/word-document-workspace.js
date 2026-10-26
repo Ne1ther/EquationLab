@@ -37,7 +37,7 @@ window.createWordDocumentWorkspace = api => {
  const validTarget=target=>target&&typeof target.identity==='string'&&target.identity.length>0&&target.snapshot!=null&&Number.isInteger(target.index)&&/^[a-f0-9]{64}$/.test(target.nativeSha256||'');
  const clearUnavailable=()=>{if(!wordDocumentUnavailable&&!unavailableIdentity&&!unavailableName)return false;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';changed();return true;};
  const remember=document=>{
-  if(!document?.hasDocumentContext||!document.documentIdentity)return;
+  if(!document?.hasDocumentContext||!document.documentIdentity||document.documentLoading||document.documentLoadFailed)return;
   if(knownRetired.has(document.documentIdentity)||wordDocumentUnavailable&&document.documentIdentity===unavailableIdentity)return;
   cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
  };
@@ -51,7 +51,9 @@ window.createWordDocumentWorkspace = api => {
   pending=null;changed();api.message(text,true);
  }
  async function monitor(request){
-  const deadline=api.now()+25000;
+  // Match the host's bounded request lifetime. Large WordOpenXML captures
+  // and the first document parse can legitimately take more than 25 seconds.
+  const deadline=api.now()+60000;
   while(pending===request){
    if(api.now()>=deadline){await api.native('wordDocumentCancel',{requestId:request.requestId}).catch(()=>{});failure(request,'未能读取 Word 当前文档。草稿仍保留，请检查 Word 后重试。');return;}
    try{
@@ -291,7 +293,7 @@ window.createWordDocumentWorkspace = api => {
    if(!requestId){await cancelPending();return false;}
    if(request.expectedIdentity&&document.documentIdentity!==request.expectedIdentity){await cancelPending();throw Error('Word 当前文档已变化。草稿仍保留，请重新打开目标文档。');}
    const target=request.target,object=document.objects?.[document.activeIndex];
-   const same=target&&document.documentIdentity===target.identity&&document.activeIndex===target.index;
+   const same=target&&document.documentIdentity===target.identity&&(document.documentPosition??document.activeIndex)===target.index;
    if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){await cancelPending();throw Error('Word 中的公式内容或位置已经变化。草稿仍保留，请重新打开文档后再选。');}
    const approved=request.discardApproved&&(!target||same);
    pending=null;generation++;changed();return !!approved;

@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {pathToFileURL} from 'node:url';
 import vm from 'node:vm';
-import {makeOle,inspectOle,oleLatex} from '../src/native.mjs';
+import {makeOle,inspectOle,oleLatex,replaceOleLatex} from '../src/native.mjs';
 import {renderNative} from '../src/font-renderer.mjs';
 
 const directory=await mkdtemp(join(tmpdir(),'equation-editable-macro-test-'));
@@ -23,6 +23,7 @@ const context=vm.createContext({window:{}});
 vm.runInContext(await readFile(new URL('../desktop/catalog-macros.js',import.meta.url),'utf8'),context);
 vm.runInContext(await readFile(new URL('../desktop/editable-macros.js',import.meta.url),'utf8'),context);
 const sourceDefinitions={sfrac:{args:2,def:'{}^{#1}\\!/\\!{}_{#2}',expand:false},sout:{args:1,def:'\\enclose{horizontalstrike}{#1}',expand:false},overbracket:{args:1,def:'\\overbrace{#1}',expand:false},underbracket:{args:1,def:'\\underbrace{#1}',expand:false},eltab:{args:0,def:'\\hspace{1em}',expand:false},...context.window.equationCatalogMacros};
+sourceDefinitions.mtpile={args:3,def:'#3',expand:false};sourceDefinitions.mtmissing={args:5,def:'\\square',expand:false};
 const definitions=context.window.prepareEquationMacros(sourceDefinitions);
 function parse(text){const root=mathlive.equationTestParse(context.window.safeEquationMacroLatex(text),definitions);return {root,mf:{_mathfield:{model:{root}}},value:()=>root.bodyToLatex({expandMacro:false})};}
 function direct(node){return [...Object.values(node._branches||{}).flat(),...(node._rows||[]).flat(2)].filter(Boolean);}
@@ -47,6 +48,12 @@ test('Prepared macro bodies expose editable argument regions while zero-argument
  const {root}=parse(tex`\mtmatrix{129}{129}{4}{\begin{matrix}a&b\\c&d\end{matrix}}`);
  const macro=all(root).find(n=>n.type==='macro'&&n.command==='\\mtmatrix');assert.equal(macro.captureSelection,false);
  const a=all(root).find(n=>n.value==='a');assert.equal(a.inCaptureSelection,false);
+});
+
+test('Legacy piles and unmapped-character metadata survive actual MathLive serialization',async()=>{
+ for(const latex of [String.raw`\mtpile{1}{1}{\begin{gathered}a=1\\b=2\end{gathered}}`,String.raw`x+\mtmissing{f700}{108}{Euclid Math One}{EuclidMath1}{0}+y`]){
+  const state=parse(latex);context.window.syncEquationMacros(state.mf);const value=state.value(),ole=makeOle(value);assert.deepEqual(replaceOleLatex(ole,oleLatex(ole)),ole);assert.ok((await renderNative(ole,{raster:false})).svg.includes('<svg'));
+ }
 });
 test('A real matrix-cell AST edit updates its saved macro argument and preserves all hidden native settings',async()=>{
  const state=parse(tex`\mtmatrix{129}{129}{4}{\begin{bmatrix}a&b\\c&d\end{bmatrix}}`),before=state.value();editLiteral(state.root,'a','z');

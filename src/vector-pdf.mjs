@@ -92,6 +92,8 @@ export function vectorInkBounds({vector}){
 }
 
 export function vectorPdfRequest(svg,width,height){
+ if(!Number.isFinite(width)||!Number.isFinite(height)||width<=0||height<=0)throw Error('Invalid vector output dimensions');
+ if(width>10000||height>10000)throw Error('Formula exceeds the 10,000 pt image/PDF size limit; add line breaks or reduce the font size.');
  if(typeof svg!=='string'||svg.length>24_000_000||/<!DOCTYPE|<!ENTITY/i.test(svg))throw Error('Invalid vector document');
  const doc=new DOMParser().parseFromString(svg,'image/svg+xml'),root=doc.documentElement,view=numbers(root.getAttribute('viewBox'));
  if(root.tagName!=='svg'||view.length!==4||view[2]<=0||view[3]<=0||!view.every(Number.isFinite))throw Error('Invalid vector viewBox');

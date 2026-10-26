@@ -6,6 +6,10 @@
 
 Actual workbench and open Word document menu in 0.6.5 build84.
 
+当前版本是 0.6.6 build86，主要调整读取和兼容逻辑，沿用这些真实界面截图。长文档测试材料保留在本地，这里不展示私人文档。
+
+The current release is 0.6.6 build86. It mainly changes loading and compatibility, so these actual interface screenshots remain in use. Private long-document test material is kept locally and is not shown here.
+
 ![已打开的 Word 文档](word-document-selector-0.6.5.png)
 
 [30 公式 Word 演示](../examples/equation-lab-30-formulas.docx) · [PDF](../examples/equation-lab-30-formulas.pdf)

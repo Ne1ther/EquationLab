@@ -33,7 +33,7 @@ export function localServer({port=37952}={}) {
    if(req.method==='POST') {
     if(req.headers.origin&&req.headers.origin!==origin){res.writeHead(403);return res.end('Origin rejected');}
     if(!req.headers['content-type']?.startsWith('application/json'))throw Error('JSON required');
-    const nativeRequest=/^\/api\/native-(open|insert-open|read|poll|complete|cancel|ack|status|navigate|document-request|document-status|document-take|document-finish|document-cancel|document-workspace|document-workspace-status)$/.test(req.url);
+    const nativeRequest=/^\/api\/native-(open|insert-open|read|poll|complete|cancel|ack|status|navigate|enrich|enrich-request|document-request|document-status|document-take|document-finish|document-cancel|document-workspace|document-workspace-status)$/.test(req.url);
     const ribbonRequest=/^\/api\/ribbon-(create|number|chapter)$/.test(req.url);
     if(!nativeRequest&&!ribbonRequest){res.writeHead(404);return res.end();}
     if(currentPort!==37952)throw Error('原生 Word 服务只在本机 37952 端口提供');

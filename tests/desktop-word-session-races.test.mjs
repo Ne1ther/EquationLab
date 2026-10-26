@@ -45,7 +45,7 @@ async function withLocalNativeService(fn){
 function createEditor(native){
  const calls=[],messages=[],elements=new Map();let timerId=0,clock=0,context;
  const element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
- context=vm.createContext({window:{},performance:{now:()=>++clock},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,mf:{value:'',readOnly:false},
+ context=vm.createContext({window:{syncEquationMacros(){}},performance:{now:()=>++clock},busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,mf:{value:'',readOnly:false},
   $:element,controls(){},message:text=>messages.push(text),requestWorkbenchSync(){},renderObjects(){},loadWordThumbnails(){},syncSidebar:async()=>{},validate:async()=>{},
   selectObject(index){context.selected=context.source.objects[index];context.mf.value=context.selected.latex;context.selected.editorBaseline=context.mf.value;},
   wordSessionChanged:()=>context.mf.value!==context.selected?.editorBaseline,

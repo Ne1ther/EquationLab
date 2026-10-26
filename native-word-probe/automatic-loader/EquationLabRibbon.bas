@@ -91,6 +91,24 @@ Public Sub ELWriteUtf8(ByVal path As String, ByVal value As String)
     Close #file
 End Sub
 
+Public Sub ELWriteDocumentCapture(ByVal path As String, ByVal value As String)
+    If Len(value) <= 4096 Then
+        ELWriteUtf8 path, value
+        Exit Sub
+    End If
+    ' Copy formula-sized VBA UTF-16 buffers in bulk instead of interpreting
+    ' every character in EncodeTextUtf8. Only the native capture reader accepts
+    ' this BOM-marked sidecar; HTTP still uses bounded compressed UTF-8.
+    Dim bytes() As Byte, file As Integer
+    bytes = ChrW$(&HFEFF) & value
+    file = FreeFile
+    Open path For Output As #file
+    Close #file
+    Open path For Binary Access Write As #file
+    Put #file, , bytes
+    Close #file
+End Sub
+
 Private Sub InsertEquation(ByVal kind As String)
     RequireDocument
     Dim Doc As Document, selectedRange As Range, chosen As InlineShape
@@ -596,15 +614,88 @@ Private Sub AddRibbonNumber(ByVal Doc As Document, ByVal insertion As Range, ByV
     Doc.Bookmarks.Add Name:=bookmarkName, Range:=bookmarkRange
 End Sub
 
+Private Function FieldWord(ByVal code As String, ByVal index As Long) As String
+    code = Replace(Replace(Replace(Trim$(code), vbTab, " "), vbCr, " "), vbLf, " ")
+    Do While InStr(code, "  ") > 0: code = Replace(code, "  ", " "): Loop
+    Dim words() As String
+    words = Split(code, " ")
+    If index <= UBound(words) Then FieldWord = Replace(words(index), Chr$(34), "")
+End Function
+
+Private Function IsEquationSequence(ByVal field As Field) As Boolean
+    If UCase$(FieldWord(field.Code.Text, 0)) <> "SEQ" Then Exit Function
+    Select Case UCase$(FieldWord(field.Code.Text, 1))
+        Case "EQUATIONLAB", "ELCHAPTER", "ELSECTION", "MTEQN", "MTCHAP", "MTSEC"
+            IsEquationSequence = True
+    End Select
+End Function
+
+Private Sub CollectEquationFields(ByVal scope As Range, ByVal fields As Collection, ByVal seen As Collection, ByVal depth As Long)
+    If depth > 32 Then Err.Raise vbObjectError + 7371, "Equation Lab", "Equation fields are nested too deeply."
+    Dim field As Field, key As String, previous As Field
+    For Each field In scope.Fields
+        If field.Type <> wdFieldEmbed Then
+            key = "F" & CStr(field.Code.Start)
+            Set previous = Nothing
+            On Error Resume Next
+            Set previous = seen(key)
+            On Error GoTo 0
+            If previous Is Nothing Then
+                seen.Add field, key
+                fields.Add field
+                ' MathType keeps its hidden increment and visible \c fields
+                ' inside MTPlaceRef's CODE. Never execute the macrobutton.
+                CollectEquationFields field.Code, fields, seen, depth + 1
+                CollectEquationFields field.Result, fields, seen, depth + 1
+            End If
+        End If
+    Next
+End Sub
+
+Private Function IsEquationReference(ByVal field As Field, ByVal Doc As Document) As Boolean
+    If UCase$(FieldWord(field.Code.Text, 0)) <> "REF" Then Exit Function
+    Dim name As String, nested As Field, fields As Collection, seen As Collection, target As Range
+    name = FieldWord(field.Code.Text, 1)
+    If UCase$(Left$(name, 3)) = "EL_" Then IsEquationReference = True: Exit Function
+    If Not Doc.Bookmarks.Exists(name) Then Exit Function
+    Set target = Doc.Bookmarks(name).Range
+    ' A table or prose bookmark can contain an equation without referencing
+    ' its number. Only inspect a number-sized, single-paragraph bookmark.
+    If target.Paragraphs.Count <> 1 Or target.Tables.Count <> 0 Or target.InlineShapes.Count <> 0 Or target.Characters.Count > 256 Then Exit Function
+    Set fields = New Collection
+    Set seen = New Collection
+    CollectEquationFields target, fields, seen, 0
+    For Each nested In fields
+        If IsEquationSequence(nested) Then IsEquationReference = True: Exit Function
+    Next
+End Function
+
 Private Sub UpdateNumbersForDocument(ByVal Doc As Document)
-    Dim field As Field, code As String
-    For Each field In Doc.Fields
-        code = Trim$(field.Code.Text)
-        If Left$(code, 15) = "SEQ EquationLab" Or Left$(code, 13) = "SEQ ELChapter" Or Left$(code, 13) = "SEQ ELSection" Then field.Update
+    Dim field As Field, fields As Collection, seen As Collection, showHidden As Boolean
+    Dim failureNumber As Long, failureDescription As String
+    showHidden = Doc.Bookmarks.ShowHidden
+    On Error GoTo Failed
+    Doc.Bookmarks.ShowHidden = True
+    Set fields = New Collection
+    Set seen = New Collection
+    CollectEquationFields Doc.Content, fields, seen, 0
+    ' Fields were collected in document/code/result order before any update.
+    ' Preserve reset, repeat and chapter switches instead of rebuilding numbers.
+    For Each field In fields
+        If IsEquationSequence(field) And Not field.Locked Then field.Update
     Next
-    For Each field In Doc.Fields
-        If Left$(Trim$(field.Code.Text), 7) = "REF EL_" Then field.Update
+    For Each field In fields
+        If IsEquationReference(field, Doc) And Not field.Locked Then field.Update
     Next
+    Doc.Bookmarks.ShowHidden = showHidden
+    Exit Sub
+Failed:
+    failureNumber = Err.Number
+    failureDescription = Err.Description
+    On Error Resume Next
+    Doc.Bookmarks.ShowHidden = showHidden
+    On Error GoTo 0
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Sub InsertPreparedFragment(ByVal tool As String)
@@ -641,16 +732,13 @@ Private Sub InsertReference()
     field.Update
 End Sub
 
-Private Sub UpdateNumbers()
+' Shared by the Ribbon and Word's assignable macro commands.
+Public Sub UpdateNumbers()
     RequireDocument
-    Dim field As Field, code As String
-    For Each field In ActiveDocument.Fields
-        code = Trim$(field.Code.Text)
-        If Left$(code, 15) = "SEQ EquationLab" Or Left$(code, 13) = "SEQ ELChapter" Or Left$(code, 13) = "SEQ ELSection" Then field.Update
-    Next
-    For Each field In ActiveDocument.Fields
-        If Left$(Trim$(field.Code.Text), 7) = "REF EL_" Then field.Update
-    Next
+    Dim Doc As Document
+    Set Doc = ActiveDocument
+    UpdateNumbersForDocument Doc
+    ELInvalidateDocumentSnapshot
 End Sub
 
 Private Sub SetNumberFormat()

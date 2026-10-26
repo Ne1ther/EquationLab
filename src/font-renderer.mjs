@@ -16,13 +16,14 @@ import {readTypography} from './typography-native.mjs';
 import {vectorPdfRequest,vectorInkBounds} from './vector-pdf.mjs';
 import {nativeDimension32} from './native-dimensions.mjs';
 import {createNativeLayout} from './native-layout.mjs';
+import {legacyOutline} from './legacy-glyphs.mjs';
 
 const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);
 const {mtExtraOperators={}}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
 new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elrows:'PileRows',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
  const variant=parser.GetArgument(name),size=Number(parser.GetArgument(name)),code=Number.parseInt(parser.GetArgument(name),16),color=parser.GetArgument(name);
- if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>65535||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
- const ch=String.fromCharCode(code),kind=/[A-Za-z\u0370-\u03ff]/.test(ch)?'mi':/[0-9]/.test(ch)?'mn':'mo';
+ if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>0x10ffff||code>=0xd800&&code<=0xdfff||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
+ const ch=String.fromCodePoint(code),kind=/[A-Za-z\u0370-\u03ff]/.test(ch)||code>65535?'mi':/[0-9]/.test(ch)?'mn':'mo';
  // Native SIZE and outlines are authoritative. Letting MathJax infer largeop
  // replaces a custom CoreText variant with its -smallop/-largeop font, which
  // can silently emit an unembedded browser <text> for contour integrals.
@@ -35,7 +36,7 @@ new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'M
  if(!Number.isInteger(kind)||!Number.isInteger(flags)||flags<0||flags>65535)throw Error('Invalid native layout metadata');
  const targetKind=kind===100||kind===101?'mtable':kind===11?'mfrac':null;let target;
  node.walkTree(n=>{if(!target&&(n.kind===targetKind||(kind>=24&&kind<=34||kind===200)&&['mover','munder'].includes(n.kind)))target=n;});
- if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));}if(kind===101)target.setProperty('elPile',true);if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);if(kind===200)target.attributes.set(target.kind==='munder'?'accentunder':'accent',true);}
+ if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));}if(kind===101){target.setProperty('elPile',true);const h=flags&15,v=flags>>4;if([1,2,3].includes(h))target.attributes.set('columnalign',{1:'left',2:'center',3:'right'}[h]);if(v===1||v===3)target.attributes.set('align',v===1?'baseline 1':'baseline -1');}if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);if(kind===200)target.attributes.set(target.kind==='munder'?'accentunder':'accent',true);}
  parser.Push(node);
 },Bar(parser,name){const under=Number(parser.GetArgument(name)),count=Number(parser.GetArgument(name));if(![0,1].includes(under)||![1,2].includes(count))throw Error('Invalid native bar');const node=parser.create('node','mrow',[parser.create('node','TeXAtom',[parser.ParseArg(name)])]);node.setProperty('elNativeBar',{under,count});parser.Push(node);
 },StretchIntegral(parser,name){const flags=Number(parser.GetArgument(name)),ratio=Number(parser.GetArgument(name)),operatorRatio=Number(parser.GetArgument(name));if(!Number.isInteger(flags)||flags<1||flags>0x17f||!(flags&3)||!Number.isFinite(ratio)||ratio<=0||!Number.isFinite(operatorRatio)||operatorRatio<=0)throw Error('Invalid integral layout');const children=Array.from({length:3},()=>parser.create('node','TeXAtom',[parser.ParseArg(name)]));for(let i=0;i<(flags&3);i++)children.push(parser.create('node','TeXAtom',[flags&256?parser.create('token','mo',{stretchy:true,largeop:false,mathsize:operatorRatio+'em'},'\u222b'):parser.ParseArg(name)]));const node=parser.create('node','mrow',children);node.setProperty('elStretchIntegral',flags);node.setProperty('elNativeBoxRatio',ratio);node.setProperty('elOperatorRatio',operatorRatio);parser.Push(node);
@@ -171,7 +172,8 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
   // Old Equation Lab objects also used ASCII '-' in Symbol; render it as a
   // mathematical minus without changing stored data or text hyphens.
   const symbol=state.font.toLowerCase()==='symbol',symbolStar=symbol&&n.code===0x2a;
-  const code=symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code,fontName=symbolStar?'STIX Two Math':state.font,fontStyle=state.style;
+  const alias=legacyOutline(n.code,state.font),eastAsianMath=n.typeface===12&&[0x2223].includes(n.code),missing=n.code===0xf700,useSTIX=symbolStar||alias!==null||eastAsianMath||missing;
+  const code=missing?0x25a1:alias??(symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code),fontName=useSTIX?'STIX Two Math':state.font,fontStyle=state.style;
   const key=fontName+'\0'+fontStyle;let index=faceIds.get(key);
   if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:fontName,style:fontStyle,characters:[]});}
   if(!faces[index].characters.includes(code))faces[index].characters.push(code);
@@ -181,7 +183,7 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
   embellishment:(n,latex)=>[14,15,19,20,25,26,27,28,30,31,32,36,37].includes(n.embellishment)?`\\elmeta{200}{${n.embellishment}}{${latex}}`:latex,
   template:(n,latex)=>{if(n.selector===10)return `\\elroot{${layoutSizes.get(n.start)??1}}{${latex}}`;if([12,13].includes(n.selector)){for(let i=0;i<1+n.variation;i++)latex=latex.replace(/^\\(?:overline|underline)\{([\s\S]*)\}$/,'$1');return `\\elbar{${n.selector===12?1:0}}{${1+n.variation}}{${latex}}`;}if(n.selector>=31&&n.selector<=34)return `\\elmeta{${n.selector}}{${n.variation}}{${latex}}`;if(n.selector===15&&latex.startsWith('\\elStretchIntegral')){const glyphs=n.children.filter(c=>c.type===2&&c.code===0x222b),operatorRatio=layoutSizes.get(glyphs[0]?.start)??layoutSizes.get(n.start)??1;return latex.replace(/^(\\elStretchIntegral\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}{${operatorRatio}}`)+(n.variation&256?'':glyphs.map(g=>`{${glyphToken(g,'')}}`).join(''));}if(n.selector===14&&latex.startsWith('\\elDoubleArrow'))return latex.replace(/^(\\elDoubleArrow\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}`);if(n.selector===8)return `\\elwhite{${n.variation}}{${latex.replace(/^\\left(?:⟦|\.)/,'').replace(/\\right(?:⟧|\.)$/,'')}}`;if(n.selector!==11)return latex;if(n.variation&2){const gap=prefs?.spaces[14];if(gap&&!gap.unsupported)latex=latex.replaceAll('\\!',`\\kern{${nativeDimension32(gap,Math.trunc(full*32))/(32*full)}em}`);}return `\\elmeta{11}{${n.variation}}{${latex}}`;},
   matrix:(n,latex)=>`\\elmeta{100}{${(n.hjust&128?1:0)|(n.vjust&128?2:0)}}{${latex}}`,
-  pile:(_n,latex)=>`\\elmeta{101}{0}{${latex}}`,
+  pile:(n,latex)=>`\\elmeta{101}{${n.halign|(n.valign<<4)}}{${latex}}`,
   line:(n,latex,ctx)=>{const parts=latex.split('\\elTab{}');if(parts.length===1)return latex;const tabs=ctx.currentRuler?.tabs??[];return `\\elruler{${tabs.map(t=>t.position??t.offset).join(',')}}{${tabs.map(t=>t.type).join(',')}}{${parts.length}}${parts.map(p=>`{${p}}`).join('')}`;}
  });
  const usedFaceCount=faces.length;
@@ -201,7 +203,7 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  tex.postFilters.add(({data})=>data.root.walkTree(node=>{const ratio=node.getProperty('equationNativeSize');if(ratio){node.attributes.set('scriptlevel',0);node.attributes.set('mathsize',ratio+'em');}}),10);
  tex.postFilters.add(layout.postFilter,20);
  const doc=mathjax.document('',{InputJax:tex,OutputJax:new SVG({fontCache:'local',font,wrapperFactory:layout.factory,mathmlSpacing:true})});
- let svg=adaptor.outerHTML(doc.convert(latex,{display:false}));if(svg.includes('data-mjx-error'))throw Error('原生字体排版失败');
+ let svg=adaptor.outerHTML(doc.convert(latex,{display:false}));if(svg.includes('data-mjx-error'))throw Error('原生字体排版失败: '+(svg.match(/data-mjx-error="([^"]*)"/)?.[1]??'unknown layout error'));
  svg=svg.slice(svg.indexOf('<svg'),svg.lastIndexOf('</svg>')+6);
  const [,view]=/viewBox="([^"]+)"/.exec(svg),[x,y,w,h]=view.split(/\s+/).map(Number);
  const left=Math.max(0,...nativeFaces.slice(0,usedFaceCount).flatMap(f=>Object.values(f.glyphs).map(g=>-g.left))),right=20;
@@ -220,7 +222,8 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  // Editor validation displays SVG directly. Rasterize only for an actual PNG
  // consumer, rather than doing unused image encoding after every keystroke.
  const png=raster?await rasterizeNativeSvg(svg,width,height,{maxWidth,maxHeight}):undefined;
- return {svg,png,width,height,depth,faces:nativeFaces.slice(0,usedFaceCount).map(({font,style,postscript,syntheticItalic,syntheticBold})=>({font,style,postscript,syntheticItalic,syntheticBold})),fullSize:prefs?full:null,sizeSource:prefs?'equation-preferences':'explicit-native-glyph-state'};
+ const warnings=[];function missingGlyphs(nodes){for(const n of nodes){if(n.type===2&&n.code===0xf700&&!warnings.length)warnings.push('原公式含未映射字符，方框为占位显示；原始字符数据已保留。');if(n.children)missingGlyphs(n.children);}}missingGlyphs(parsed.records);
+ return {svg,png,width,height,depth,warnings,faces:nativeFaces.slice(0,usedFaceCount).map(({font,style,postscript,syntheticItalic,syntheticBold})=>({font,style,postscript,syntheticItalic,syntheticBold})),fullSize:prefs?full:null,sizeSource:prefs?'equation-preferences':'explicit-native-glyph-state'};
 }
 
 /** CoreGraphics PNG from the same vector vocabulary used by Word PDF.

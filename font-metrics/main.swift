@@ -154,9 +154,11 @@ func process(_ bytes: Data) throws -> [String: Any] {
         let syntheticBold = face.style & 1 != 0 && !actualTraits.contains(.traitBold)
         var glyphs: [String: Any] = [:]
         for code in Set(face.characters) {
-            guard code > 0 && code <= 65535 else { throw NSError(domain: "EquationFont", code: 5) }
-            var ch = UniChar(code), glyph = CGGlyph()
-            guard CTFontGetGlyphsForCharacters(font, &ch, &glyph, 1), glyph != 0 else {
+            guard code > 0, let scalar = UnicodeScalar(code) else { throw NSError(domain: "EquationFont", code: 5) }
+            var characters = Array(String(scalar).utf16), mapped = [CGGlyph](repeating: 0, count: String(scalar).utf16.count)
+            let found = CTFontGetGlyphsForCharacters(font, &characters, &mapped, characters.count)
+            var glyph = mapped[0]
+            guard found, glyph != 0 else {
                 throw NSError(domain: "EquationFont", code: 6, userInfo: [NSLocalizedDescriptionKey: "Missing glyph U+\(String(code, radix: 16)) in \(face.font)"])
             }
             var advance = CGSize.zero

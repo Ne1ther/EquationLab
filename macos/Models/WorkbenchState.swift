@@ -13,6 +13,7 @@ struct SidebarFormula: Identifiable, Decodable {
     var latex: String = ""
     var image: String? = nil
     var readOnly: Bool = false
+    var position: Int? = nil
     var thumbnail: NSImage? {
         guard let image else { return nil }
         return FormulaImageCache.shared.image(key: image)
@@ -115,12 +116,16 @@ struct WorkbenchState: Decodable {
     var statusTitle = "正在载入公式引擎…"
     var statusDetail = ""
     var statusError = false
+    var statusWarning = false
     var message = ""
     var messageError = false
     var valid = false
     var canExport = false
     var wordOutcomeUnknown = false
     var wordDocumentUnavailable = false
+    var wordDocumentLoading = false
+    var wordDocumentLoadFailed = false
+    var wordDocumentTotal = 0
     var busy = false
     var mode = "rebuild"
     var readOnly = false
@@ -148,6 +153,9 @@ struct WorkbenchState: Decodable {
         if let v = try value("latex", String.self) { latex = v }
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
         if let v = try value("objects", [SidebarFormula].self) { objects = v }
+        if let v = try value("wordDocumentLoading", Bool.self) { wordDocumentLoading = v }
+        if let v = try value("wordDocumentLoadFailed", Bool.self) { wordDocumentLoadFailed = v }
+        if let v = try value("wordDocumentTotal", Int.self) { wordDocumentTotal = v }
         if let v = try value("favorites", [SidebarFormula].self) { favorites = v }
         if let v = try value("categories", [String].self) { categories = v }
         if let v = try value("templates", [FormulaTemplate].self) { templates = v }
@@ -161,6 +169,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("statusTitle", String.self) { statusTitle = v }
         if let v = try value("statusDetail", String.self) { statusDetail = v }
         if let v = try value("statusError", Bool.self) { statusError = v }
+        if let v = try value("statusWarning", Bool.self) { statusWarning = v }
         if let v = try value("message", String.self) { message = v }
         if let v = try value("messageError", Bool.self) { messageError = v }
         if let v = try value("valid", Bool.self) { valid = v }

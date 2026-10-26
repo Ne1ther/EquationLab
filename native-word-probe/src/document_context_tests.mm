@@ -7,6 +7,7 @@ void EquationLabDocumentContextDidCapture(){}
 void EquationLabDocumentContextDidClear(){}
 void EquationLabDocumentContextDidClearSelection(){}
 void EquationLabDocumentContextWillCapture(){}
+extern "C" std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return 0;}
 void EquationLabDocumentContextDidCloseIdentity(std::int32_t){}
 std::int32_t EquationLabBeginWordInsertion(NSURL*,NSDictionary*,NSDictionary*,std::int32_t){return -1;}
 std::int32_t EquationLabQueueEditorTool(NSString*){return -1;}
@@ -30,6 +31,36 @@ std::int32_t finishWordDocumentRequest(std::int32_t,NSString*,NSString*){return 
 }
 namespace {void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}}
 int main(){@autoreleasepool{try{
+    NSString* unicodeCapture=@"ELCTX4\n1\n2\n3\n0\n论文.docx\n<pkg>中文</pkg>";
+    NSMutableData* unicodeBytes=[NSMutableData dataWithBytes:"\xff\xfe" length:2];[unicodeBytes appendData:[unicodeCapture dataUsingEncoding:NSUTF16LittleEndianStringEncoding]];
+    check([documentCaptureText(unicodeBytes) isEqual:unicodeCapture],"bulk VBA UTF-16 capture changed Unicode or retained its BOM");
+    check([documentCaptureText([unicodeCapture dataUsingEncoding:NSUTF8StringEncoding]) isEqual:unicodeCapture],"legacy UTF-8 capture failed");
+    NSString* largeXML=[@"<package>" stringByPaddingToLength:5*1024*1024 withString:@" " startingAtIndex:0];
+    NSDictionary* largeContext=decodeDocumentContext([@"ELCTX4\n1\n2\n3\n0\nLarge.docx\n" stringByAppendingString:largeXML]);
+    check([largeContext[@"encoding"] isEqual:@"deflate-base64"],"large capture was not compressed before retention/transport");
+    NSData* packed=[[NSData alloc] initWithBase64EncodedString:largeContext[@"ooxml"] options:0];
+    NSData* expanded=[packed decompressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
+    check([[[NSString alloc] initWithData:expanded encoding:NSUTF8StringEncoding] isEqual:largeXML],"compressed capture changed its UTF-8 XML");
+    check([largeContext[@"captureToken"] intValue]==1&&[largeContext[@"snapshot"] intValue]==3,"compression changed activation binding");
+    NSString* withPictures=@"<pkg:package><pkg:part pkg:name=\"/word/document.xml\"><pkg:xmlData><x>keep</x></pkg:xmlData></pkg:part><pkg:part pkg:name=\"/word/media/image.PNG\"><pkg:binaryData>AAAA</pkg:binaryData></pkg:part><pkg:part pkg:name=\"/word/embeddings/formula.bin\"><pkg:binaryData>BBBB</pkg:binaryData></pkg:part></pkg:package>";
+    NSString* noPictures=withoutSnapshotPictures(withPictures);
+    check([noPictures containsString:@"<x>keep</x>"]&&[noPictures containsString:@"BBBB"]&&![noPictures containsString:@"AAAA"],"picture stripping changed XML/OLE or retained cached image bytes");
+    check(!withoutSnapshotPictures(@"<pkg:package><pkg:part pkg:name=\"bad.png\">"),"truncated Word part accepted");
+    NSString* partA=@"ELPART1\n91\n2\n7\n0\n2\n0\n0\nParts.docx\n<a>first</a>";
+    NSString* partB=@"ELPART1\n91\n2\n7\n0\n2\n1\n1\nParts.docx\n<b>second</b>";
+    check([decodeDocumentContext(partA)[@"partPending"] boolValue],"first range exposed an incomplete document");
+    BOOL partsSelected=NO;NSDictionary* parts=decodeDocumentContext(partB,&partsSelected);
+    check(partsSelected&&[parts[@"encoding"] isEqual:@"parts-deflate-base64"]&&[parts[@"captureToken"] intValue]==91&&[parts[@"count"] intValue]==2,"range document lost its token/count");
+    NSData* partJSON=[[[NSData alloc] initWithBase64EncodedString:parts[@"ooxml"] options:0] decompressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
+    NSArray* partValues=[NSJSONSerialization JSONObjectWithData:partJSON options:0 error:nil];
+    check(partValues.count==2&&[partValues[0] isEqual:@"<a>first</a>"]&&[partValues[1] isEqual:@"<b>second</b>"],"range assembly changed order or bytes");
+    check(!decodeDocumentContext(partB),"orphan final range was accepted");
+    check([decodeDocumentContext(partA)[@"partPending"] boolValue],"range restart failed");
+    check(!decodeDocumentContext(partA),"duplicate range accepted");
+    check([decodeDocumentContext(partA)[@"partPending"] boolValue],"range restart after duplicate failed");
+    check(!decodeDocumentContext([partB stringByReplacingOccurrencesOfString:@"\n2\n7\n" withString:@"\n3\n7\n"]),"different document was mixed into range capture");
+    check([decodeDocumentContext(partA)[@"partPending"] boolValue],"new range failed");clearDocumentParts();
+    check(!decodeDocumentContext(partB),"cleared capture accepted a late range");
     NSString* requestId=[@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0];
     NSDictionary* request=@{@"requestId":requestId};
     NSArray* requestFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n0\n\n0\n0\n\n",requestId] componentsSeparatedByString:@"\n"];
@@ -57,6 +88,9 @@ int main(){@autoreleasepool{try{
     check(!selectionBound&&[ordinary isEqual:first],"ELCTX2 was promoted to a durable selection capture");
     NSDictionary* requested=decodeDocumentContext([NSString stringWithFormat:@"ELCTX4\n77\n1\n3\n25\n测试.docx\n%@",xml],&selectionBound);
     check(selectionBound&&[requested[@"captureToken"] intValue]==77&&[requested[@"identity"] isEqual:first[@"identity"]]&&[requested[@"snapshot"] intValue]==3&&[requested[@"index"] intValue]==25&&[requested[@"ooxml"] isEqual:xml],"ELCTX4 did not preserve its activation request token and document fields");
+    NSDictionary* fragment=decodeDocumentContext([NSString stringWithFormat:@"ELFRAG1\n77\n1\n3\n25\n112\n测试.docx\n%@",xml],&selectionBound);
+    check(selectionBound&&[fragment[@"captureToken"] intValue]==77&&[fragment[@"index"] intValue]==25&&[fragment[@"count"] intValue]==112&&[fragment[@"scope"] isEqual:@"selection"]&&[fragment[@"identity"] isEqual:first[@"identity"]]&&[fragment[@"ooxml"] isEqual:xml],"fragment lost its nonce, exact global position, or full document identity");
+    for(NSString* invalid in @[@"ELFRAG1\n0\n1\n3\n25\n112\nfile\n<xml/>",@"ELFRAG1\n77\n1\n3\n25\n25\nfile\n<xml/>",@"ELFRAG1\n77\n1\n3\n0\n0\nfile\n<xml/>"])check(!decodeDocumentContext(invalid),"invalid partial scope granted document authority");
     NSDictionary* activationFile=decodeDocumentActivationAnchor(@"ELACT1\n1\n3\n25");
     check([activationFile[@"identity"] isEqual:first[@"identity"]]&&[activationFile[@"snapshot"] intValue]==3&&[activationFile[@"index"] intValue]==25,"preactivation file did not resolve the exact captured Doc+Range coordinates");
     for(NSString* invalidActivation in @[@"ELACT1\n0\n3\n25",@"ELACT1\n1\n0\n25",@"ELACT1\n1\n3\n10001",@"ELACT1\n1x\n3\n25",@"ELACT1\n1\n3\n25\nextra"]){check(!decodeDocumentActivationAnchor(invalidActivation),"malformed preactivation file accepted");}
