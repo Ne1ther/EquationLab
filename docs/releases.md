@@ -8,9 +8,13 @@
 
 本轮在 Word 16.114.1 / Apple Silicon 上逐条打开 30 个演示公式和 11 种复杂公式，检查了新文档连续插入、编辑器与 Word 编号格式联动、左右编号、删除后重编号和 REF 更新、多文档切换与关闭。120 条复杂公式的未保存文档完成了末尾内容和字号修改、保存和重开，前 119 条公式的 Native 数据未变。测试副本和私人材料保留在本地。验证范围仍不等于所有 Word 版本、所有 MathType 公式或 Windows 往返。
 
+正式 PKG 已在本机完成升级安装，并通过 Word 冷启动加载、双击编辑、内容和字号保存、新公式插入及文档重开检查。安装后的 App、模板和原生组件与打包产物一致。安装包仍采用 ad-hoc 签名，尚未公证；这次本机升级不代替全新机器安装验证。
+
 This release connects editor numbering changes to Word and later insertions, fixes the first insertion in a new document, and advances the insertion cursor. It also improves sidebar positioning, document recovery after reopening, and cleanup when the last Word document closes. Font-only and ruler-only drafts remain protected during switching.
 
 Word 16.114.1 on Apple Silicon checks covered all 30 demo equations, 11 complex inputs, repeated insertion, numbering formats, left/right placement, deletion and REF updates, and document switching and closure. The last equation and point size in an unsaved 120-equation document survived saving and reopening; the other 119 Native payloads were unchanged. Test copies and private materials are not distributed. This is not a claim of compatibility with every Word version, MathType formula, or Windows round trip.
+
+The final PKG was installed as a local upgrade and checked with a fresh Word process: plugin loading, double-click editing, content and point-size save-back, insertion, and document reopening all passed. Installed app and native component hashes match the packaged artifacts. The package is still ad-hoc signed and not notarized; this local upgrade does not establish fresh-machine installation compatibility.
 
 ## 0.6.6 · build86
 
