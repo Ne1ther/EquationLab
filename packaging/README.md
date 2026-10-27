@@ -3,9 +3,9 @@
 版本与运行时配置在 `packaging/release.json`。先执行 `npm ci`，使用现有脚本构建：
 
 ```sh
-EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/.local/vendor-artifacts/build86-longdoc-v33" \
+EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/.local/vendor-artifacts/build90-numbering-v34" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --app-only --output dist/0.6.6-build86
+./scripts/package_release.sh --app-only --output dist/0.6.7-build90
 ```
 
 版本和构建号默认读取配置；输出目录须为空。本地功能迭代用 `./scripts/build_and_run.sh --word-test run`，不运行安装器。

@@ -1,6 +1,6 @@
 {
-  "version": "0.6.6",
-  "build": "86",
+  "version": "0.6.7",
+  "build": "90",
   "nodeVersion": "v24.21.0",
   "bundleIdentifier": "app.equationlab.mac",
   "minimumMacOS": "14.0",

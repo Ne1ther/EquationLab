@@ -61,7 +61,7 @@ async function readWordSession(ticket){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -167,8 +167,14 @@ export async function desktopRequest(request) {
    if(!o||o.mainDocument!==true||o.parseError||o.nativeSha256!==value.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
    target={index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:session.document.identity};
   }
+  let numbering;
+  if(payload.numbering!==undefined){
+   const value=payload.numbering;
+   if(!session.numberingSupport||!target||!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==2||!['left','right'].includes(value.side)||typeof value.format!=='string')throw Error('Word 编号目标或插件能力无效');
+   previewNumberFormat(value.format,{chapter:1,section:1,equation:1});numbering={format:value.format,side:value.side};
+  }
   const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex),ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),p=await nativePdf(ole);
-  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p,...target?{target}:{}});
+  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p,...target?{target}:{},...numbering?{numbering}:{}});
   return {...result,...session.acknowledgement?{acknowledgement:true}:{}};
  }
  if(action==='validate') {

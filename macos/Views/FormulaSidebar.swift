@@ -137,6 +137,7 @@ struct FormulaSidebar: View {
                 .font(.callout)
                 Spacer(minLength: 0)
             } else {
+                ScrollViewReader { scroll in
                 List {
                     ForEach(items) { item in
                         Button {
@@ -180,10 +181,38 @@ struct FormulaSidebar: View {
                             }
                         }
                         .help(bridge.t(item.detail))
+                        .id(item.id)
                     }
                 }
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
+                .onAppear {
+                    if !showingFavorites, let selected = bridge.state.selected, items.contains(where: { $0.id == selected }) {
+                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
+                    }
+                }
+                .onChange(of: bridge.state.selected) { _, selected in
+                    if !showingFavorites, let selected, items.contains(where: { $0.id == selected }) {
+                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
+                    }
+                }
+                .onChange(of: items.map(\.id)) { _, newIDs in
+                    if !showingFavorites, let selected = bridge.state.selected, newIDs.contains(selected) {
+                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
+                    }
+                }
+                .onChange(of: bridge.wordPresentationRevision) { _, revision in
+                    // A retained window can be hidden while its list is being
+                    // populated. Retry after it has had a layout pass, even if
+                    // the selected id is the same as in the previous session.
+                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
+                        guard revision == bridge.wordPresentationRevision, !showingFavorites,
+                              let selected = bridge.state.selected,
+                              items.contains(where: { $0.id == selected }) else { return }
+                        scroll.scrollTo(selected, anchor: .center)
+                    }
+                }
+                }
             }
             HStack(spacing: 6) {
                 Button { bridge.invoke("nativeNew") } label: {
@@ -193,10 +222,10 @@ struct FormulaSidebar: View {
                 Button { bridge.invoke("nativeOpen") } label: {
                     Label(bridge.language.usesEnglish ? "Open" : bridge.t("打开文档"), systemImage: "folder")
                         .lineLimit(1).frame(maxWidth: .infinity)
-                }.accessibilityLabel(bridge.t("打开文档")).help(bridge.t("打开文档"))
+                }.accessibilityLabel(bridge.t("打开文档")).help(bridge.t("打开文档")).disabled(bridge.wordSessionActive)
             }
             .buttonStyle(WorkbenchButtonStyle()).font(.system(size: 11))
-            .disabled(bridge.wordSessionActive || bridge.state.busy).padding(.horizontal, 12)
+            .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown).padding(.horizontal, 12)
             .modifier(WorkbenchFooter())
         }
     }

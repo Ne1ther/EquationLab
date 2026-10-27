@@ -1,7 +1,16 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
+import {readFile} from 'node:fs/promises';
 import {createDocx,inspectDocx,arrangeDocx,flatOpc,fromFlatOpc} from '../src/document.mjs';
+
+test('The published demo carries its chapter-number default for later Word insertions',async()=>{
+ const bytes=await readFile(new URL('../docs/examples/equation-lab-30-formulas.docx',import.meta.url)),doc=await inspectDocx(bytes);
+ assert.equal(doc.objects.length,30);
+ assert.match(await doc.zip.file('word/settings.xml').async('string'),/<w:docVar w:name="EquationLabNumberFormat" w:val="\(#C1\.#E1\)"\/>/);
+ assert.equal(doc.objects[29].layout.numberText,'(3.10)');
+ assert.equal(doc.objects[25].layout.bookmarkName,'EL_DEMO_26');assert.equal(doc.objects[25].layout.referenceCount,1);
+});
 
 test('Numbered DOCX integrates live chapter fields, stable references and package settings',async()=>{
  const bytes=await createDocx([{latex:'x^{2}',layout:{mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:3}},{latex:'y^{2}',layout:{mode:'numbered-left',numberFormat:'(#C1.#E1)',chapter:3}}],{fragment:true,references:[{target:0,prefix:'见式 '}]}),r=await inspectDocx(bytes);
@@ -9,8 +18,24 @@ test('Numbered DOCX integrates live chapter fields, stable references and packag
  assert.deepEqual(r.objects.map(o=>[o.layout.numberFormat,o.layout.chapter,o.layout.section]),[['(#C1.#E1)',3,1],['(#C1.#E1)',3,1]]);
  const xml=await r.zip.file('word/document.xml').async('string');assert.equal((xml.match(/SEQ ELChapter \\r 3/g)||[]).length,1);assert.ok(xml.includes('REF '+r.objects[0].layout.bookmarkName));
  assert.match(await r.zip.file('word/settings.xml').async('string'),/updateFields/);
+ assert.match(await r.zip.file('word/settings.xml').async('string'),/<w:docVar w:name="EquationLabNumberFormat" w:val="\(#C1\.#E1\)"\/>/);
  const opc=await flatOpc(bytes);assert.match(opc,/wordprocessingml.settings\+xml/);
  const after=await inspectDocx(await fromFlatOpc(opc));assert.equal(after.objects[0].nativeSha256,r.objects[0].nativeSha256);
+});
+
+test('only an unambiguous document format becomes a Word numbering preference',async()=>{
+ const chapter={mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:3,equation:11};
+ const document=await JSZip.loadAsync(await createDocx([{latex:'x',layout:chapter}],{fragment:true}));
+ assert.match(await document.file('word/settings.xml').async('string'),/w:name="EquationLabNumberFormat" w:val="\(#C1\.#E1\)"/);
+ const xml=await document.file('word/document.xml').async('string');
+ assert.match(xml,/SEQ ELChapter \\c/);
+ assert.match(xml,/SEQ EquationLab \\n/);
+ assert.match(xml,/>3<\/w:t>/);
+ assert.match(xml,/>11<\/w:t>/);
+ const insertion=await JSZip.loadAsync(await createDocx([{latex:'x',layout:chapter}],{fragment:true,initializeContext:false}));
+ assert.doesNotMatch(await insertion.file('word/settings.xml').async('string'),/EquationLabNumberFormat/,'a Word insertion fragment cannot overwrite destination preferences');
+ const mixed=await JSZip.loadAsync(await createDocx([{latex:'x',layout:chapter},{latex:'y',layout:{mode:'numbered-right',numberFormat:'(#E1)'}}],{fragment:true}));
+ assert.doesNotMatch(await mixed.file('word/settings.xml').async('string'),/EquationLabNumberFormat/,'mixed formats do not silently choose one');
 });
 
 test('Changing numbering side preserves native bytes, reference anchors and unrelated package parts',async()=>{

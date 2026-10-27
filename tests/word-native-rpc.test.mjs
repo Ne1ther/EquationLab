@@ -144,6 +144,21 @@ test('A sidebar target saves directly from its bound snapshot with one completio
  assert.deepEqual(result.target,target);assert.equal(result.native,expected.toString('base64'));assert.notEqual(result.native,source.native);
 });
 
+test('Number format changes require a capable Word host and an exact live document target',async()=>{
+ const document=await createDocx([{latex:'x^3'},{latex:'y^9'}]),objects=(await inspectDocx(document)).objects;
+ const native=inspectOle(objects[0].ole).native.toString('base64'),identity='word-format:doc',ooxml=await flatOpc(document);
+ const opened=await sessionOperation('native-open',{session:String(next++),native,acknowledgement:true,numberingSupport:true,document:{ooxml,index:0,name:'format.docx',identity,snapshot:1}});live.add(opened.ticket);
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:opened.ticket}});assert.equal(read.wordNumberingSupported,true);
+ const source={ticket:opened.ticket,path:read.activePath},target={index:1,expectedNativeSha256:objects[1].nativeSha256,documentIdentity:identity};
+ for(const numbering of [{format:'(#C1)',side:'right'},{format:'(#E1)',side:'bad'},{format:'(#E1)',side:'right',extra:true}])await assert.rejects(save(source,{target,numbering}));
+ await assert.rejects(save(source,{numbering:{format:'(#C1.#E1)',side:'right'}}),/编号目标/);
+ await save(source,{target,numbering:{format:'(#C1.#E1)',side:'left'}});
+ const result=await sessionOperation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
+ assert.deepEqual(result.target,target);assert.deepEqual(result.numbering,{format:'(#C1.#E1)',side:'left'});
+ const legacy=await openDocument(document,0);assert.equal((await desktopRequest({action:'wordSessionRead',payload:{ticket:legacy.ticket}})).wordNumberingSupported,false);
+ await assert.rejects(save(legacy,{target:targetOf(legacy,0),numbering:{format:'(#E1)',side:'right'}}),/插件能力/);
+});
+
 test('Alternate BOM-prefixed main parts populate context, validate target saves, and accept the generated insertion fragment',async()=>{
  const document=await alternateMainPart(await createDocx([{latex:'x^3'},{latex:'y_2+1'}])),inspected=await inspectDocx(document),ooxml=await flatOpc(document);
  assert.equal(inspected.mainPart,'word/document2.xml');assert.equal(inspected.objects.length,2);assert.ok(inspected.objects.every(object=>object.mainDocument));

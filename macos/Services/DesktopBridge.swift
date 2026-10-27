@@ -79,6 +79,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published var wordOfficeAccessRequired = false
     var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
+    @Published private(set) var wordPresentationRevision = 0
     @Published var wordSessionIsInsertion = false
     @Published var wordDocumentRequestPending = false
     var lastWordPluginVerification: (date: Date, wordPID: pid_t?)?
@@ -90,7 +91,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var wordToolIntents: [String: String] = [:]
     private var wordDocumentRequestIDs: [String: String] = [:]
     private var deliveringWordTicket: String?
-    private var refreshWordDocumentAfterLoad = false
+    private(set) var refreshWordDocumentAfterLoad = false
     private var wordWorkspaceTimer: Timer?
     func startWordWorkspaceObservation() {
         guard wordWorkspaceTimer == nil else { return }
@@ -200,6 +201,9 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if editorReady { deliverWordSession() }
     }
     func showEditorWindow(reason: String = "user") {
+        // A retained SwiftUI sidebar may already exist with the same selection;
+        // signal every accepted Word reveal even when no selection value changes.
+        if reason == "word-delivered" { wordPresentationRevision &+= 1 }
         pendingEditorReveal = (reason, reason == "word-delivered" ? wordTicket : nil, wordPresentationGeneration)
         guard let editorWindow else { recordWindowEvent("reveal_pending", reason: reason); return }
         pendingEditorReveal = nil
@@ -245,6 +249,13 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func reopenEditorFromDock() {
         showEditorWindow(reason: "dock-reopen")
+        // A Dock click during an edit only reveals that edit. Deferring a
+        // document restore here would open another OLE as soon as Save/Cancel
+        // releases this session and block the next Word insertion.
+        guard !hasWordSessionOrRequest else {
+            refreshWordDocumentAfterLoad = false
+            return
+        }
         refreshWordDocumentAfterLoad = true
         refreshVisibleWordDocumentIfNeeded()
     }
@@ -262,6 +273,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if let pending = payload["wordDocumentRequestPending"] as? Bool { wordDocumentRequestPending = pending }
         guard let active = payload["wordSession"] as? Bool else { return false }
         if active {
+            refreshWordDocumentAfterLoad = false
             wordSessionActive = true; wordSessionDelivered = true
             wordSessionIsInsertion = payload["wordSessionIsInsertion"] as? Bool ?? false
             if let ticket = payload["wordTicket"] as? String { wordTicket = ticket }
@@ -485,10 +497,11 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             let closing = payload["closing"] as? Bool == true
             let browsing = payload["browsing"] as? Bool == true
             let switchingDocument = payload["document"] as? Bool == true
+            let newFormula = payload["newFormula"] as? Bool == true
             alert.messageText = t(closing ? "当前公式尚不能保存" : "当前公式还有未保存的修改")
-            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : switchingDocument ? "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : newFormula ? "继续编辑当前公式，或放弃草稿并新建公式。" : switchingDocument ? "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
             alert.addButton(withTitle: t("继续编辑当前公式"))
-            alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : "放弃修改并打开"))
+            alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : newFormula ? "放弃修改并新建" : "放弃修改并打开"))
             let answer: NSApplication.ModalResponse
             answer = alert.runModal()
             reply(id, ["ok": true, "data": ["discard": answer == .alertSecondButtonReturn]]); return

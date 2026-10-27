@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.6.7 · build90
+
+这版重点修了编号写回。右侧编辑器改好编号格式后，点“更新公式”会应用到当前公式，也会留作这篇文档后续新增编号的格式。新文档首次插入和连续插入也走同一套规则，完成后光标移到新公式后面。Word 的“更新编号”继续负责重算已有序号和引用。
+
+补了靠后公式打开时的侧栏滚动、保存后系统重开的文档恢复，以及最后一份文档关闭后的状态清理。改过字体或标尺的草稿会继续受到切换保护。
+
+本轮在 Word 16.114.1 / Apple Silicon 上逐条打开 30 个演示公式和 11 种复杂公式，检查了新文档连续插入、编辑器与 Word 编号格式联动、左右编号、删除后重编号和 REF 更新、多文档切换与关闭。120 条复杂公式的未保存文档完成了末尾内容和字号修改、保存和重开，前 119 条公式的 Native 数据未变。测试副本和私人材料保留在本地。验证范围仍不等于所有 Word 版本、所有 MathType 公式或 Windows 往返。
+
+This release connects editor numbering changes to Word and later insertions, fixes the first insertion in a new document, and advances the insertion cursor. It also improves sidebar positioning, document recovery after reopening, and cleanup when the last Word document closes. Font-only and ruler-only drafts remain protected during switching.
+
+Word 16.114.1 on Apple Silicon checks covered all 30 demo equations, 11 complex inputs, repeated insertion, numbering formats, left/right placement, deletion and REF updates, and document switching and closure. The last equation and point size in an unsaved 120-equation document survived saving and reopening; the other 119 Native payloads were unchanged. Test copies and private materials are not distributed. This is not a claim of compatibility with every Word version, MathType formula, or Windows round trip.
+
 ## 0.6.6 · build86
 
 这次主要解决了长文档打开时的等待。尚未保存的长文档会先打开正在编辑的公式，其余内容分批读取，缩略图随着浏览补齐。列表加载期间，输入的内容和字号修改都会保留。已保存且没有修改的文档使用更快的读取路径。

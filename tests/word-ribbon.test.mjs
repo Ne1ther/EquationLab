@@ -14,6 +14,31 @@ await import('../word-ribbon/command-registry.js');
 const registry=globalThis.EquationLabCommands;
 const execFileAsync=promisify(execFile);
 
+test('Word and editor numbering changes retain a document-bound default for subsequent insertions',async()=>{
+ const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const procedure=(source,name)=>{const start=source.indexOf(name);assert.notEqual(start,-1);return source.slice(start,source.indexOf(name.includes('Function')?'End Function':'End Sub',start));};
+ const insert=procedure(ribbon,'Private Sub InsertEquation');
+ assert.match(insert,/ELDocumentNumberFormat\(Doc, selectedRange\.Start\)/);
+ const number=procedure(ribbon,'Public Sub NumberSelectedEquation');
+ assert.match(number,/UpdateNumbersForDocument Doc\s+If patternOverride <> "" Then SavePreferenceForDocument Doc, "EquationLabNumberFormat", patternOverride/,'only a successful, exact-target save adopts the editor format');
+ const adopt=procedure(ribbon,'Public Sub ELRememberInsertedNumberFormat');
+ assert.match(adopt,/inserted\.Document Is Doc/);assert.match(adopt,/bookmark\.Range\.Start >= inserted\.Start And bookmark\.Range\.End <= inserted\.End/);
+ assert.match(adopt,/If count = 1 Then SavePreferenceForDocument Doc/,'never infer an insertion preference from an unrelated bookmark');
+ const post=procedure(context,'Private Function ELTryUpdateInsertedNumbers');
+ assert.match(post,/ELUpdateNumbersForDocument Doc\s+If numberFormat = "" Then EquationLabRibbon\.ELRememberInsertedNumberFormat Doc, inserted/);
+ assert.match(post,/If numberFormat <> "" Then EquationLabRibbon\.ELAdoptInsertedNumberFormat Doc, numberFormat/);
+ const adoptCompleted=procedure(ribbon,'Public Sub ELAdoptInsertedNumberFormat');
+ assert.match(adoptCompleted,/ValidateRibbonNumberFormat pattern\s+SavePreferenceForDocument Doc, "EquationLabNumberFormat", pattern/);
+ assert.doesNotMatch(adoptCompleted,/ActiveDocument|Selection/);
+ const apply=procedure(context,'Private Sub ApplyInsertion');
+ assert.ok(apply.indexOf('MathTypeBridgeInsertionNumberingNext')<apply.indexOf('target.InsertFile'),'read the claimed format before Word mutation');
+ const format=procedure(ribbon,'Public Function ELDocumentNumberFormat');
+ assert.match(format,/PreferenceForDocument\(Doc, "EquationLabNumberFormat", ""\)/);assert.match(format,/If bestCount \* 2 > total/);
+ assert.doesNotMatch(format,/ActiveDocument|Selection\./,'a document B format cannot be redirected to document A');
+ const save=procedure(ribbon,'Private Sub SavePreferenceForDocument');assert.doesNotMatch(save,/On Error Resume Next|ActiveDocument/);
+});
+
 test('native Word Ribbon registry contains complete, taskpane-free command metadata',async()=>{
  assert.equal(registry.groups.length,5);assert.equal(registry.commands.length,19);
  assert.equal(new Set(registry.commands.map(command=>command.id)).size,registry.commands.length);
@@ -91,6 +116,9 @@ test('requested capture uses retained anchors or an exact first selection withou
  const save=procedure('Private Sub ApplyBackgroundSave');
  assert.match(save,/mBoundRanges\(CStr\(token\)\)/);assert.match(save,/ResolveBoundEquation\(Doc, anchor, index\)/);
  assert.doesNotMatch(save,/Set shape = equations\(index\)/);
+ assert.match(save,/stage = "resolve-equation"[\s\S]*ResolveBoundEquation/);
+ assert.ok(save.indexOf('failureNumber = Err.Number')<save.indexOf('MathTypeBridgeFailBackgroundSave'), 'retain the original error before calling the bridge');
+ assert.match(save,/background save unavailable at "; stage; ": "; failureNumber/);
  const poll=procedure('Public Sub ELPollNavigation');
  assert.ok(poll.indexOf('MathTypeBridgeTakeDocumentCaptureRequest')<poll.indexOf('MathTypeBridgeTransportActive'));
  assert.doesNotMatch(poll,/WordOpenXML/);
@@ -280,11 +308,25 @@ test('Word insertion postprocessing maps each phase to a safe native outcome',as
  assert.match(failed,/If mutationCompleted Then[\s\S]*?MathTypeBridgeFinishInsertion[\s\S]*?ElseIf mutationAttempted Then[\s\S]*?MathTypeBridgeUncertainInsertion[\s\S]*?Else[\s\S]*?MathTypeBridgeFailInsertion/);
  assert.match(failed,/Word may have inserted the equation\. Check the document; Equation Lab will not automatically repeat this insertion\./);
  assert.match(insertion,/ELInvalidateDocumentSnapshot/);
+ assert.match(insertion,/If inlineMode = 0 Then numberUpdateFailed = Not ELTryUpdateInsertedNumbers\(Doc, start, beforeEnd, numberFormat\)/);
+ assert.match(insertion,/Selection\.Document Is Doc[\s\S]*advanceCursor = \(Selection\.Range\.StoryType = wdMainTextStory And Selection\.Start = start And Selection\.End = start\)/);
+ assert.match(insertion,/mutationCompleted = True\s+Set insertedRange = Doc\.Range/);
+ const cursorStart=source.indexOf('Private Sub ELAdvanceInsertionCursor');
+ const cursor=source.slice(cursorStart,source.indexOf('End Sub',cursorStart));
+ assert.match(cursor,/If Not \(Selection\.Document Is Doc\) Then Exit Sub/);
+ assert.match(cursor,/If Selection\.Start <> inserted\.Start Or Selection\.End > inserted\.End Then Exit Sub/);
+ assert.match(cursor,/Selection\.SetRange Start:=inserted\.End, End:=inserted\.End/);
+ assert.doesNotMatch(cursor,/\.Select\b|\.Activate\b|OLEFormat/i);
+ assert.ok(insertion.indexOf('ELTryUpdateInsertedNumbers(Doc, start, beforeEnd)')<insertion.indexOf('MathTypeBridgeFinishInsertion'));
+ assert.match(insertion,/If numberUpdateFailed Then MsgBox "The equation was inserted, but its numbering could not be updated/);
  assert.equal((insertion.match(/\bClearInsertion\b/g)||[]).length,1,'insertion anchors must be cleared once on every path');
  assert.doesNotMatch(insertion,/\.Select\b|\.Activate\b|(?:Application|Doc)\.Undo/i);
  const cleanup=source.slice(source.indexOf('Private Function ELTryCleanupInlineInsertion'),source.indexOf('End Function',source.indexOf('Private Function ELTryCleanupInlineInsertion')));
  assert.match(cleanup,/On Error GoTo Failed/);assert.match(cleanup,/failureNumber = Err\.Number\s+failureDescription = Err\.Description/);
  assert.match(cleanup,/ELTryCleanupInlineInsertion = True/);
+ const numbers=source.slice(source.indexOf('Private Function ELTryUpdateInsertedNumbers'),source.indexOf('End Function',source.indexOf('Private Function ELTryUpdateInsertedNumbers')));
+ assert.match(numbers,/For Each field In inserted\.Fields[\s\S]*SEQ EQUATIONLAB[\s\S]*EquationLabRibbon\.ELUpdateNumbersForDocument Doc/);
+ assert.match(numbers,/On Error GoTo Failed[\s\S]*ELTryUpdateInsertedNumbers = True/);
  const native=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
  assert.match(native,/RIBBON_EXPORT\(MathTypeBridgeUncertainInsertion,\(\[&\]\(\)\{EquationLabFinishWordInsertionUncertain\(\);return 0;\}\)\(\)\)/);
 });
@@ -301,7 +343,7 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(number,/Set chosen = ELSelectedEquation\(Selection\)/);
  assert.match(number,/NumberSelectedEquation Doc, chosen, True/);
  assert.match(number,/If selectedRange\.Start <> selectedRange\.End Then[\s\S]*?InsertPreparedFragment "Number"/);
- const mutate=procedure('Private Sub NumberSelectedEquation');
+ const mutate=procedure('Public Sub NumberSelectedEquation');
  for(const guard of [/Doc\.ReadOnly/,/Doc\.TrackRevisions/,/Doc\.ProtectionType <> wdNoProtection/,/StoryType <> wdMainTextStory/,/MathTypeBridgeTransportActive/,/paragraph\.Revisions\.Count/,/paragraph\.InlineShapes\.Count <> 1/,/paragraph\.Editors\.Count/,/paragraph\.Tables\.Count/,/unsupported field/])assert.match(mutate,guard);
  assert.match(source,/field\.Type = wdFieldEmbed[\s\S]*?field\.Result\.InlineShapes\.Count <> 1[\s\S]*?RibbonEmbeddedEquationFieldStart\(field, Doc\)[\s\S]*?Doc\.Range\(fieldStart, field\.Result\.End \+ 1\)/,'the complete OLE EMBED wrapper stays outside all insertion points');
  assert.match(source,/embedded\.Code\.Start - 1 To embedded\.Code\.Start - 2 Step -1[\s\S]*?value <> Chr\$\(19\)/,'EMBED start resolution follows the tested macOS delimiter guard');
@@ -324,10 +366,23 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(source,/If bookmarkVisibilityChanged Then Doc\.Bookmarks\.ShowHidden = oldShowHidden/,'bookmark visibility is restored when a preflight rejects');
  assert.match(source,/Options\.SmartCutPaste = False[\s\S]*?Options\.SmartCutPaste = oldSmartCutPaste[\s\S]*?If smartCutPasteChanged Then Options\.SmartCutPaste = oldSmartCutPaste/,'SmartCutPaste is restored on success and failure');
  assert.match(source,/\.Text <> originalNumberText Or \.Fields\.Count <> originalNumberFields/,'bookmark drift aborts and rolls back the range operation');
+ assert.match(mutate,/originalLength = oldNumberRange\.End - oldNumberRange\.Start[\s\S]*?Set oldNumberRange = Doc\.Range\(copiedRange\.End, copiedRange\.End \+ originalLength\)[\s\S]*?oldNumberRange\.Text <> originalNumber Or oldNumberRange\.Fields\.Count <> originalFields[\s\S]*?oldNumberRange\.Delete/,'reacquire and verify the old field range after Word expands retained ranges');
  assert.match(source,/Len\("\\\* MERGEFORMAT"\)/,'Word formatting switch is accepted');
  assert.match(source,/cursor = field\.Result\.End \+ 1/,'literals and following fields are inserted outside the field end delimiter');
  assert.match(source,/Case "C": sequence = "ELChapter": command = "\\c"[\s\S]*?Case "S": sequence = "ELSection": command = "\\c"[\s\S]*?Case Else: sequence = "EquationLab": command = "\\n"/);
  assert.match(source,/If IsEquationReference\(field, Doc\) And Not field\.Locked Then field\.Update/,'reference fields are refreshed through the shared document-bound updater');
+});
+
+test('Word insertion preview reads sequence resets before the insertion position',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const start=source.indexOf('Private Function SequenceBeforeSelection');
+ assert.notEqual(start,-1);
+ const sequence=source.slice(start,source.indexOf('End Function',start));
+ assert.match(sequence,/field\.Code\.Start < Selection\.Start/);
+ assert.match(sequence,/parts\(i\) = "\\R"/);
+ assert.match(sequence,/parts\(i\) = "\\C"/);
+ assert.match(sequence,/If resetFound Then[\s\S]*value = resetValue[\s\S]*ElseIf Not repeatCurrent Then[\s\S]*value = value \+ 1/);
+ assert.match(source,/CurrentCounter\("ELChapter", Preference\("EquationLabChapter", "1"\)\)/);
 });
 
 test('Legacy MathType numbering visits nested code fields and preserves macrobuttons and hidden reference names',async()=>{

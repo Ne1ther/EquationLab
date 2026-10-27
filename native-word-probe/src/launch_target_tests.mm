@@ -92,6 +92,15 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
 }
 @end
 
+@interface NumberingReceiptTestTransport : ProbeEditorTransport
+@property(nonatomic,strong) NSDictionary* receipt;
+@end
+@implementation NumberingReceiptTestTransport
+- (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
+    (void)reply;if([path isEqual:@"/api/native-ack"])self.receipt=body;return nil;
+}
+@end
+
 @interface EnrichmentTestTransport : ProbeEditorTransport
 @property(nonatomic,strong) NSDictionary* enrichmentBody;
 @end
@@ -489,6 +498,14 @@ int main(){@autoreleasepool{
         NSDictionary* submittedDocument=serviceClient.submittedBody[@"document"];
         check(submittedDocument.count==5&&!submittedDocument[@"captureToken"]&&[submittedDocument[@"identity"] isEqual:@"process:1"]&&[submittedDocument[@"snapshot"] isEqual:@124],"internal ELCTX4 token leaked into the service's strict public document schema");
         check([serviceState.documentContext[@"captureToken"] isEqual:@123],"service serialization mutated the verified host context");
+        ProbeEditorTransport* previousTransport=transport;NumberingReceiptTestTransport* receiptClient=[NumberingReceiptTestTransport new];transport=receiptClient;
+        check(MathTypeBridgeRegisterNumberingSupport()==0&&receiptClient.numberingSupportRegistered,"matching Word template could not register numbering capability");
+        ProbeBackgroundSave* numberSave=[ProbeBackgroundSave new];numberSave.claimed=YES;numberSave.nativeApplied=YES;numberSave.ticket=@"ticket";numberSave.session=@"1";numberSave.numbering=@{@"format":@"(#C1.#E1)",@"side":@"left"};receiptClient.backgroundSave=numberSave;
+        check(MathTypeBridgeBackgroundNumberingSide()==1,"verified numbering side lost");NSMutableString* format=[NSMutableString string];std::int32_t character=0;
+        while((character=MathTypeBridgeBackgroundNumberingNext())>0)[format appendFormat:@"%C",static_cast<unichar>(character-1)];
+        check([format isEqual:@"(#C1.#E1)"]&&MathTypeBridgeFinishBackgroundNumbering()==0&&[receiptClient.receipt[@"ok"] boolValue]&&!receiptClient.backgroundSave,"numbering completion did not acknowledge exactly once");
+        receiptClient.receipt=nil;numberSave=[ProbeBackgroundSave new];numberSave.claimed=YES;numberSave.nativeApplied=YES;numberSave.ticket=@"ticket";numberSave.session=@"1";numberSave.numbering=@{@"format":@"(#E1)",@"side":@"right"};receiptClient.backgroundSave=numberSave;
+        check(MathTypeBridgeFailBackgroundSave()==0&&[receiptClient.receipt[@"uncertain"] boolValue]&&![receiptClient.receipt[@"ok"] boolValue]&&!receiptClient.backgroundSave,"post-save numbering failure was incorrectly reported as a retryable failure");transport=previousTransport;
         runDocumentCacheCases();
         runCaptureRequestCases();
         runPreCapturedActivationCases();

@@ -102,6 +102,7 @@ struct WorkbenchState: Decodable {
     var documentPath = ""
     var latex = ""
     var selected: Int? = nil
+    var wordInsertionEquation: Int? = nil
     var objects: [SidebarFormula] = []
     var favorites: [SidebarFormula] = []
     var categories: [String] = []
@@ -152,6 +153,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("documentPath", String.self) { documentPath = v }
         if let v = try value("latex", String.self) { latex = v }
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
+        if payload["wordInsertionEquation"] is NSNull { wordInsertionEquation = nil } else if let v = try value("wordInsertionEquation", Int.self) { wordInsertionEquation = v }
         if let v = try value("objects", [SidebarFormula].self) { objects = v }
         if let v = try value("wordDocumentLoading", Bool.self) { wordDocumentLoading = v }
         if let v = try value("wordDocumentLoadFailed", Bool.self) { wordDocumentLoadFailed = v }

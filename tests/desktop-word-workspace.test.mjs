@@ -55,6 +55,29 @@ test('A nonempty insertion draft is preserved when switching is declined',async(
  assert.equal(e.calls.some(c=>['detach','wordDocumentOpen'].includes(c.action)),false);
 });
 
+test('New detaches a clean Word session and preserves a draft unless the user confirms',async()=>{
+ for(const [dirty,approved] of [[false,false],[true,false],[true,true]]){
+  const e=setup();e.state.source=document();e.state.wordTicket=ticket;e.state.draftChanged=dirty;
+  let cleared=0;e.api.empty=()=>{cleared++;};if(approved)e.discard();
+  assert.equal(await e.workspace.newFormula(),!dirty||approved);
+  assert.equal(e.calls.filter(c=>c.action==='confirmWordSessionSwitch').length,dirty?1:0);
+  assert.equal(e.calls.filter(c=>c.action==='detach').length,!dirty||approved?1:0);
+  assert.equal(cleared,!dirty||approved?1:0);
+  if(dirty&&!approved)assert.equal(e.state.wordTicket,ticket);
+ }
+ for(const key of ['busy','outcomeUnknown']){
+  const e=setup();e.state.source=document();e.state.wordTicket=ticket;e.state[key]=true;
+  assert.equal(await e.workspace.newFormula(),false);assert.equal(e.calls.length,0);
+ }
+});
+
+test('New cannot detach a replacement session after a delayed confirmation',async()=>{
+ const e=setup(),reply=deferred();e.state.source=document();e.state.wordTicket=ticket;e.state.draftChanged=true;
+ e.behavior(async action=>action==='confirmWordSessionSwitch'?reply.promise:undefined);
+ const request=e.workspace.newFormula();e.state.wordTicket='e'.repeat(64);reply.resolve({discard:true});
+ assert.equal(await request,false);assert.equal(e.calls.some(c=>c.action==='detach'),false);
+});
+
 test('An approved switch is tied to the exact document, formula index and original native hash',async()=>{
  const e=setup();e.state.source=document();e.state.wordTicket=ticket;e.state.draftChanged=true;e.discard();
  assert.equal(await e.workspace.select(0),true);assert.equal(await e.workspace.prepareIncoming({...document(),insertion:false,activeIndex:0},requestId),true);
@@ -350,6 +373,30 @@ test('Metadata retirement leaves a pending request intact and disconnected metad
  disconnectedCase.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus('word:B'),connected:false,retiredIdentities:['word:A']}:undefined);
  assert.equal(await disconnectedCase.workspace.refreshList(),false);assert.equal(disconnectedCase.workspace.wordDocumentUnavailable,false);
  assert.equal(disconnectedCase.state.source,old);assert.equal(disconnectedCase.state.wordTicket,ticket);
+});
+
+test('A no-document completion clears an empty cached retirement banner',async()=>{
+ const e=setup();let wake,finished=false;
+ e.api.pause=()=>new Promise(resolve=>{wake=resolve;});
+ e.workspace.remember({...document(),documentIdentity:'word:A',documentName:'A.docx'});
+ e.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus(null),active:null,documents:[],retiredIdentities:['word:A']}:action==='wordDocumentStatus'?{state:finished?'no-document':'queued'}:undefined);
+ assert.equal(await e.workspace.resume(),true);await new Promise(resolve=>setImmediate(resolve));
+ await e.workspace.refreshList();assert.equal(e.workspace.wordDocumentUnavailable,true);
+ finished=true;wake();await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(e.workspace.pending,false);assert.equal(e.workspace.hasDocument,false);
+ assert.equal(e.workspace.wordDocumentUnavailable,false);assert.equal(e.workspace.documentName,null);
+});
+
+test('Clearing a detached closed-document draft retires its title even when active identity stays null',async()=>{
+ const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'A.docx'};
+ Object.assign(e.state,{source:old,wordTicket:ticket,draftChanged:true});e.workspace.accepted(old);e.workspace.remember(old);
+ e.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus(null),active:null,documents:[],retiredIdentities:['word:A']}:undefined);
+ let cleared=0;e.api.empty=()=>cleared++;
+ await e.workspace.syncCurrent();assert.equal(e.workspace.wordDocumentUnavailable,true);
+ assert.equal(e.state.source,null);assert.equal(cleared,0,'a retained draft is not reset');
+ e.state.draftChanged=false;
+ assert.equal(await e.workspace.syncCurrent(),true);assert.equal(e.workspace.wordDocumentUnavailable,false);
+ assert.equal(e.workspace.documentName,null);assert.equal(cleared,1);
 });
 test('Choosing a nonactive document binds a fresh request to that identity, not the active one',async()=>{
  const e=setup(),old={...document(),documentIdentity:'word:A',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);

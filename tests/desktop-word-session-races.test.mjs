@@ -237,6 +237,18 @@ test('Saving a locally browsed formula sends one target-bound save without navig
  assert.equal(savedPayload.latex,draft);
 });
 
+test('A changed Word number format is bound to the selected equation, including the active owner',async()=>{
+ const ticket='7'.repeat(64),objects=sourceDocument.objects.map((object,index)=>({...object,index}));let submitted;
+ const editor=createEditor(async(action,payload)=>{if(action==='wordSessionSave')submitted=payload;return {acknowledgement:false};}),context=editor.context;
+ const elements=new Map();context.$=id=>{if(!elements.has(id))elements.set(id,{disabled:false,value:'',hidden:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
+ context.favorites=[];context.wordTicket=ticket;context.source={wordNumberingSupported:true,hasDocumentContext:true,documentIdentity:'live-document-1',activeIndex:25,path:'/tmp/equations.docx',objects};
+ context.selected=objects[25];context.selected.editorBaseline=context.selected.latex;context.mf.value=context.selected.latex;
+ context.$('layout-format').value='[#C1-#E1]';installWordCommit(context);
+ assert.equal(await context.window.nativeCommitWordSession(),true,editor.messages.join(' | '));
+ assert.deepEqual(JSON.parse(JSON.stringify(submitted.target)),{index:25,expectedNativeSha256:objects[25].nativeSha256,documentIdentity:'live-document-1'});
+ assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering)),{format:'[#C1-#E1]',side:'right'});
+});
+
 test('Save preflight locks the captured local formula until its single target-bound write completes',async()=>{
  const ticket='3'.repeat(64),targetIndex=25,nextIndex=16;let startValidation,releaseValidation;
  const validationStarted=new Promise(resolve=>{startValidation=resolve;}),validationGate=new Promise(resolve=>{releaseValidation=resolve;});

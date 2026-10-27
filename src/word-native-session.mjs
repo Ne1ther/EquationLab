@@ -70,8 +70,8 @@ function request(operation,body){
  if(!operations.has(operation))throw Error('Unknown native session operation');
  if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid native session request');
  body={...body};
- for(const key of ['document','target','layout'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
- const allowed=operation==='native-open'?['session','native','acknowledgement','document']:operation==='native-insert-open'?['session','acknowledgement','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
+ for(const key of ['document','target','layout','numbering'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
+ const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','document']:operation==='native-insert-open'?['session','acknowledgement','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
  if(operation==='native-open'||operation==='native-insert-open')uint64(body.session);
  else{
@@ -219,6 +219,12 @@ function saveTarget(value,document){
  if(value.index>=document.count||!selected||selected.mainDocument!==true||selected.error||selected.nativeSha256!==value.expectedNativeSha256)throw Error('Word save target equation does not match the document snapshot');
  return {index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:document.identity};
 }
+function saveNumbering(value,target,entry){
+ if(value===undefined)return null;
+ if(entry.insertion||!entry.numberingSupport||!target||!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==2||!['left','right'].includes(value.side)||typeof value.format!=='string')throw Error('Invalid Word numbering request');
+ previewNumberFormat(value.format,{chapter:1,section:1,equation:1});
+ return {format:value.format,side:value.side};
+}
 
 /** In-memory, local native editing sessions. No networking or logging occurs.
  * path is native-open/native-insert-open/poll/read/complete/cancel, optionally prefixed /api/.
@@ -258,6 +264,7 @@ export async function nativeSessionOperation(path,body){
    const insertion=operation==='native-insert-open';
    if(insertion&&body.acknowledgement!==true)throw Error('Insertion sessions require native acknowledgement');
    if(!insertion&&body.acknowledgement!==undefined&&body.acknowledgement!==true)throw Error('Invalid native acknowledgement capability');
+   if(!insertion&&body.numberingSupport!==undefined&&body.numberingSupport!==true)throw Error('Invalid native numbering capability');
    if(body.acknowledgement&&receipts.size>=64)throw Error('Too many native receipts');
    let native,document,layout;
    try{
@@ -275,7 +282,7 @@ export async function nativeSessionOperation(path,body){
    }catch(error){native?.fill(0);throw error;}
    let ticket;
    do{ticket=randomBytes(32).toString('hex');}while(sessions.has(ticket));
-   const entry={ticket,session:body.session,document,layout,insertion,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
+   const entry={ticket,session:body.session,document,layout,insertion,numberingSupport:body.numberingSupport===true,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
    sessions.set(ticket,entry);arm(entry);
    return {ticket,editorUrl:'equationlab://word-edit/'+ticket,documentContext:contextStatus(document)};
   }
@@ -283,7 +290,7 @@ export async function nativeSessionOperation(path,body){
   if(operation==='native-cancel'&&entry.insertion&&entry.state==='complete')throw Error('Cannot cancel a completed Word insertion before host acknowledgement');
   if(operation==='native-poll'){
    if(entry.state==='editing')return {state:'editing',...entry.documentRequested?{loadDocument:true}:{}};
-   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height,...entry.insertion?{docx:entry.result.docx.toString('base64'),insertionMode:entry.result.insertionMode}:{},...entry.result.target?{target:entry.result.target}:{}}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
+   const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height,...entry.insertion?{docx:entry.result.docx.toString('base64'),insertionMode:entry.result.insertionMode,insertionNumberFormat:entry.result.insertionNumberFormat}:{},...entry.result.target?{target:entry.result.target}:{},...entry.result.numbering?{numbering:entry.result.numbering}:{}}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
    await discard(entry);
    const receipt=receipts.get(body.ticket);
    if(receipt?.state==='queued'){receipt.state='delivered';receipt.deliveredAt=Date.now();}
@@ -311,7 +318,7 @@ export async function nativeSessionOperation(path,body){
   if(operation==='native-read'){
    const path=await stage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(entry.document),...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name,identity:entry.document.identity,snapshot:entry.document.snapshot,...entry.document.partial?{scope:'selection',position:entry.document.position,count:entry.document.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(entry.document),...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name,identity:entry.document.identity,snapshot:entry.document.snapshot,...entry.document.partial?{scope:'selection',position:entry.document.position,count:entry.document.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
   }
   if(operation==='native-navigate'){
    if(entry.insertion||!entry.document||entry.document.partial||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');
@@ -321,7 +328,7 @@ export async function nativeSessionOperation(path,body){
    await removeStage(entry);entry.native.fill(0);entry.native=null;entry.state='cancelled';
    return {ok:true,state:'cancelled'};
   }
-  let native,pdf,docx,insertionMode;
+  let native,pdf,docx,insertionMode,insertionNumberFormat=null;
   try{
    const width=extent(body.width),height=extent(body.height);
    if(entry.insertion){
@@ -329,6 +336,7 @@ export async function nativeSessionOperation(path,body){
     if(body.docx===undefined)throw Error('Insertion completion requires a DOCX fragment');
    }else if(body.docx!==undefined)throw Error('DOCX fragments are only valid for insertion sessions');
    const target=entry.insertion?null:saveTarget(body.target,entry.document);
+   const numbering=saveNumbering(body.numbering,target,entry);
    native=nativeBlob(body.native);pdf=pdfBlob(body.pdf);
    if(entry.insertion){
     docx=blob(body.docx);
@@ -337,13 +345,17 @@ export async function nativeSessionOperation(path,body){
      if(equations.length!==1||equations[0].mainDocument!==true||equations[0].parseError)throw Error('Insertion DOCX must contain exactly one valid equation');
      insertionMode=equations[0].layout.mode;
      if(!['inline','display','numbered-left','numbered-right'].includes(insertionMode))throw Error('Insertion DOCX has an invalid layout');
+     if(insertionMode.startsWith('numbered-')){
+      insertionNumberFormat=equations[0].layout.numberFormat;
+      previewNumberFormat(insertionNumberFormat,{chapter:1,section:1,equation:1});
+     }
      const equationNative=inspectOle(equations[0].ole).native;
      try{if(!equationNative.equals(native))throw Error('Insertion DOCX equation does not match submitted native data');}finally{equationNative.fill(0);}
     }finally{for(const equation of equations)equation.ole.fill(0);}
    }
    await removeStage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height,target,docx,insertionMode};entry.state='complete';
+   entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height,target,numbering,docx,insertionMode,insertionNumberFormat};entry.state='complete';
    // Keep an unresolved acknowledgement until Word reports a terminal result.
    if(entry.acknowledgement)receipts.set(entry.ticket,{session:entry.session,state:'queued',deliveredAt:null,expires:null});
    native=null;pdf=null;docx=null;return {ok:true,checked:true,state:'complete'};

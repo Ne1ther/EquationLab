@@ -15,7 +15,7 @@ struct NumberingFormatEditor: View {
     ]
     private var chapter: Int { counter("layout-chapter", fallback: bridge.state.numbering?.chapter ?? 1) }
     private var section: Int { counter("layout-section", fallback: bridge.state.numbering?.section ?? 1) }
-    private var equation: Int { bridge.state.numbering?.equation ?? 1 }
+    private var equation: Int { bridge.state.numbering?.equation ?? bridge.state.wordInsertionEquation ?? 1 }
     private var previewKey: String { "\(draft)|\(chapter)|\(section)|\(equation)" }
     private func counter(_ id: String, fallback: Int) -> Int {
         guard let value = bridge.state.layout.first(where: { $0.id == id })?.value, !value.isEmpty else { return fallback }
@@ -29,10 +29,11 @@ struct NumberingFormatEditor: View {
             }, set: { value in if value != "custom" { draft = value } })) {
                 ForEach(presets, id: \.0) { Text($0.1).tag($0.0) }
                 Text(bridge.t("自定义")).tag("custom")
-            }.controlSize(.small)
+            }.controlSize(.small).disabled(field.disabled)
             TextField(bridge.t("自定义编号格式"), text: $draft, prompt: Text("(#C1.#E1)"))
                 .textFieldStyle(.roundedBorder).font(.system(.body, design: .monospaced))
                 .accessibilityLabel(bridge.t("自定义编号格式"))
+                .disabled(field.disabled)
 
             VStack(alignment: .leading, spacing: 6) {
                 Text(bridge.t("格式预览")).font(.caption).foregroundStyle(.secondary)
@@ -43,7 +44,7 @@ struct NumberingFormatEditor: View {
                     numberBadge(preview.isEmpty ? "…" : preview)
                         .accessibilityLabel(bridge.t("格式预览")).accessibilityValue(preview)
                     counters(chapter, section, equation)
-                    if bridge.state.numbering?.equation == nil {
+                    if bridge.state.numbering?.equation == nil && bridge.state.wordInsertionEquation == nil {
                         Text(bridge.t("以上为示例计数，实际序号由 Word 更新。")).font(.caption2).foregroundStyle(.secondary)
                     }
                 }
@@ -83,8 +84,11 @@ struct NumberingFormatEditor: View {
             }
             Text(bridge.t("#C 为章、#S 为节、#E 为公式；1 为数字，A/a 为字母，I/i 为罗马数字。"))
                 .font(.caption2).foregroundStyle(.secondary)
-            if bridge.wordSessionActive {
-                Text(bridge.t("这里可试用格式；保存公式会保留 Word 中现有的编号。"))
+            if bridge.wordSessionIsInsertion {
+                Text(bridge.t("插入时使用此编号格式；章、节和序号由 Word 提供。"))
+                    .font(.caption2).foregroundStyle(.secondary)
+            } else if bridge.wordSessionActive {
+                Text(bridge.t(field.disabled ? "文档编号信息尚不可用，暂不能更改编号格式。" : "更新公式时将应用此格式，并用于本篇文档后续新增的编号公式。"))
                     .font(.caption2).foregroundStyle(.secondary)
             } else if bridge.state.canArrange {
                 Text(bridge.t("更改格式后，另存编排后的 Word 副本即可应用。"))

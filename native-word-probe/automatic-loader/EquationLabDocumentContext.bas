@@ -2,6 +2,7 @@ Attribute VB_Name = "EquationLabDocumentContext"
 Option Explicit
 
 Private mEvents As EquationLabWordEvents
+Private mNumberingRegistered As Boolean
 Private mDocument As Document
 Private mEquations As Collection
 Private mPollScheduled As Boolean
@@ -360,8 +361,16 @@ Private Sub ELClearSelectionCaptureDuringCapture()
 End Sub
 
 Public Sub ELStartDocumentEvents()
+    ELRegisterNumberingSupport
     If mEvents Is Nothing Then Set mEvents = New EquationLabWordEvents
     Set mEvents.Host = Word.Application
+End Sub
+
+Private Sub ELRegisterNumberingSupport()
+    If mNumberingRegistered Then Exit Sub
+    On Error Resume Next
+    ' Advertise only after the matching template has installed its callback.
+    mNumberingRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingSupport") = 0)
 End Sub
 
 Public Sub ELQueueDisplayRefresh(ByVal Doc As Document)
@@ -810,6 +819,28 @@ Failed:
     Err.Clear
 End Function
 
+Private Function ELTryUpdateInsertedNumbers(ByVal Doc As Document, ByVal insertionStart As Long, ByVal beforeEnd As Long, ByVal numberFormat As String) As Boolean
+    On Error GoTo Failed
+    Dim insertedEnd As Long, inserted As Range, field As Field, code As String
+    insertedEnd = insertionStart + Doc.Content.End - beforeEnd
+    If insertedEnd <= insertionStart Then Exit Function
+    Set inserted = Doc.Range(insertionStart, insertedEnd)
+    For Each field In inserted.Fields
+        code = UCase$(Trim$(field.Code.Text))
+        If Left$(code, 15) = "SEQ EQUATIONLAB" Then
+            EquationLabRibbon.ELUpdateNumbersForDocument Doc
+            If numberFormat = "" Then EquationLabRibbon.ELRememberInsertedNumberFormat Doc, inserted
+            Exit For
+        End If
+    Next
+    If numberFormat <> "" Then EquationLabRibbon.ELAdoptInsertedNumberFormat Doc, numberFormat
+    ELTryUpdateInsertedNumbers = True
+    Exit Function
+Failed:
+    Debug.Print "Equation Lab inserted number update failed: "; Err.Number
+    Err.Clear
+End Function
+
 Public Sub ELBeginEquationInsertion(ByVal kind As String)
     If EquationLabNativeCommand("MathTypeBridgeInsertionActive") <> 0 Or EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then
         Err.Raise vbObjectError + 7358, "Equation Lab", "Please finish or cancel the current equation first."
@@ -861,10 +892,12 @@ End Sub
 Private Sub ApplyInsertion(ByVal token As Long)
     On Error GoTo Failed
     Dim Doc As Document, candidate As Document, isOpen As Boolean, result As Long
-    Dim start As Long, beforeEnd As Long, target As Range
+    Dim start As Long, beforeEnd As Long, target As Range, insertedRange As Range
+    Dim advanceCursor As Boolean
     Dim inlineMode As Long, mutationAttempted As Boolean, mutationCompleted As Boolean
-    Dim cleanupFailed As Boolean, finishAttempted As Boolean
+    Dim cleanupFailed As Boolean, numberUpdateFailed As Boolean, finishAttempted As Boolean
     Dim failureNumber As Long, failureDescription As String
+    Dim numberFormat As String, codeUnit As Long
     If token <> mInsertionToken Or mInsertionToken <= 0 Then GoTo Failed
     Set Doc = mInsertionDocument
     If Doc Is Nothing Or mInsertionRange Is Nothing Then GoTo Failed
@@ -876,15 +909,27 @@ Private Sub ApplyInsertion(ByVal token As Long)
     If mInsertionRange.StoryType <> wdMainTextStory Or mInsertionRange.Start <> mInsertionRange.End Or mInsertionRange.Text <> "" Then GoTo Failed
     inlineMode = EquationLabNativeCommand("MathTypeBridgeInsertionInline")
     If inlineMode < 0 Then GoTo Failed
+    Do
+        codeUnit = EquationLabNativeCommand("MathTypeBridgeInsertionNumberingNext")
+        If codeUnit < 0 Or Len(numberFormat) >= 128 And codeUnit <> 0 Then GoTo Failed
+        If codeUnit = 0 Then Exit Do
+        codeUnit = codeUnit - 1
+        If codeUnit > 32767 Then codeUnit = codeUnit - 65536
+        numberFormat = numberFormat & ChrW$(codeUnit)
+    Loop
     Set target = mInsertionRange.Duplicate
     start = target.Start
     beforeEnd = Doc.Content.End
+    If Selection.Document Is Doc Then
+        advanceCursor = (Selection.Range.StoryType = wdMainTextStory And Selection.Start = start And Selection.End = start)
+    End If
     Dim directory As String
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     mutationAttempted = True
     target.InsertFile FileName:=directory & "/.EquationLab/ribbon-complete-insert.docx", ConfirmConversions:=False, Link:=False, Attachment:=False
     mutationCompleted = True
+    Set insertedRange = Doc.Range(start, start + Doc.Content.End - beforeEnd)
     On Error Resume Next
     ELInvalidateDocumentSnapshot
     Err.Clear
@@ -894,6 +939,8 @@ Private Sub ApplyInsertion(ByVal token As Long)
     ' following body text stays in its original paragraph. Never delete an
     ' original paragraph boundary or infer the mode from the initial button.
     If inlineMode = 1 Then cleanupFailed = Not ELTryCleanupInlineInsertion(Doc, start, beforeEnd)
+    If inlineMode = 0 Then numberUpdateFailed = Not ELTryUpdateInsertedNumbers(Doc, start, beforeEnd, numberFormat)
+    If advanceCursor Then ELAdvanceInsertionCursor Doc, insertedRange
     ' Completion does not select or activate the new OLE object. Its content
     ' has already been edited; opening it again causes focus and sizing-frame races.
     On Error Resume Next
@@ -902,6 +949,7 @@ Private Sub ApplyInsertion(ByVal token As Long)
     Err.Clear
     On Error GoTo Failed
     If cleanupFailed Then MsgBox "The equation was inserted, but Word's paragraph layout could not be confirmed. Check the paragraph layout in Word.", vbExclamation, "Equation Lab"
+    If numberUpdateFailed Then MsgBox "The equation was inserted, but its numbering could not be updated. Use Update Numbers in Word and check the result.", vbExclamation, "Equation Lab"
     GoTo Finished
 Failed:
     failureNumber = Err.Number
@@ -927,7 +975,19 @@ Finished:
     ClearInsertion
 End Sub
 
+Private Sub ELAdvanceInsertionCursor(ByVal Doc As Document, ByVal inserted As Range)
+    On Error GoTo Unavailable
+    ' Advance only the original empty insertion cursor. A user who moved to
+    ' another document or another position keeps that selection unchanged.
+    If Not (Selection.Document Is Doc) Then Exit Sub
+    If Selection.Range.StoryType <> wdMainTextStory Then Exit Sub
+    If Selection.Start <> inserted.Start Or Selection.End > inserted.End Then Exit Sub
+    Selection.SetRange Start:=inserted.End, End:=inserted.End
+Unavailable:
+End Sub
+
 Public Sub ELPollNavigation()
+    ELRegisterNumberingSupport
     On Error GoTo Failed
     mPollScheduled = False
     ELReconcileKnownDocuments
@@ -1399,25 +1459,60 @@ End Sub
 Private Sub ApplyBackgroundSave(ByVal token As Long)
     On Error GoTo Failed
     Dim Doc As Document, anchors As Collection, anchor As Range, shape As InlineShape, index As Long, result As Long
+    Dim stage As String, failureNumber As Long, failureDescription As String, side As Long, codeUnit As Long, numberFormat As String
+    stage = "bindings"
     If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
+    stage = "document-anchor"
     Set Doc = mBoundDocuments(CStr(token))
     Set anchors = mBoundRanges(CStr(token))
+    stage = "target-index"
     index = EquationLabNativeCommand("MathTypeBridgeBackgroundSaveIndex")
     If index <= 0 Or index > anchors.Count Then GoTo Failed
     Set anchor = anchors(index)
+    stage = "resolve-equation"
     Set shape = ResolveBoundEquation(Doc, anchor, index)
     If shape Is Nothing Then GoTo Failed
+    stage = "validate-equation"
     If Not (shape.Range.Document Is Doc) Then GoTo Failed
     If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
     If Not Supported(shape) Then GoTo Failed
     ' Activation supplies the target's real OLE owner and client site. Native
     ' code verifies its original Native hash and applies the prepared result
     ' directly. Do not select/scroll the object or launch the editor again.
+    stage = "activate-ole"
     shape.OLEFormat.Activate
-    result = EquationLabNativeCommand("MathTypeBridgeBackgroundSaveActivationFinished")
+    stage = "numbering-side"
+    side = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingSide")
+    If side > 0 Then
+        If side <> 1 And side <> 2 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Invalid numbering side."
+        stage = "numbering-format"
+        Do
+            codeUnit = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingNext")
+            If codeUnit < 0 Or Len(numberFormat) >= 128 And codeUnit <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Invalid numbering format."
+            If codeUnit = 0 Then Exit Do
+            codeUnit = codeUnit - 1
+            If codeUnit > 32767 Then codeUnit = codeUnit - 65536
+            numberFormat = numberFormat & ChrW$(codeUnit)
+        Loop
+        stage = "resolve-numbering-target"
+        Set shape = ResolveBoundEquation(Doc, anchor, index)
+        If shape Is Nothing Then Err.Raise vbObjectError + 7380, "Equation Lab", "The saved equation is no longer available for numbering."
+        stage = "apply-numbering"
+        EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True
+        stage = "finish-numbering"
+        result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumbering")
+        If result <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Word did not confirm the numbering update."
+    End If
+    stage = "finish-activation"
+    If side <= 0 Then result = EquationLabNativeCommand("MathTypeBridgeBackgroundSaveActivationFinished")
     mSnapshotReady = False
     Exit Sub
 Failed:
+    ' Preserve the original error before the bridge call can overwrite Err.
+    ' Do not log document identity, content, paths or session tokens.
+    failureNumber = Err.Number: failureDescription = Err.Description
     result = EquationLabNativeCommand("MathTypeBridgeFailBackgroundSave")
-    Debug.Print "Equation Lab background save unavailable: "; Err.Number
+    Debug.Print "Equation Lab background save unavailable at "; stage; ": "; failureNumber
+    ' Only our own fixed validation messages are safe to expose as diagnostics.
+    If failureNumber >= vbObjectError + 7360 And failureNumber <= vbObjectError + 7363 Then Debug.Print "Equation Lab numbering validation: "; failureDescription
 End Sub

@@ -124,6 +124,30 @@ test('Settings-only insertion drafts require confirmation before sidebar switchi
  }
 });
 
+test('a numbered Word insertion submits the format selected in the inspector',async()=>{
+ const editor=createEditor(),{context:c}=editor;
+ editor.element('layout-mode').options=[{value:'numbered-right',textContent:'右侧编号'}];
+ vm.runInContext(slice('function loadObjectLayout(', 'function wordLayout()'),c);
+ const layout={mode:'numbered-right',numberFormat:'(#E1)',chapter:3,section:1,equation:11};
+ let submitted;
+ editor.setNativeBehavior(async(action,payload)=>{
+  if(action==='wordSessionRead')return {...insertionDocument,insertionLayout:layout};
+  if(action==='wordSessionInsert'){submitted=payload;return {acknowledgement:false};}
+  return {};
+ });
+ assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+ assert.equal(editor.element('layout-format').disabled,false);
+ assert.equal(editor.element('layout-mode').disabled,true);
+ assert.equal(editor.element('layout-chapter').disabled,true);
+ assert.equal(editor.element('layout-section').disabled,true);
+ editor.element('layout-format').value='(#C1.#E1)';
+ c.mf.value='x+1';c.changed();
+ assert.equal(await c.window.nativeCommitWordSession(),true);
+ assert.equal(submitted.layout.numberFormat,'(#C1.#E1)');
+ assert.equal(submitted.layout.chapter,3);
+ assert.equal(submitted.layout.equation,11);
+});
+
 test('Opening a Word insertion session keeps the editor blank and retains the full document sidebar',async()=>{
  const editor=createEditor(),{context:c}=editor;
  assert.equal(await c.window.nativeOpenWordSession(ticket),true,editor.messages.map(item=>item.text).join(' | '));

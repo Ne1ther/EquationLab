@@ -82,6 +82,7 @@ test('RPC insertion commits a one-equation DOCX fragment with the exact native a
  assert.equal(fragment.objects[0].layout.numberFormat,'[Ch #C1.S #S1.Eq #E1]');assert.equal(fragment.objects[0].layout.numberText,'[Ch 7.S 3.Eq 29]');
  const polled=await operation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
  assert.equal(polled.state,'complete');assert.equal(polled.native,complete.body.native);assert.equal(polled.docx,complete.body.docx);assert.match(Buffer.from(polled.pdf,'base64').subarray(0,9).toString(),/^%PDF-/);assert.ok(polled.width>0&&polled.height>0);
+ assert.equal(polled.insertionNumberFormat,'[Ch #C1.S #S1.Eq #E1]','Word receives the validated fragment format, including editor changes');
  assert.equal((await operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:true})).state,'committed');
  assert.equal((await operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:true})).state,'committed','a retried identical host acknowledgement must return the same terminal state');
  await assert.rejects(operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:false}),/Conflicting native acknowledgement/);
@@ -95,9 +96,21 @@ test('Insertion reports the verified completed fragment layout after changing th
   await desktopRequest({action:'wordSessionInsert',payload:insertionPayload(opened,read,{layout:{...read.insertionLayout,mode:completed}})});
   const polled=await operation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
   assert.equal(polled.insertionMode,completed);
+  assert.equal(polled.insertionNumberFormat,completed.startsWith('numbered-')?'(#E1)':null);
   assert.equal((await inspectDocx(Buffer.from(polled.docx,'base64'))).objects[0].layout.mode,completed);
   await operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:true});
  }
+});
+
+test('a changed chapter-number format reaches the inserted DOCX without changing captured counters',async()=>{
+ const opened=await openInsertion([],{mode:'numbered-right',numberFormat:'(#E1)',chapter:3,section:1,equation:11});
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:opened.ticket}});
+ await desktopRequest({action:'wordSessionInsert',payload:insertionPayload(opened,read,{layout:{...read.insertionLayout,numberFormat:'(#C1.#E1)'}})});
+ const polled=await operation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
+ const fragment=await inspectDocx(Buffer.from(polled.docx,'base64'));
+ assert.equal(fragment.objects[0].layout.numberFormat,'(#C1.#E1)');
+ assert.equal(fragment.objects[0].layout.numberText,'(3.11)');
+ assert.equal((await operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:true})).state,'committed');
 });
 
 test('Insertion rejects cross-session, wrong-intent, update-save and malformed/cross-mode completions atomically',async()=>{

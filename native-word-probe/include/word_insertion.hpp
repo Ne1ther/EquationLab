@@ -10,6 +10,9 @@ void EquationLabCancelWordInsertion();
 NSData* EquationLabClaimWordInsertion(std::int32_t* token);
 // Valid only after the fragment claim; -1 means no claimed insertion.
 std::int32_t EquationLabWordInsertionInline();
+// Claimed fragment's validated format, one UTF-16 code unit + 1 per call;
+// 0 terminates and -1 means no claimed insertion. Empty for unnumbered/legacy results.
+std::int32_t EquationLabWordInsertionNumberingNext();
 void EquationLabFinishWordInsertion(bool ok);
 // Call when Word cannot determine whether the live-range insertion took effect.
 void EquationLabFinishWordInsertionUncertain();

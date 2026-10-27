@@ -21,6 +21,8 @@ void EquationLabTransportLaunch(NSString*,void(^)(NSError*));
 @property(nonatomic,strong) NSDate* deadline;
 @property(nonatomic,strong) NSData* fragment;
 @property(nonatomic,copy) NSString* mode;
+@property(nonatomic,copy) NSString* numberFormat;
+@property(nonatomic) NSUInteger numberFormatCursor;
 @property(nonatomic,strong) id request;
 @property(nonatomic) std::int32_t token;
 @property(nonatomic) std::uint64_t generation;
@@ -194,10 +196,15 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
         else if([result[@"state"] isEqual:@"complete"]){
             NSString* mode=[result[@"insertionMode"] isKindOfClass:NSString.class]?result[@"insertionMode"]:nil;
             if(!mode||![@[@"inline",@"display",@"numbered-left",@"numbered-right"] containsObject:mode]){EquationLabFinishWordInsertion(false);return;}
+            id value=result[@"insertionNumberFormat"];
+            if(value&&value!=NSNull.null&&![value isKindOfClass:NSString.class]){EquationLabFinishWordInsertion(false);return;}
+            NSString* numberFormat=[value isKindOfClass:NSString.class]?value:@"";
+            BOOL numbered=[mode hasPrefix:@"numbered-"];
+            if(numberFormat.length>128||(!numbered&&numberFormat.length)||[numberFormat rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){EquationLabFinishWordInsertion(false);return;}
             NSString* encoded=[result[@"docx"] isKindOfClass:NSString.class]?result[@"docx"]:nil;
             NSData* fragment=encoded.length<=24*1024*1024?[[NSData alloc] initWithBase64EncodedString:encoded options:0]:nil;
             if(fragment.length<4||memcmp(fragment.bytes,"PK\x03\x04",4)){EquationLabFinishWordInsertion(false);return;}
-            state.mode=mode;state.fragment=fragment;EquationLabWakeWordHost();return;
+            state.mode=mode;state.numberFormat=numberFormat;state.numberFormatCursor=0;state.fragment=fragment;EquationLabWakeWordHost();return;
         }else if([result[@"state"] isEqual:@"cancelled"]){endInsertion(state,0,false);return;}
         else if(![result[@"state"] isEqual:@"editing"]){endInsertion(state,5,true);return;}
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,200*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak poll];});
@@ -238,6 +245,11 @@ NSData* EquationLabClaimWordInsertion(std::int32_t* token){
 std::int32_t EquationLabWordInsertionInline(){
     if(!NSThread.isMainThread||!insertion.claimed||!insertion.fragment)return -1;
     return [insertion.mode isEqual:@"inline"]?1:0;
+}
+std::int32_t EquationLabWordInsertionNumberingNext(){
+    if(!NSThread.isMainThread||!insertion.claimed||!insertion.fragment)return -1;
+    if(insertion.numberFormatCursor>=insertion.numberFormat.length)return 0;
+    return static_cast<std::int32_t>([insertion.numberFormat characterAtIndex:insertion.numberFormatCursor++])+1;
 }
 void EquationLabFinishWordInsertion(bool ok){
     if(!NSThread.isMainThread||!insertion||insertion.ended)return;

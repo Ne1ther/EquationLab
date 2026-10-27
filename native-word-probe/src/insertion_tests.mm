@@ -12,6 +12,7 @@ void(^openReply)(NSDictionary*,NSError*);
 void(^pollReply)(NSDictionary*,NSError*);
 NSString* statusState;
 NSString* completedMode=@"inline";
+id completedNumberFormat=nil;
 NSString* ticket=@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
 NSDictionary* last(NSString* operation){for(NSDictionary* call in calls.reverseObjectEnumerator)if([call[@"operation"] isEqual:operation])return call[@"body"];return nil;}
@@ -19,7 +20,7 @@ NSUInteger count(NSString* operation){NSUInteger result=0;for(NSDictionary* call
 NSDictionary* callFor(NSString* operation,NSUInteger index){for(NSDictionary* call in calls)if([call[@"operation"] isEqual:operation]){if(index--==0)return call[@"body"];}return nil;}
 BOOL waitUntil(BOOL(^predicate)(void),NSTimeInterval timeout){NSDate* deadline=[NSDate dateWithTimeIntervalSinceNow:timeout];while(!predicate()&&deadline.timeIntervalSinceNow>0)[[NSRunLoop mainRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];return predicate();}
 void replyDelayedAck(NSUInteger index,NSDictionary* result,NSError* error){NSDictionary* item=delayedAckReplies[index];[delayedAckReplies removeObjectAtIndex:index];void(^reply)(NSDictionary*,NSError*)=item[@"reply"];reply(result,error);}
-void reset(){if(insertion)EquationLabCancelWordInsertion();calls=[NSMutableArray array];delayedAckReplies=[NSMutableArray array];delayOpen=NO;delayPoll=NO;failLaunch=NO;malformed=NO;delayAcks=NO;failEveryAck=NO;failedAcksRemaining=0;openReply=nil;pollReply=nil;statusState=nil;insertionError=0;acknowledgementError=0;}
+void reset(){if(insertion)EquationLabCancelWordInsertion();calls=[NSMutableArray array];delayedAckReplies=[NSMutableArray array];delayOpen=NO;delayPoll=NO;failLaunch=NO;malformed=NO;delayAcks=NO;failEveryAck=NO;failedAcksRemaining=0;openReply=nil;pollReply=nil;statusState=nil;completedNumberFormat=nil;insertionError=0;acknowledgementError=0;}
 std::int32_t begin(std::int32_t token=7){return EquationLabBeginWordInsertion([NSURL fileURLWithPath:@"/tmp"],@{@"identity":@"doc:1",@"snapshot":@(token),@"index":@(-1),@"name":@"Test",@"ooxml":@"<live/>"},@{@"mode":@"inline"},token);}
 NSError* ackFailure(){return [NSError errorWithDomain:@"test" code:28 userInfo:nil];}
 }
@@ -29,7 +30,7 @@ id EquationLabTransportRequest(NSString* path,NSDictionary* body,void(^reply)(NS
     if([path isEqual:@"/api/native-insert-open"]){if(delayOpen)openReply=[reply copy];else reply(@{@"ticket":ticket},nil);}
     else if([path isEqual:@"/api/native-poll"]){
         if(insertion&&insertion.ticket&&delayPoll)pollReply=[reply copy];
-        else if(insertion&&insertion.ticket)reply(@{@"state":@"complete",@"insertionMode":completedMode,@"docx":[(malformed?[@"wrong" dataUsingEncoding:NSUTF8StringEncoding]:[NSData dataWithBytes:"PK\x03\x04test" length:8]) base64EncodedStringWithOptions:0]},nil);
+        else if(insertion&&insertion.ticket){NSMutableDictionary* value=[@{@"state":@"complete",@"insertionMode":completedMode,@"docx":[(malformed?[@"wrong" dataUsingEncoding:NSUTF8StringEncoding]:[NSData dataWithBytes:"PK\x03\x04test" length:8]) base64EncodedStringWithOptions:0]} mutableCopy];if(completedNumberFormat)value[@"insertionNumberFormat"]=completedNumberFormat;reply(value,nil);}
         else reply(@{@"state":@"cancelled"},nil);
     }else if([path isEqual:@"/api/native-status"]){if(statusState)reply(@{@"state":statusState},nil);else reply(nil,ackFailure());
     }else if([path isEqual:@"/api/native-ack"]){
@@ -58,6 +59,17 @@ int main(){@autoreleasepool{try{
     check(!EquationLabClaimWordInsertion(nullptr),"finished fragment became claimable again");
     check(EquationLabWordInsertionInline()==-1,"finished insertion retained layout access");
 
+    reset();completedMode=@"numbered-right";completedNumberFormat=@"（第#C1章·#E1）";
+    check(begin()==0&&EquationLabWordInsertionNumberingNext()==-1,"unclaimed insertion exposed its format");
+    check(EquationLabClaimWordInsertion(nullptr).length==8,"numbered fragment missing");
+    NSMutableString* format=[NSMutableString string];std::int32_t unit=0;
+    while((unit=EquationLabWordInsertionNumberingNext())>0)[format appendFormat:@"%C",static_cast<unichar>(unit-1)];
+    check([format isEqual:completedNumberFormat]&&unit==0&&EquationLabWordInsertionNumberingNext()==0,"UTF-16 format was lost or repeated");
+    EquationLabFinishWordInsertion(true);check(EquationLabWordInsertionNumberingNext()==-1,"finished insertion retained its format");
+    for(id invalid in @[@42,@"(#E1)\n",[@"x" stringByPaddingToLength:129 withString:@"x" startingAtIndex:0]]){
+        reset();completedMode=@"numbered-right";completedNumberFormat=invalid;check(begin()==0&&!EquationLabClaimWordInsertion(nullptr),"invalid format became insertable");
+    }
+    reset();completedMode=@"inline";completedNumberFormat=@"(#E1)";check(begin()==0&&!EquationLabClaimWordInsertion(nullptr),"unnumbered result carried a format");
     reset();completedMode=@"display";check(begin()==0,"changed-layout fixture did not open");
     check(EquationLabClaimWordInsertion(nullptr).length==8&&EquationLabWordInsertionInline()==0,"host used initial inline mode instead of the completed display fragment");
     EquationLabFinishWordInsertion(true);

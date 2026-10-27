@@ -69,14 +69,20 @@ export async function createDocx(equations,{fragment=false,references=[],initial
     anchors.push(result);paragraphs.push(result.xml);
   }
   for(const ref of references){const a=anchors[ref.target];if(!a?.bookmarkName)throw Error('引用目标必须是带编号的公式');paragraphs.push(`<w:p>${equationReference(a.bookmarkName,{cachedText:a.numberText,prefix:ref.prefix??'式 '})}</w:p>`);}
-  return packageDocument(zip,paragraphs,relationships,{fragment});
+  // Keep the format used by the generated document as the default for later
+  // Word Ribbon insertions. A live insertion fragment must not import or
+  // replace preferences in its destination document.
+  const formats=new Set(equations.filter(e=>e.layout?.mode?.startsWith('numbered-')).map(e=>e.layout.numberFormat??'(#E1)'));
+  const numberingFormat=initializeContext&&formats.size===1?[...formats][0]:null;
+  return packageDocument(zip,paragraphs,relationships,{fragment,numberingFormat});
 }
 
-function packageDocument(zip,paragraphs,relationships,{fragment=true}={}) {
+function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFormat=null}={}) {
   zip.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>`);
   zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/></Relationships>`);
   zip.file('word/styles.xml',`<w:styles xmlns:w="${NS.w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>${equationStyle}</w:styles>`);
-  zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}"><w:updateFields w:val="true"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat></w:settings>`);
+  const variables=numberingFormat===null?'':`<w:docVars><w:docVar w:name="EquationLabNumberFormat" w:val="${esc(numberingFormat)}"/></w:docVars>`;
+  zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}"><w:updateFields w:val="true"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>${variables}</w:settings>`);
   zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rStyles" Type="${NS.r}/styles" Target="styles.xml"/><Relationship Id="rSettings" Type="${NS.r}/settings" Target="settings.xml"/>${relationships.join('')}</Relationships>`);
   zip.file('word/document.xml',`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`);
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});

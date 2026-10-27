@@ -69,7 +69,7 @@ window.createWordDocumentWorkspace = api => {
       emptyDocument=request.documentIdentity?documents.find(item=>item.identity===request.documentIdentity):fresh.active;
      }
      if(request.discardApproved&&!request.clearOnEmpty){observedIdentity=identityOf(cached);failure(request,'Word 当前文档没有可编辑公式。当前草稿仍保留。');return;}
-     cached=null;pending=null;if(request.clearOnEmpty)api.empty?.();changed();api.message(result.state==='empty'?'Word 当前文档中还没有 MathType 公式。':'请先打开 Word 文档。');return;
+     cached=null;pending=null;if(!dirty(api.state()))clearUnavailable();if(request.clearOnEmpty)api.empty?.();changed();api.message(result.state==='empty'?'Word 当前文档中还没有 MathType 公式。':'请先打开 Word 文档。');return;
     }
     if(['failed','cancelled','superseded','expired'].includes(result.state)){
      failure(request,'未能打开 Word 公式。草稿仍保留；'+(result.reason||'请重新选择目标公式。'));return;
@@ -160,7 +160,7 @@ window.createWordDocumentWorkspace = api => {
     observedIdentity=nextIdentity;cached=null;clearUnavailable();changed();
     return requestOpen(null,!!ticketBefore,nextIdentity,!!ticketBefore);
    }
-   if(!force&&nextIdentity===observedIdentity)return false;
+   if(!force&&nextIdentity===observedIdentity&&!wordDocumentUnavailable)return false;
    const oldIdentity=currentIdentity();
    if(force&&dirty(state)){api.message('刷新已跳过：当前公式有未保存更改，草稿已保留。',true);return false;}
    if(state.busy||state.outcomeUnknown||pending||selecting)return false;
@@ -174,7 +174,7 @@ window.createWordDocumentWorkspace = api => {
     const current=api.state();
     if(current.wordTicket||current.busy||current.outcomeUnknown){observedIdentity=oldIdentity;return false;}
     if(sourceBefore&&current.source&&current.source!==sourceBefore){observedIdentity=oldIdentity;return false;}
-    cached=null;emptyDocument=null;changed();return true;
+    cached=null;emptyDocument=null;clearUnavailable();api.empty?.();changed();return true;
    }
    if(dirty(state))return false;
    const sourceBefore=state.source,ticketBefore=state.wordTicket;
@@ -279,6 +279,22 @@ window.createWordDocumentWorkspace = api => {
     if(state.wordTicket&&!await api.detach())return false;
     return await requestOpen(target,approved);
    }finally{selecting=false;changed();}
+  },
+  async newFormula(){
+   const before=api.state();
+   if(!before.wordTicket||before.busy||before.outcomeUnknown||pending||selecting)return false;
+   const originalTicket=before.wordTicket,originalSource=before.source;
+   selecting=true;changed();
+   try{
+    if(before.draftChanged){const answer=await api.native('confirmWordSessionSwitch',{newFormula:true});if(!answer?.discard)return false;}
+    const current=api.state();
+    if(current.wordTicket!==originalTicket||current.source!==originalSource||current.busy||current.outcomeUnknown)return false;
+    if(!await api.detach())return false;
+    const detached=api.state();
+    if(detached.wordTicket||detached.busy||detached.outcomeUnknown)return false;
+    api.empty?.();changed();return true;
+   }catch(error){api.message('未能结束 Word 编辑：'+error.message,true);return false;}
+   finally{selecting=false;changed();}
   },
   async prepareIncoming(document,requestId=null){
    const request=pending;

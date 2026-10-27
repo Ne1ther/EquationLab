@@ -47,6 +47,17 @@ final class WordSessionLifecycleTests: XCTestCase {
         XCTAssertNil(bridge.wordTicket)
         XCTAssertFalse(bridge.hasWordSessionOrRequest)
     }
+    func testDockClickDuringWordEditDoesNotReopenAnEquationAfterSaveOrCancel() {
+        let bridge = DesktopBridge()
+        bridge.reopenEditorFromDock()
+        XCTAssertTrue(bridge.refreshWordDocumentAfterLoad)
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        XCTAssertFalse(bridge.refreshWordDocumentAfterLoad)
+        bridge.reopenEditorFromDock()
+        XCTAssertFalse(bridge.refreshWordDocumentAfterLoad)
+        XCTAssertTrue(bridge.updateWordSessionState(ended(first)))
+        XCTAssertFalse(bridge.refreshWordDocumentAfterLoad)
+    }
     func testReturnRequestsWordBeforeHidingActiveEditor() {
         var events: [String] = []
         WordFocusHandoff.finish(editorIsActive: true, wordIsActive: false,
