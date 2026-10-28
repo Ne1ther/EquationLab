@@ -10,11 +10,15 @@ App 和 Word 功能区共用编号状态，格式、章和节都能写回；连�
 
 本轮在 Apple Silicon、Word 16.114.1 上验证了四种插入方式、三文档切换、从侧栏所选公式之后插入、连续编号、取消、独立草稿带入和来源关闭。保存后的 DOCX 读回一致，原公式 Native 哈希保持不变；470 项 Node 回归通过。长文档的先开当前公式、再分批补齐列表机制继续保留，本轮没有重新逐条验证长文档，也没有进行 Windows 往返测试。私人文档和测试记录不随包发布。
 
+正式 PKG 已在本机完成升级安装，安装后的 App、helper37 和模板哈希与发布包一致。新 Word 进程完成了插件加载、功能区与 App 编号设置联动，以及新增 `(1.3)` 公式的保存重开。安装包仍采用 ad-hoc 签名，尚未公证；本机升级不代替全新机器安装验证。
+
 This release completes insertion into Word from the app. Choose a document in the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. When editing an existing equation, the new equation goes after its complete paragraph. A standalone draft uses the selected document's empty Word cursor and carries its content and formatting into the insertion session. Cancelling preparation leaves no empty object or extra paragraph.
 
 The app and ribbon share number formats, chapter, and section state, allowing consecutive insertions such as `(1.1)`, `(1.2)`. Update Numbers recalculates existing sequence numbers and references. During an edit, the ribbon opens the same app settings; outside an edit, the default-numbering dialogs use English controls and the system font. The document selector now uses the Word icon, gives filenames more prominence, and removes redundant marks. The sidebar insertion control uses a native menu, and the ribbon artwork has been refreshed.
 
 Word 16.114.1 on Apple Silicon checks covered all four modes, three documents, insertion after the equation selected in the sidebar, consecutive numbering, cancellation, standalone drafts, and source closure. Saved DOCX results matched, original Native hashes were unchanged, and 470 Node tests passed. Progressive long-document loading remains in place; this round did not repeat every long-document check or test Windows round trips. Private documents and test records are not distributed.
+
+The final PKG was installed as a local upgrade. The installed app, helper37, and template hashes match the release artifacts. A fresh Word process loaded the plugin, opened the app's numbering settings from the ribbon, and saved and reopened a newly inserted `(1.3)` equation. The package remains ad-hoc signed and not notarized; this upgrade does not establish fresh-machine installation compatibility.
 
 ## 0.6.7 · build90
 
