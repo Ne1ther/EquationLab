@@ -17,7 +17,7 @@
   ['insert-number','独立编号','number','在空白光标处插入独立 Equation Lab 编号，可被交叉引用。'],
   ['insert-reference','插入引用','reference','刷新 Equation Lab 编号目标并定位到引用选择器；选择后确认插入。'],
   ['update-fields','更新编号','refresh','更新正文的 Equation Lab SEQ 与 REF EL_ 域；不改原版 MathType 的 MTEqn 域。'],
-  ['number-format','编号格式','number','设置新编号格式及选中独立公式的编排；不会批量改写原版 MathType 编号。'],
+  ['number-format','编号格式','number-format','设置新编号格式及选中独立公式的编排；不会批量改写原版 MathType 编号。'],
   ['chapter-section','章 / 节设置','chapter','设置明确的 Equation Lab 章、节与计数重置；不等同于 Word 分节符。'],
   ['previous-equation','上一公式','previous','选择光标前的正文 MathType 公式；到达边界时保持原选区。'],
   ['next-equation','下一公式','next','选择光标后的正文 MathType 公式；到达边界时保持原选区。'],
@@ -26,7 +26,7 @@
   ['document-equations','文档公式','document','读取正文 MathType 对象与可引用的 Equation Lab 编号。'],
   ['conversion-export','转换与导出','export','当前公式 LaTeX、原生字体 SVG 图形与 .eqp 偏好导出；显示批量转换、MathPage 等尚缺的能力。'],
   ['help','使用帮助','help','打开 Equation Lab 的插入、编辑、编号及安全选区说明。'],
-  ['capabilities','功能范围','help','查看原版 Word 命令对应范围，以及尚未实现的能力。']
+  ['capabilities','功能范围','capabilities','查看原版 Word 命令对应范围，以及尚未实现的能力。']
  ];
  const commands=definitions.map(([id,label,icon,description])=>Object.freeze({id,label,icon,description}));
  function get(id){return commands.find(command=>command.id===id);}

@@ -11,6 +11,28 @@ function fixture(options={}){
  return createWordDocumentRequests({makeId:()=>hex(next++),...options});
 }
 
+test('App insert requests require an open editable destination and retain intent through both delivery paths',async()=>{
+ for(const mode of ['inline','display','numbered-left','numbered-right'])for(const waiting of [false,true]){
+  const queue=fixture(),host=hex(150);await queue.take({hostId:host,waitMs:0});
+  queue.handle('native-document-workspace',{hostId:host,insertionRequestSupport:true,active:{identity:target.identity,name:'A.docx'},documents:[{identity:target.identity,name:'A.docx',readOnly:false},{identity:'word-process:74',name:'A.docx',readOnly:true}]});
+  const poll=waiting?queue.take({hostId:host,waitMs:20000}):null;
+  const destination=waiting?{target}:{documentIdentity:target.identity};
+  const created=queue.request({...destination,insertionMode:mode});
+  const delivered=await (poll||queue.take({hostId:host,waitMs:0}));
+  assert.deepEqual(delivered,{state:'delivered',requestId:created.requestId,...destination,insertionMode:mode});
+  queue.cancel({requestId:created.requestId});assert.equal(queue.finish({hostId:host,requestId:created.requestId,state:'opened'}).state,'cancelled');
+  for(const body of [{insertionMode:mode},{documentIdentity:'word-process:closed',insertionMode:mode},{documentIdentity:'word-process:74',insertionMode:mode},{target:{...target,identity:'word-process:74'},insertionMode:mode}])assert.throws(()=>queue.request(body));
+  assert.throws(()=>queue.request({...destination,insertionMode:'replace'}),/Invalid insertion mode/);
+ }
+});
+
+test('a legacy Word host cannot silently accept an App insertion intent',async()=>{
+ const queue=fixture(),hostId=hex(151);await queue.take({hostId,waitMs:0});
+ queue.handle('native-document-workspace',{hostId,active:{identity:target.identity,name:'A.docx'},documents:[{identity:target.identity,name:'A.docx',readOnly:false}]});
+ assert.throws(()=>queue.request({documentIdentity:target.identity,insertionMode:'inline'}),/Update the Word add-in/);
+ const created=queue.request({documentIdentity:target.identity});assert.equal((await queue.take({hostId,waitMs:0})).requestId,created.requestId);
+});
+
 test('request, take and finish retain one exact target and report terminal status',async()=>{
  const queue=fixture();
  const created=queue.request({target});

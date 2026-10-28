@@ -1,6 +1,7 @@
 #include "word_host_pump.hpp"
 #import <AppKit/AppKit.h>
 #include "word_insertion.hpp"
+#include "word_document_requests.hpp"
 #include <cstring>
 
 typedef NS_ENUM(NSUInteger, ELWordInsertionOutcome) {
@@ -18,6 +19,10 @@ void EquationLabTransportLaunch(NSString*,void(^)(NSError*));
 @property(nonatomic,strong) NSURL* directory;
 @property(nonatomic,copy) NSString* session;
 @property(nonatomic,copy) NSString* ticket;
+@property(nonatomic,copy) NSString* documentRequestId;
+@property(nonatomic,strong) NSDate* documentRequestWatchUntil;
+@property(nonatomic,strong) NSDate* documentRequestCheckedAt;
+@property(nonatomic) NSUInteger documentRequestFailures;
 @property(nonatomic,strong) NSDate* deadline;
 @property(nonatomic,strong) NSData* fragment;
 @property(nonatomic,copy) NSString* mode;
@@ -105,6 +110,11 @@ static void endInsertion(ELWordInsertion* state,std::int32_t error,bool cancel) 
     if(!state||state.ended)return;
     state.ended=YES;state.fragment=nil;state.request=nil;
     if(insertion==state){insertion=nil;insertionError=error;}
+    if(error&&state.documentRequestId.length){
+        // A rejected capture or launch must release the App's pending request
+        // immediately, even if VBA already reported its synchronous open step.
+        EquationLabTransportRequest(@"/api/native-document-cancel",@{@"requestId":state.documentRequestId},^(NSDictionary*,NSError*){});
+    }
     if(cancel)retireInsertionTicket(state.ticket,state.session,state.generation);
 }
 
@@ -189,6 +199,21 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
 - (void)poll {
     if(self.ended||self!=insertion||self.request||self.fragment)return;
     if(self.deadline.timeIntervalSinceNow<=0){endInsertion(self,3,true);return;}
+    // An App request can be cancelled before its delayed URL is delivered.
+    // Bound the watch to that request's TTL; ordinary long editing sessions
+    // must outlive the short-lived request catalog record.
+    if(self.documentRequestId.length&&self.documentRequestWatchUntil.timeIntervalSinceNow>0&&(!self.documentRequestCheckedAt||self.documentRequestCheckedAt.timeIntervalSinceNow< -0.5)){
+        self.documentRequestCheckedAt=NSDate.date;__weak ELWordInsertion* weak=self;
+        self.request=EquationLabTransportRequest(@"/api/native-document-status",@{@"requestId":self.documentRequestId},^(NSDictionary* status,NSError* error){
+            ELWordInsertion* state=weak;if(!state||state.ended||state!=insertion)return;state.request=nil;
+            if(error){if(++state.documentRequestFailures>3){endInsertion(state,4,true);return;}}
+            else if(![@[@"queued",@"delivered",@"opened"] containsObject:status[@"state"]]){endInsertion(state,0,true);return;}
+            else state.documentRequestFailures=0;
+            if(error)dispatch_after(dispatch_time(DISPATCH_TIME_NOW,250*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak poll];});
+            else [state poll];
+        });
+        return;
+    }
     __weak ELWordInsertion* weak=self;
     self.request=EquationLabTransportRequest(@"/api/native-poll",@{@"ticket":self.ticket,@"session":self.session},^(NSDictionary* result,NSError* error){
         ELWordInsertion* state=weak;if(!state||state.ended||state!=insertion)return;state.request=nil;
@@ -218,8 +243,10 @@ std::int32_t EquationLabBeginWordInsertion(NSURL* directory,NSDictionary* docume
     // Reserve a disjoint, random uint64 session namespace from live OLE IDs.
     std::uint64_t identity=0;arc4random_buf(&identity,sizeof(identity));identity|=1ull<<63;
     state.session=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(identity)];
+    state.documentRequestId=[bridge_probe::openingWordDocumentRequestId() copy];
+    state.documentRequestWatchUntil=[NSDate dateWithTimeIntervalSinceNow:65];
     state.generation=++insertionGeneration;state.deadline=[NSDate dateWithTimeIntervalSinceNow:20*60];insertion=state;insertionError=0;acknowledgementError=0;
-    NSDictionary* body=@{@"session":state.session,@"acknowledgement":@YES,@"document":document,@"layout":layout};
+    NSDictionary* body=@{@"session":state.session,@"acknowledgement":@YES,@"numberingContextSupport":@YES,@"document":document,@"layout":layout};
     state.request=EquationLabTransportRequest(@"/api/native-insert-open",body,^(NSDictionary* result,NSError* error){
         NSString* ticket=[result[@"ticket"] isKindOfClass:NSString.class]?result[@"ticket"]:nil;
         NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
@@ -228,7 +255,9 @@ std::int32_t EquationLabBeginWordInsertion(NSURL* directory,NSDictionary* docume
         state.request=nil;
         if(error||!valid){endInsertion(state,1,false);return;}
         state.ticket=ticket;
-        EquationLabTransportLaunch([@"equationlab://word-edit/" stringByAppendingString:ticket],^(NSError* launchError){
+        NSString* url=[@"equationlab://word-edit/" stringByAppendingString:ticket];
+        if(state.documentRequestId.length)url=[url stringByAppendingFormat:@"?request=%@",state.documentRequestId];
+        EquationLabTransportLaunch(url,^(NSError* launchError){
             if(state.ended||insertion!=state)return;
             if(launchError){endInsertion(state,2,true);return;}
             [state poll];

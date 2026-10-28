@@ -1,5 +1,21 @@
 # 版本记录
 
+## 0.6.9 · build94
+
+这次把“从 App 插入 Word”做完整了。先在左侧选文档，再点底部“插入到 Word”，可以插入行内、居中或左右编号公式。正在编辑已有公式时，新公式放在它的整段之后；独立草稿则使用所选文档的 Word 空光标，内容和排版设置一起带过去。取消准备不会先留下空对象或多余段落。
+
+App 和 Word 功能区共用编号状态，格式、章和节都能写回；连续插入会接着生成 `(1.1)`、`(1.2)`。Word 的“更新编号”仍负责重算已有序号和引用。编辑过程中从功能区打开编号设置，会回到 App 的同一处设置；没有编辑会话时，默认编号弹窗使用英文和系统字体。
+
+文档选择器改用 Word 图标，文件名更清楚，去掉了多余符号。侧栏插入入口使用原生菜单。切换文档和取消插入会保护草稿，来源关闭后自动清理旧列表，阻止再向已关闭文档写入。Word 功能区图标也重新整理了。
+
+本轮在 Apple Silicon、Word 16.114.1 上验证了四种插入方式、三文档切换、从侧栏所选公式之后插入、连续编号、取消、独立草稿带入和来源关闭。保存后的 DOCX 读回一致，原公式 Native 哈希保持不变；470 项 Node 回归通过。长文档的先开当前公式、再分批补齐列表机制继续保留，本轮没有重新逐条验证长文档，也没有进行 Windows 往返测试。私人文档和测试记录不随包发布。
+
+This release completes insertion into Word from the app. Choose a document in the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. When editing an existing equation, the new equation goes after its complete paragraph. A standalone draft uses the selected document's empty Word cursor and carries its content and formatting into the insertion session. Cancelling preparation leaves no empty object or extra paragraph.
+
+The app and ribbon share number formats, chapter, and section state, allowing consecutive insertions such as `(1.1)`, `(1.2)`. Update Numbers recalculates existing sequence numbers and references. During an edit, the ribbon opens the same app settings; outside an edit, the default-numbering dialogs use English controls and the system font. The document selector now uses the Word icon, gives filenames more prominence, and removes redundant marks. The sidebar insertion control uses a native menu, and the ribbon artwork has been refreshed.
+
+Word 16.114.1 on Apple Silicon checks covered all four modes, three documents, insertion after the equation selected in the sidebar, consecutive numbering, cancellation, standalone drafts, and source closure. Saved DOCX results matched, original Native hashes were unchanged, and 470 Node tests passed. Progressive long-document loading remains in place; this round did not repeat every long-document check or test Windows round trips. Private documents and test records are not distributed.
+
 ## 0.6.7 · build90
 
 这版重点修了编号写回。右侧编辑器改好编号格式后，点“更新公式”会应用到当前公式，也会留作这篇文档后续新增编号的格式。新文档首次插入和连续插入也走同一套规则，完成后光标移到新公式后面。Word 的“更新编号”继续负责重算已有序号和引用。

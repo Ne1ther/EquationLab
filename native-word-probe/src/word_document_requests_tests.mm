@@ -7,6 +7,7 @@
 
 namespace {
 std::atomic<std::uint32_t> transportActive{0};
+std::atomic<bool> insertionActive{false};
 std::atomic<std::uint32_t> wakeCount{0};
 
 void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}
@@ -33,6 +34,7 @@ std::uint32_t editorTransportActive(){return transportActive.load();}
 }
 
 void EquationLabWakeWordHost(){++wakeCount;}
+bool EquationLabWordInsertionActive(){return insertionActive.load();}
 
 @interface ELWordDocumentRequestMockProtocol : NSURLProtocol
 + (void)setHandler:(NSDictionary*(^)(NSString*,NSDictionary*))handler;
@@ -77,6 +79,7 @@ static NSDictionary*(^mockHandler)(NSString*,NSDictionary*);
 @property(nonatomic,strong) NSString* firstId;
 @property(nonatomic,strong) NSString* replacementId;
 @property(nonatomic,strong) NSString* explicitIdentity;
+@property(nonatomic,strong) NSString* insertionMode;
 @property(nonatomic,strong) NSMutableDictionary<NSString*,NSString*>* states;
 @property(nonatomic,strong) NSMutableArray<NSString*>* statusIds;
 @property(nonatomic) NSUInteger takeCount;
@@ -100,7 +103,9 @@ static NSDictionary*(^mockHandler)(NSString*,NSDictionary*);
             if(self.takeCount==2){
                 transportActive.store(1);self.states[self.firstId]=@"delivered";
                 NSDictionary* target=@{@"identity":@"process:42",@"snapshot":@7,@"index":@3,@"nativeSha256":self.firstId};
-                return self.explicitIdentity?@{@"state":@"delivered",@"requestId":self.firstId,@"documentIdentity":self.explicitIdentity}:@{@"state":@"delivered",@"requestId":self.firstId,@"target":target};
+                NSMutableDictionary* reply=[(self.explicitIdentity?@{@"state":@"delivered",@"requestId":self.firstId,@"documentIdentity":self.explicitIdentity}:@{@"state":@"delivered",@"requestId":self.firstId,@"target":target}) mutableCopy];
+                if(self.insertionMode)reply[@"insertionMode"]=self.insertionMode;
+                return reply;
             }
             if(self.takeCount==3&&self.replacementId){
                 self.states[self.replacementId]=@"delivered";
@@ -128,9 +133,9 @@ static void resetManager(){
     transportActive.store(0);wakeCount.store(0);runFor(0.03);
 }
 
-static ELWordDocumentRequestMockBackend* installScenario(NSString* firstId,NSString* replacementId=nil,NSString* explicitIdentity=nil){
+static ELWordDocumentRequestMockBackend* installScenario(NSString* firstId,NSString* replacementId=nil,NSString* explicitIdentity=nil,NSString* insertionMode=nil){
     resetManager();
-    ELWordDocumentRequestMockBackend* backend=[ELWordDocumentRequestMockBackend new];backend.firstId=firstId;backend.replacementId=replacementId;backend.explicitIdentity=explicitIdentity;
+    ELWordDocumentRequestMockBackend* backend=[ELWordDocumentRequestMockBackend new];backend.firstId=firstId;backend.replacementId=replacementId;backend.explicitIdentity=explicitIdentity;backend.insertionMode=insertionMode;
     [ELWordDocumentRequestMockProtocol setHandler:^NSDictionary*(NSString* operation,NSDictionary* body){return [backend handle:operation body:body];}];
     check(bridge_probe::installWordDocumentRequests()==0,"native manager did not install");
     waitUntil(^{@synchronized(backend){return backend.statusCount>=1;}},"delivered take was not revalidated");
@@ -231,11 +236,15 @@ static void testRetiredDocumentMetadata(){
 }
 
 static void testExplicitDocumentIdentitySurvivesClaim(){
-    NSString* identifier=requestId('f');ELWordDocumentRequestMockBackend* backend=installScenario(identifier,nil,@"process:inactive-22");
+    NSString* identifier=requestId('f');ELWordDocumentRequestMockBackend* backend=installScenario(identifier,nil,@"process:inactive-22",@"numbered-right");
     waitUntil(^{return readCount(backend,@"statusCount")>=1;},"explicit document request was not revalidated");
-    transportActive.store(0);waitUntil(^{return bridge_probe::manager.revalidated;},"explicit document request did not become claimable");
+    insertionActive.store(true);transportActive.store(0);runFor(0.35);
+    check(bridge_probe::takeWordDocumentRequest()==0,"a pending old insertion was ignored by the document claim gate");
+    insertionActive.store(false);waitUntil(^{return bridge_probe::manager.revalidated;},"explicit document request did not become claimable");
     std::int32_t token=bridge_probe::takeWordDocumentRequest();NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(token);
     check([envelope[@"documentIdentity"] isEqual:@"process:inactive-22"]&&!envelope[@"target"],"explicit identity changed or conflicted with formula target");
+    check([envelope[@"insertionMode"] isEqual:@"numbered-right"],"App insertion intent disappeared before VBA delivery");
+    check([backend.lastWorkspace[@"insertionRequestSupport"] boolValue],"new host did not advertise App insertion support");
     check(bridge_probe::beginWordDocumentRequest(token),"explicit identity request did not begin");
     check(bridge_probe::finishWordDocumentRequest(token,@"empty")==0,"empty explicit request did not finish");
     waitUntil(^{return bridge_probe::manager.claim==nil;},"empty explicit request retained its claim");

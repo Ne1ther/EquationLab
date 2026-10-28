@@ -98,6 +98,7 @@ struct WorkbenchState: Decodable {
     var otherWordDocumentName: String? = nil
     var openWordDocuments: [OpenWordDocument] = []
     var wordWorkspaceConnected = false
+    var wordAppInsertionSupported = false
     var wordDocumentIdentity: String? = nil
     var documentPath = ""
     var latex = ""
@@ -114,6 +115,8 @@ struct WorkbenchState: Decodable {
     var spaces: [EditorField] = []
     var layout: [EditorField] = []
     var numbering: DocumentNumbering? = nil
+    var documentNumberFormat: String? = nil
+    var wordNumberingRestarts = false
     var statusTitle = "正在载入公式引擎…"
     var statusDetail = ""
     var statusError = false
@@ -149,6 +152,7 @@ struct WorkbenchState: Decodable {
         if payload["otherWordDocumentName"] is NSNull { otherWordDocumentName = nil } else if let v = try value("otherWordDocumentName", String.self) { otherWordDocumentName = v }
         if payload["openWordDocuments"] is NSNull { openWordDocuments = [] } else if let v = try value("openWordDocuments", [OpenWordDocument].self) { openWordDocuments = v }
         if payload["wordWorkspaceConnected"] is NSNull { wordWorkspaceConnected = false } else if let v = try value("wordWorkspaceConnected", Bool.self) { wordWorkspaceConnected = v }
+        if let v = try value("wordAppInsertionSupported", Bool.self) { wordAppInsertionSupported = v }
         if payload["wordDocumentIdentity"] is NSNull { wordDocumentIdentity = nil } else if let v = try value("wordDocumentIdentity", String.self) { wordDocumentIdentity = v }
         if let v = try value("documentPath", String.self) { documentPath = v }
         if let v = try value("latex", String.self) { latex = v }
@@ -167,6 +171,8 @@ struct WorkbenchState: Decodable {
         if let v = try value("extraSizes", [EditorField].self) { extraSizes = v }
         if let v = try value("spaces", [EditorField].self) { spaces = v }
         if let v = try value("layout", [EditorField].self) { layout = v }
+        if let v = try value("wordNumberingRestarts", Bool.self) { wordNumberingRestarts = v }
+        if payload["documentNumberFormat"] is NSNull { documentNumberFormat = nil } else if let v = try value("documentNumberFormat", String.self) { documentNumberFormat = v }
         if payload["numbering"] is NSNull { numbering = nil } else if let v = try value("numbering", DocumentNumbering.self) { numbering = v }
         if let v = try value("statusTitle", String.self) { statusTitle = v }
         if let v = try value("statusDetail", String.self) { statusDetail = v }

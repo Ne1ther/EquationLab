@@ -3,6 +3,9 @@
 #include <iostream>
 #include <stdexcept>
 
+namespace { NSString* openingRequestId=nil; }
+namespace bridge_probe { NSString* openingWordDocumentRequestId(){return openingRequestId;} }
+
 namespace {
 NSMutableArray<NSDictionary*>* calls;
 NSMutableArray<NSDictionary*>* delayedAckReplies;
@@ -11,6 +14,7 @@ NSUInteger failedAcksRemaining=0;
 void(^openReply)(NSDictionary*,NSError*);
 void(^pollReply)(NSDictionary*,NSError*);
 NSString* statusState;
+NSString* documentRequestState=@"opened";
 NSString* completedMode=@"inline";
 id completedNumberFormat=nil;
 NSString* ticket=@"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
@@ -32,6 +36,7 @@ id EquationLabTransportRequest(NSString* path,NSDictionary* body,void(^reply)(NS
         if(insertion&&insertion.ticket&&delayPoll)pollReply=[reply copy];
         else if(insertion&&insertion.ticket){NSMutableDictionary* value=[@{@"state":@"complete",@"insertionMode":completedMode,@"docx":[(malformed?[@"wrong" dataUsingEncoding:NSUTF8StringEncoding]:[NSData dataWithBytes:"PK\x03\x04test" length:8]) base64EncodedStringWithOptions:0]} mutableCopy];if(completedNumberFormat)value[@"insertionNumberFormat"]=completedNumberFormat;reply(value,nil);}
         else reply(@{@"state":@"cancelled"},nil);
+    }else if([path isEqual:@"/api/native-document-status"]){reply(@{@"state":documentRequestState},nil);
     }else if([path isEqual:@"/api/native-status"]){if(statusState)reply(@{@"state":statusState},nil);else reply(nil,ackFailure());
     }else if([path isEqual:@"/api/native-ack"]){
         if(delayAcks){[delayedAckReplies addObject:@{@"body":body,@"reply":[reply copy]}];}
@@ -47,8 +52,17 @@ void EquationLabTransportLaunch(NSString* url,void(^reply)(NSError*)) {
 
 int main(){@autoreleasepool{try{
     calls=[NSMutableArray array];delayedAckReplies=[NSMutableArray array];
-    reset();check(begin()==0&&EquationLabWordInsertionActive(),"new insertion did not stay pending");
+    reset();openingRequestId=@"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";delayOpen=YES;
+    check(begin()==0,"pending App insertion did not begin");openReply(nil,ackFailure());
+    check(!EquationLabWordInsertionActive()&&count(@"/api/native-document-cancel")==1,"failed App open left its document request waiting");
+    reset();delayPoll=YES;documentRequestState=@"cancelled";
+    check(begin()==0&&!EquationLabWordInsertionActive(),"cancelled App request retained a live insertion owner");
+    check(count(@"/api/native-cancel")==1,"cancelled App request did not retire its native ticket");documentRequestState=@"opened";
+    reset();openingRequestId=@"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd";
+    check(begin()==0&&EquationLabWordInsertionActive(),"new insertion did not stay pending");
     NSDictionary* opened=last(@"/api/native-insert-open");check([opened[@"document"][@"index"] intValue]==-1&&[opened[@"layout"][@"mode"] isEqual:@"inline"],"lost insertion context");
+    check([last(@"launch")[@"url"] containsString:@"?request=dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"],"insertion URL lost its App document request ownership");
+    check(count(@"/api/native-document-status")==1,"App insertion did not watch its cancelable request");openingRequestId=nil;
     check(!opened[@"native"]&&!opened[@"docx"],"opening created a Word placeholder");
     check(EquationLabWordInsertionInline()==-1,"unclaimed insertion exposed a layout");
     check(begin(8)<0,"second insertion replaced the live Range owner");

@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.7 (build90)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.7/Equation-Lab-0.6.7.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.9 (build94)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.9/Equation-Lab-0.6.9.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -18,19 +18,19 @@ Save your documents, quit Word and Equation Lab, then open the installer. Reopen
 - Use equation numbering, cross-references, format presets, and custom previews.
 - Export PDF, SVG, or PNG, and copy LaTeX.
 
-New equations start on a blank canvas. Choose Done and Insert to add one to Word, or Update Equation when editing. The action and Cancel sit to the right of the editing mode controls, on the same row. Reopening from the Dock refreshes document equations after insertion. You can also select an existing equation while inserting; a changed draft prompts before switching.
+You can now insert into Word directly from the app. Choose a document at the top of the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. While editing an existing equation, the new one goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor and carries its content and formatting into the insertion session. Finish and insert waits for Word’s confirmation; cancelling leaves no empty object.
 
 The menu on the left lists open Word documents and distinguishes documents by identity, even when names match. Switching protects changed drafts, and background metadata updates do not bring the editor to the front. Refreshing the document menu updates document details; refreshing the formula area rereads equations.
 
-This update connects numbering changes in the editor to Word. Change the format under Document → Word Layout, then choose Update Equation to apply it to the selected equation and use it for later numbered insertions. A new equation adopts the format when you choose Done and Insert. Word’s Update Numbers recalculates existing sequence numbers and cross-references; it does not replace every old number format in the document.
+The app and Word share numbering state, including editable chapter and section values. Change the format under Document → Word Layout, then choose Update Equation to apply it to the selected equation and use it for later numbered insertions. A new equation adopts the format when you choose Done and Insert. Word’s Update Numbers recalculates existing sequence numbers and cross-references; it does not replace every old number format in the document.
 
-Long documents still open the selected equation first and fill in the list in batches. This round exercised all 30 demo equations and 11 complex inputs, plus editing the last equation, point sizes, saving and reopening a local 120-equation document. Deletion, renumbering, and reference updates were checked separately. The sidebar scrolls the selected equation into view when opening from Word. Some unmapped legacy font characters still show a square and a warning, with original data retained. Full compatibility with every MathType equation is still unfinished.
+Long documents still open the selected equation first and fill in the list in batches. Earlier checks covered 30 demo equations, 11 complex inputs, and editing, point sizes, save/reopen, deletion, renumbering, and references in a local 120-equation document. This round adds all four app insertion modes, three-document switching, consecutive numbering, and draft retention after the source closes. The sidebar scrolls the selected equation into view when opening from Word. Some unmapped legacy font characters still show a square and a warning, with original data retained. Full compatibility with every MathType equation is still unfinished.
 
 The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads.
 
 ![Equation Lab workbench](docs/preview/workbench-0.6.5.png)
 
-This screenshot is from 0.6.5; the main interface is still the same.
+This screenshot is from 0.6.5; see the text above for the updated document selector and insertion entry.
 
 ## Try a document
 

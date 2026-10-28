@@ -59,6 +59,7 @@
  }
  function load(profile,preset=null){render(profile,preset);original=snapshot();}
  window.desktopTypographyLoad=profile=>load(profile);
+ window.desktopTypographySnapshot=()=>base?snapshot():null;
  window.desktopTypographyRestorePatch=patch=>{if(base)load(base,patch);};
  window.desktopImportPreferences=async()=>{
   const result=await native('preferencesImport');if(!result)return;

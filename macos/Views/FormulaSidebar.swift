@@ -30,12 +30,9 @@ struct FormulaSidebar: View {
                 Text(bridge.t("收藏")).tag(true)
             }.pickerStyle(.segmented).labelsHidden().padding(14)
             if !showingFavorites {
-                HStack(alignment: .top, spacing: 9) {
-                    Image(systemName: "doc.text")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.secondary)
-                        .frame(width: 20, height: 20)
-                        .accessibilityHidden(true)
+                HStack(alignment: .top, spacing: 10) {
+                    OfficeProductLabel(bridge: bridge, wordOnly: true, showsTitle: false)
+                        .frame(width: 24, height: 24)
                     VStack(alignment: .leading, spacing: 5) {
                         Menu {
                             if bridge.state.openWordDocuments.isEmpty {
@@ -64,17 +61,12 @@ struct FormulaSidebar: View {
                                 bridge.invoke("nativeRefreshWordDocumentList")
                             }
                         } label: {
-                            HStack(spacing: 7) {
-                                Text(bridge.state.documentName)
-                                    .font(.headline.weight(.semibold))
-                                    .lineLimit(2)
-                                    .truncationMode(.middle)
-                                Image(systemName: "chevron.up.chevron.down")
-                                    .font(.caption2.weight(.semibold))
-                                    .foregroundStyle(.secondary)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .contentShape(Rectangle())
+                            Text(bridge.state.documentName)
+                                .font(.headline.weight(.semibold))
+                                .lineLimit(2)
+                                .truncationMode(.middle)
+                                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
+                                .contentShape(Rectangle())
                         }
                         .menuStyle(.borderlessButton)
                         .help(bridge.state.documentName)
@@ -88,14 +80,17 @@ struct FormulaSidebar: View {
                                 .accessibilityLabel(bridge.t("文档连接已结束，草稿已保留。"))
                         }
                     }
-                    Spacer(minLength: 0)
                 }
-                .padding(.horizontal, 10)
-                .padding(.vertical, 8)
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 8))
+                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 10)
+                        .strokeBorder(.primary.opacity(0.05), lineWidth: 1)
+                        .allowsHitTesting(false)
+                }
                 .padding(.horizontal, 14)
-                .padding(.top, 0)
                 .padding(.bottom, 5)
             }
             HStack(spacing: 8) {
@@ -215,16 +210,11 @@ struct FormulaSidebar: View {
                 }
             }
             HStack(spacing: 6) {
-                Button { bridge.invoke("nativeNew") } label: {
-                    Label(bridge.language.usesEnglish ? "New" : bridge.t("新建公式"), systemImage: "plus.circle")
-                        .lineLimit(1).frame(maxWidth: .infinity)
-                }.accessibilityLabel(bridge.t("新建公式")).help(bridge.t("新建公式"))
-                Button { bridge.invoke("nativeOpen") } label: {
-                    Label(bridge.language.usesEnglish ? "Open" : bridge.t("打开文档"), systemImage: "folder")
-                        .lineLimit(1).frame(maxWidth: .infinity)
-                }.accessibilityLabel(bridge.t("打开文档")).help(bridge.t("打开文档")).disabled(bridge.wordSessionActive)
+                WordInsertionMenu(bridge: bridge)
+                    .menuStyle(.borderlessButton)
+                    .modifier(WorkbenchMenuSurface())
             }
-            .buttonStyle(WorkbenchButtonStyle()).font(.system(size: 11))
+            .font(.system(size: 11))
             .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown).padding(.horizontal, 12)
             .modifier(WorkbenchFooter())
         }

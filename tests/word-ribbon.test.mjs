@@ -14,11 +14,22 @@ await import('../word-ribbon/command-registry.js');
 const registry=globalThis.EquationLabCommands;
 const execFileAsync=promisify(execFile);
 
+test('App insertion uses a verified document or retained range without inserting before commit',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const request=source.slice(source.indexOf('Private Sub ApplyWordDocumentRequest('),source.indexOf('Private Function KnownDocumentIdentity'));
+ assert.match(request,/ELDREQ3[\s\S]*?Case "numbered-right": insertionKind = "Right"/);
+ assert.match(request,/If Not \(Selection.Document Is Doc\) Or Selection.Start <> Selection.End Then GoTo Failed/);
+ assert.match(request,/ResolveBoundEquation\(Doc, anchor, targetIndex \+ 1\)/);
+ assert.match(request,/paragraphRange\.End >= Doc.Content.End[\s\S]*?needsParagraph = True/);
+ assert.match(request,/MathTypeBridgeBeginWordDocumentRequest[\s\S]*?ELStartEquationInsertion insertionKind, insertionPoint, needsParagraph/);
+ assert.doesNotMatch(request,/\.InsertFile|\.InsertBefore|\.Delete\b/);
+});
+
 test('Word and editor numbering changes retain a document-bound default for subsequent insertions',async()=>{
  const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
  const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const procedure=(source,name)=>{const start=source.indexOf(name);assert.notEqual(start,-1);return source.slice(start,source.indexOf(name.includes('Function')?'End Function':'End Sub',start));};
- const insert=procedure(ribbon,'Private Sub InsertEquation');
+ const insert=procedure(ribbon,'Public Sub ELStartEquationInsertion');
  assert.match(insert,/ELDocumentNumberFormat\(Doc, selectedRange\.Start\)/);
  const number=procedure(ribbon,'Public Sub NumberSelectedEquation');
  assert.match(number,/UpdateNumbersForDocument Doc\s+If patternOverride <> "" Then SavePreferenceForDocument Doc, "EquationLabNumberFormat", patternOverride/,'only a successful, exact-target save adopts the editor format');
@@ -51,6 +62,28 @@ test('native Word Ribbon registry contains complete, taskpane-free command metad
  assert.match(await readFile(new URL('../word-ribbon/icons/lucide/LICENSE',import.meta.url),'utf8'),/ISC License/);
 });
 
+test('Ribbon artwork stays font-independent and within transparent bounds at display sizes',async()=>{
+ const icons=new Set([...registry.commands.map(command=>command.icon),'app']);
+ assert.notEqual(registry.get('insert-number').icon,registry.get('number-format').icon);
+ assert.notEqual(registry.get('help').icon,registry.get('capabilities').icon);
+ for(const icon of icons){
+  const svg=await readFile(new URL(`../word-ribbon/icons/svg/${icon}.svg`,import.meta.url),'utf8');
+  assert.doesNotMatch(svg,/<text\b|font-family|<image\b|href=|<script\b/i,icon);
+  for(const size of [16,32,80]){
+   const image=sharp(await readFile(new URL(`../word-ribbon/icons/${icon}-${size}.png`,import.meta.url)));
+   const meta=await image.metadata();assert.equal(meta.width,size,icon);assert.equal(meta.height,size,icon);assert.equal(meta.hasAlpha,true,icon);
+   if(size===16)continue;
+   const {data,info}=await image.ensureAlpha().raw().toBuffer({resolveWithObject:true});
+   let opaque=0;
+   for(let y=0;y<size;y++)for(let x=0;x<size;x++){
+    const alpha=data[(y*size+x)*info.channels+3];if(alpha)opaque++;
+    if(x===0||x===size-1||y===0||y===size-1)assert.equal(alpha,0,`${icon}-${size}: cropped edge`);
+   }
+   assert.ok(opaque>size,`${icon}-${size}: empty artwork`);
+  }
+ }
+});
+
 test('native Word template builder embeds the retained Ribbon ABI and icons without Office.js routes',async()=>{
  const temp=await mkdtemp(join(tmpdir(),'equationlab-native-ribbon-'));
  const input=join(temp,'input.dotm'),output=join(temp,'output.dotm');
@@ -58,24 +91,37 @@ test('native Word template builder embeds the retained Ribbon ABI and icons with
   const fixture=new JSZip();
   fixture.file('_rels/.rels','<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"></Relationships>');
   fixture.file('[Content_Types].xml','<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"></Types>');
+  fixture.file('word/vbaProject.bin',Buffer.from('retained VBA compilation cache'));
   await writeFile(input,await fixture.generateAsync({type:'nodebuffer'}));
   await execFileAsync(process.execPath,[fileURLToPath(new URL('../native-word-probe/automatic-loader/build-ribbon-template.mjs',import.meta.url)),input,output]);
   const outputBytes=await readFile(output),built=await JSZip.loadAsync(outputBytes),xml=await built.file('customUI/customUI.xml').async('string');
   assert.equal((xml.match(/<group /g)||[]).length,5);assert.equal((xml.match(/<button /g)||[]).length,20);
   assert.match(xml,/tag="open-pane"/);assert.doesNotMatch(xml,/Taskpane|TaskPane|appsforoffice|localhost:37951/);
-  assert.deepEqual(await validateRibbonTemplateZip(built),{groups:5,buttons:20,iconRelationships:new Set([...registry.commands.map(command=>command.icon),'inline']).size});
+  assert.deepEqual(await validateRibbonTemplateZip(built),{groups:5,buttons:20,iconRelationships:new Set([...registry.commands.map(command=>command.icon),'app']).size});
+  assert.equal((await built.file('word/vbaProject.bin').async('nodebuffer')).toString(),'retained VBA compilation cache');
   const relationXml=await built.file('customUI/_rels/customUI.xml.rels').async('string');
   const iconNames=[...relationXml.matchAll(/Target="icons\/([^\"]+)"/g)].map(match=>match[1]);
   assert.equal(new Set(iconNames).size,iconNames.length);
+  const largeImages=new Set([...xml.matchAll(/<button\b[^>]+>/g)].filter(match=>match[0].includes('size="large"')).map(match=>/image="([^"]+)"/.exec(match[0])[1]));
   for(const name of iconNames){
    const bytes=await built.file(`customUI/icons/${name}`).async('nodebuffer');
    assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-   assert.equal(bytes.readUInt32BE(16),32);assert.equal(bytes.readUInt32BE(20),32);
+   const expected=largeImages.has(name.replace(/\.png$/,''))?80:32;
+   assert.equal(bytes.readUInt32BE(16),expected);assert.equal(bytes.readUInt32BE(20),expected);
   }
+  const legacy=await JSZip.loadAsync(outputBytes);
+  for(const name of largeImages)legacy.file(`customUI/icons/${name}.png`,await readFile(new URL(`../word-ribbon/icons/${name}-32.png`,import.meta.url)));
+  assert.deepEqual(await validateRibbonTemplateZip(legacy),await validateRibbonTemplateZip(built),'previously accepted 32 px templates remain valid');
+  const oversizedSmall=await JSZip.loadAsync(outputBytes);
+  oversizedSmall.file('customUI/icons/number.png',await readFile(new URL('../word-ribbon/icons/number-80.png',import.meta.url)));
+  await assert.rejects(validateRibbonTemplateZip(oversizedSmall),/invalid Ribbon PNG size/);
+  const oversizedLarge=await JSZip.loadAsync(outputBytes);
+  oversizedLarge.file('customUI/icons/inline.png',await sharp(await readFile(new URL('../word-ribbon/icons/inline-80.png',import.meta.url))).resize(160,160).png().toBuffer());
+  await assert.rejects(validateRibbonTemplateZip(oversizedLarge),/invalid Ribbon PNG size/);
   const noRibbon=await JSZip.loadAsync(outputBytes);noRibbon.remove('customUI/customUI.xml');
   await assert.rejects(validateRibbonTemplateZip(noRibbon),/missing customUI part/);
   const brokenCallback=await JSZip.loadAsync(outputBytes),ribbonXml=await brokenCallback.file('customUI/customUI.xml').async('string');
-  brokenCallback.file('customUI/customUI.xml',ribbonXml.replace('tag="open-pane" image="inline" onAction="EquationLabRibbon.ELRibbonAction"','tag="open-pane" image="inline" onAction="Missing.Callback"'));
+  brokenCallback.file('customUI/customUI.xml',ribbonXml.replace('tag="open-pane" image="app" onAction="EquationLabRibbon.ELRibbonAction"','tag="open-pane" image="app" onAction="Missing.Callback"'));
   await assert.rejects(validateRibbonTemplateZip(brokenCallback),/open-pane callback is missing or invalid/);
   const brokenAsset=await JSZip.loadAsync(outputBytes);brokenAsset.remove(`customUI/icons/${iconNames[0]}`);
   await assert.rejects(validateRibbonTemplateZip(brokenAsset),/missing icon asset/);
@@ -202,7 +248,7 @@ test('workspace sidecar carries bounded metadata only and explicit selector is i
  const ribbon=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
  const native=await readFile(new URL('../native-word-probe/src/word_document_requests.mm',import.meta.url),'utf8');
  const publish=context.slice(context.indexOf('Private Sub PublishDocumentWorkspace'),context.indexOf('End Sub',context.indexOf('Private Sub PublishDocumentWorkspace')));
- assert.match(publish,/ELWORK2[\s\S]*?Application\.Documents\.Count[\s\S]*?EnsureKnownDocumentIdentity\(candidate\)[\s\S]*?candidate\.Name[\s\S]*?candidate\.ReadOnly/);
+ assert.match(publish,/ELWORK3[\s\S]*?Application\.Documents\.Count[\s\S]*?EnsureKnownDocumentIdentity\(candidate\)[\s\S]*?candidate\.Name[\s\S]*?candidate\.ReadOnly/);
  assert.doesNotMatch(publish,/WordOpenXML|InlineShapes|Selection|\.Activate|\.Select/);
  assert.match(ribbon,/ELWORK1[\s\S]*?ELWORK2/,'native sidecar parser retains ELWORK1 compatibility and ELWORK2 catalog support');
  assert.match(ribbon,/count>128[\s\S]*?name\.length>512[\s\S]*?publishWordWorkspace\(active,documents\)/);
@@ -302,7 +348,8 @@ test('Word insertion postprocessing maps each phase to a safe native outcome',as
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const start=source.indexOf('Private Sub ApplyInsertion');
  const insertion=source.slice(start,source.indexOf('End Sub',start));
- assert.match(insertion,/mutationAttempted = True\r?\n\s*target\.InsertFile[^\r\n]*\r?\n\s*mutationCompleted = True/);
+ assert.match(insertion,/mutationAttempted = True[\s\S]*?target\.InsertFile[^\r\n]*\r?\n\s*mutationCompleted = True/);
+ assert.ok(insertion.indexOf('mutationAttempted = True')<insertion.indexOf('target.InsertBefore vbCr'),'the optional paragraph is inside the uncertain-mutation phase');
  const failed=insertion.slice(insertion.indexOf('Failed:'));
  assert.match(failed,/Failed:\s+failureNumber = Err\.Number\s+failureDescription = Err\.Description\s+On Error Resume Next/);
  assert.match(failed,/If mutationCompleted Then[\s\S]*?MathTypeBridgeFinishInsertion[\s\S]*?ElseIf mutationAttempted Then[\s\S]*?MathTypeBridgeUncertainInsertion[\s\S]*?Else[\s\S]*?MathTypeBridgeFailInsertion/);
@@ -337,7 +384,8 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  const rightLeft=procedure('Private Sub InsertEquation');
  assert.match(rightLeft,/Set chosen = ELSelectedEquation\(Selection\)/);
  assert.match(rightLeft,/If kind = "Right" Or kind = "Left" Then[\s\S]*?NumberSelectedEquation Doc, chosen, \(kind = "Right"\)/);
- assert.match(rightLeft,/If selectedRange\.Start <> selectedRange\.End Then[\s\S]*?ELBeginEquationInsertion kind/,'collapsed cursor retains the existing insertion route');
+ assert.match(rightLeft,/If selectedRange\.Start <> selectedRange\.End Then[\s\S]*?ELStartEquationInsertion kind, selectedRange/,'collapsed cursor retains the shared insertion route');
+ assert.match(procedure('Public Sub ELStartEquationInsertion'),/Set Doc = selectedRange.Document[\s\S]*?selectedRange.Select[\s\S]*?NextNumber\(\)[\s\S]*?ELBeginEquationInsertion kind, leadingParagraph/);
  assert.doesNotMatch(rightLeft,/InlineShapes\(\d+\)|Selection\.Move|Set chosen = .*InlineShapes/,'selection routing has no arbitrary adjacent-object fallback');
  const number=procedure('Private Sub InsertNumber');
  assert.match(number,/Set chosen = ELSelectedEquation\(Selection\)/);
@@ -375,10 +423,10 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
 
 test('Word insertion preview reads sequence resets before the insertion position',async()=>{
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
- const start=source.indexOf('Private Function SequenceBeforeSelection');
+ const start=source.indexOf('Private Function SequenceBeforePosition');
  assert.notEqual(start,-1);
  const sequence=source.slice(start,source.indexOf('End Function',start));
- assert.match(sequence,/field\.Code\.Start < Selection\.Start/);
+ assert.match(sequence,/field\.Code\.Start < beforePosition/);
  assert.match(sequence,/parts\(i\) = "\\R"/);
  assert.match(sequence,/parts\(i\) = "\\C"/);
  assert.match(sequence,/If resetFound Then[\s\S]*value = resetValue[\s\S]*ElseIf Not repeatCurrent Then[\s\S]*value = value \+ 1/);
@@ -390,8 +438,8 @@ test('Legacy MathType numbering visits nested code fields and preserves macrobut
  const collect=source.slice(source.indexOf('Private Sub CollectEquationFields'),source.indexOf('Private Function IsEquationReference'));
  assert.match(collect,/CollectEquationFields field\.Code, fields, seen/);assert.match(collect,/CollectEquationFields field\.Result, fields, seen/);assert.match(collect,/field\.Type <> wdFieldEmbed/);assert.match(collect,/seen\.Add field, key/);assert.doesNotMatch(collect,/field\.Update|Selection|ActiveDocument/);
  const update=source.slice(source.indexOf('Private Sub UpdateNumbersForDocument'),source.indexOf('Private Sub InsertPreparedFragment'));
- const entry=source.slice(source.indexOf('Public Sub UpdateNumbers()'),source.indexOf('Private Sub SetNumberFormat'));
- assert.match(entry,/Set Doc = ActiveDocument\s+UpdateNumbersForDocument Doc\s+ELInvalidateDocumentSnapshot/);assert.doesNotMatch(entry,/\.Fields|\.Update/);
+ const entry=source.slice(source.indexOf('Public Sub UpdateNumbers()'),source.indexOf('Private Sub OpenNumberingSettings'));
+ assert.match(entry,/Set Doc = ActiveDocument\s+UpdateNumbersForDocument Doc\s+NumberingChanged Doc\s+ELInvalidateDocumentSnapshot/);assert.doesNotMatch(entry,/\.Fields|\.Update/);
  assert.match(source,/"MTEQN", "MTCHAP", "MTSEC"/);assert.match(update,/Doc\.Bookmarks\.ShowHidden = True/);assert.equal((update.match(/Doc\.Bookmarks\.ShowHidden = showHidden/g)||[]).length,2);assert.match(update,/IsEquationSequence\(field\).*field\.Update[\s\S]*IsEquationReference\(field, Doc\).*field\.Update/);assert.doesNotMatch(update,/\.Delete|\.Unlink|Selection|ActiveDocument|MTPlaceRef.*\.Update/);
  const reference=source.slice(source.indexOf('Private Function IsEquationReference'),source.indexOf('Private Sub UpdateNumbersForDocument'));
  for(const guard of [/target\.Paragraphs\.Count <> 1/,/target\.Tables\.Count <> 0/,/target\.InlineShapes\.Count <> 0/,/target\.Characters\.Count > 256/])assert.match(reference,guard,'a whole table or prose bookmark must not qualify just because it contains a formula');

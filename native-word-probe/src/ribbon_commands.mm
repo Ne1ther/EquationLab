@@ -14,6 +14,7 @@
 #include "word_insertion.hpp"
 #include "word_document_requests.hpp"
 #include "word_snapshot_zip.hpp"
+#include "numbering_prompt.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
@@ -80,9 +81,13 @@ BOOL wordRequestTarget(id value){
     return [identity isKindOfClass:NSString.class]&&[identity length]>=3&&[identity length]<=256&&[identity rangeOfString:@":"].location!=NSNotFound&&[snapshot isKindOfClass:NSNumber.class]&&[snapshot intValue]>0&&[snapshot doubleValue]==[snapshot intValue]&&[index isKindOfClass:NSNumber.class]&&[index intValue]>=0&&[index intValue]<=10000&&[index doubleValue]==[index intValue]&&wordRequestHexId(digest);
 }
 BOOL wordRequestFieldsMatch(NSArray<NSString*>* fields,NSDictionary* envelope){
-    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length||![envelope[@"requestId"] isEqual:fields[2]])return NO;
+    NSString* insertionMode=envelope[@"insertionMode"];
+    if(insertionMode){
+        if(fields.count!=10||![fields[0] isEqual:@"ELDREQ3"]||fields[9].length||![insertionMode isEqual:fields[8]]||![@[@"inline",@"display",@"numbered-left",@"numbered-right"] containsObject:insertionMode])return NO;
+    }else if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length)return NO;
+    if(![envelope[@"requestId"] isEqual:fields[2]])return NO;
     NSDictionary* target=envelope[@"target"];NSString* documentIdentity=envelope[@"documentIdentity"];
-    if([fields[3] isEqual:@"0"])return !target&&!documentIdentity&&!fields[4].length&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
+    if([fields[3] isEqual:@"0"])return !insertionMode&&!target&&!documentIdentity&&!fields[4].length&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
     if([fields[3] isEqual:@"1"])return wordRequestTarget(target)&&!documentIdentity&&[target[@"identity"] isEqual:fields[4]]&&[[target[@"snapshot"] stringValue] isEqual:fields[5]]&&[[target[@"index"] stringValue] isEqual:fields[6]]&&[target[@"nativeSha256"] isEqual:fields[7]];
     return [fields[3] isEqual:@"2"]&&!target&&[documentIdentity isKindOfClass:NSString.class]&&[documentIdentity isEqual:fields[4]]&&[fields[5] isEqual:@"0"]&&[fields[6] isEqual:@"0"]&&!fields[7].length;
 }
@@ -91,7 +96,7 @@ NSDictionary* wordDocumentRequestFromFile(NSInteger* tokenOut=nullptr){
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"native-document-request.txt");if(!data)return nil;
     NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
-    if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length)return nil;
+    if(!((fields.count==9&&[fields[0] isEqual:@"ELDREQ2"]&&!fields[8].length)||(fields.count==10&&[fields[0] isEqual:@"ELDREQ3"]&&!fields[9].length)))return nil;
     NSScanner* tokenScanner=[NSScanner scannerWithString:fields[1]];NSInteger token=0;
     if(![tokenScanner scanInteger:&token]||!tokenScanner.isAtEnd||token<=0||token>INT32_MAX||!wordRequestHexId(fields[2]))return nil;
     NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(static_cast<std::int32_t>(token));
@@ -117,7 +122,8 @@ std::int32_t takeWordDocumentRequest(){
         NSString* tokenText=[documentIdentity substringFromIndex:expectedPrefix.length];NSScanner* scanner=[NSScanner scannerWithString:tokenText];int identityToken=0;
         if(![scanner scanInt:&identityToken]||!scanner.isAtEnd||identityToken<=0){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-document-identity");return -2;}
     }
-    NSString* text=[NSString stringWithFormat:@"ELDREQ2\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
+    NSString* insertionMode=envelope[@"insertionMode"];
+    NSString* text=insertionMode?[NSString stringWithFormat:@"ELDREQ3\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest,insertionMode]:[NSString stringWithFormat:@"ELDREQ2\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
     NSData* bytes=[text dataUsingEncoding:NSUTF8StringEncoding];
     if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"native-document-request.txt",bytes)){
         bridge_probe::finishWordDocumentRequest(token,@"failed",@"request-file-write");return -2;
@@ -150,7 +156,7 @@ constexpr NSTimeInterval ActivationAnchorLifetime=5.0;
 constexpr NSTimeInterval PreCaptureLifetime=15.0;
 std::int32_t openTool(NSString* tool){
     if(!validHost())return -1;
-    if([@[@"typography",@"spacing",@"export"] containsObject:tool])return EquationLabQueueEditorTool(tool);
+    if([@[@"typography",@"spacing",@"export",@"numbering"] containsObject:tool])return EquationLabQueueEditorTool(tool);
     NSURL* app=nil;
     for(NSRunningApplication* running in [NSRunningApplication runningApplicationsWithBundleIdentifier:@"app.equationlab.mac"].reverseObjectEnumerator)if(!running.terminated&&running.bundleURL){app=running.bundleURL;break;}
     if(!app)app=[NSWorkspace.sharedWorkspace URLForApplicationWithBundleIdentifier:@"app.equationlab.mac"];
@@ -320,9 +326,15 @@ std::int32_t prepareInsertion(NSString* layout){
     NSString* text=documentCaptureText(inputFile(directory,@"ribbon-insertion-context.txt"));
     NSDictionary* context=decodeDocumentContext(text);if(!context[@"identity"]||!context[@"snapshot"])return -3;
     NSMutableDictionary* document=[context mutableCopy];document[@"index"]=@(-1);
+    NSDictionary* opening=bridge_probe::wordDocumentRequestEnvelope(bridge_probe::currentWordDocumentRequestToken());
+    NSDictionary* target=opening[@"target"];
+    if(opening[@"insertionMode"]&&target){
+        if(![target[@"identity"] isEqual:document[@"identity"]])return -3;
+        document[@"insertionAfter"]=@{@"index":target[@"index"],@"nativeSha256":target[@"nativeSha256"]};
+    }
     NSString* settings=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-settings.txt") encoding:NSUTF8StringEncoding];
     NSArray<NSString*>* lines=[settings componentsSeparatedByString:@"\n"];
-    NSDictionary* options=@{@"mode":layout,@"numberFormat":lines.count>0?lines[0]:@"(#E1)",@"chapter":@(lines.count>1?[lines[1] integerValue]:1),@"section":@(lines.count>2?[lines[2] integerValue]:1),@"equation":@(lines.count>3?[lines[3] integerValue]:1)};
+    NSDictionary* options=@{@"mode":layout,@"numberFormat":lines.count>0?lines[0]:@"(#E1)",@"chapter":@(lines.count>1?[lines[1] integerValue]:1),@"section":@(lines.count>2?[lines[2] integerValue]:1),@"equation":@(lines.count>3?[lines[3] integerValue]:1),@"contextEstablished":@(lines.count<=5||[lines[4] isEqual:@"1"])};
     return EquationLabBeginWordInsertion(directory,document,options,[context[@"snapshot"] intValue]);
 }
 BOOL decodeSelectionEquation(NSString* text,NSInteger* index,BOOL* selectionBound,NSInteger* documentIdentity=nullptr,NSInteger* snapshotToken=nullptr,BOOL* explicitCached=nullptr){
@@ -553,6 +565,9 @@ void EquationLabDiscardDocumentParts(){clearDocumentParts();}
 RIBBON_EXPORT(MathTypeBridgeRibbonOpen,openTool(@"editor"))
 RIBBON_EXPORT(MathTypeBridgeRibbonTypography,openTool(@"typography"))
 RIBBON_EXPORT(MathTypeBridgeRibbonSpacing,openTool(@"spacing"))
+RIBBON_EXPORT(MathTypeBridgeRibbonNumbering,openTool(@"numbering"))
+RIBBON_EXPORT(MathTypeBridgeNumberingPrompt,validHost()?bridge_probe::numbering_prompt::show(bridge_probe::numbering_prompt::request([[NSString alloc] initWithData:inputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-numbering-prompt.txt") encoding:NSUTF8StringEncoding])):-1)
+RIBBON_EXPORT(MathTypeBridgeNumberingPromptNextChar,validHost()?bridge_probe::numbering_prompt::nextCharacter():-1)
 RIBBON_EXPORT(MathTypeBridgeRibbonExport,openTool(@"export"))
 RIBBON_EXPORT(MathTypeBridgeRibbonHelp,openTool(@"help"))
 RIBBON_EXPORT(MathTypeBridgeRibbonCapabilities,openTool(@"capabilities"))
@@ -607,18 +622,20 @@ RIBBON_EXPORT(MathTypeBridgePublishWordWorkspace,([&](){
         NSString* identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),token];
         bridge_probe::publishWordWorkspace(@{@"identity":identity,@"name":lines[2]},nil);return 0;
     }
-    if(lines.count<4||![lines[0] isEqual:@"ELWORK2"])return -2;
+    BOOL settings=[lines.firstObject isEqual:@"ELWORK3"];NSUInteger stride=settings?5:3;
+    if(lines.count<4||(!settings&&![lines[0] isEqual:@"ELWORK2"]))return -2;
     NSScanner* activeScanner=[NSScanner scannerWithString:lines[1]];int activeToken=0;
     if(![activeScanner scanInt:&activeToken]||!activeScanner.isAtEnd||activeToken<0)return -3;
     NSScanner* countScanner=[NSScanner scannerWithString:lines[2]];int count=0;
     NSString* finalField=lines.lastObject;
-    if(![countScanner scanInt:&count]||!countScanner.isAtEnd||count<0||count>128||lines.count!=static_cast<NSUInteger>(4+count*3)||finalField.length)return -4;
+    if(![countScanner scanInt:&count]||!countScanner.isAtEnd||count<0||count>128||lines.count!=static_cast<NSUInteger>(4+count*stride)||finalField.length)return -4;
     NSMutableArray* documents=[NSMutableArray arrayWithCapacity:count];NSMutableSet* identities=[NSMutableSet set];NSDictionary* active=nil;
     for(int i=0;i<count;i++){
-        NSString* tokenText=lines[3+i*3],*readOnly=lines[4+i*3],*name=lines[5+i*3];NSScanner* tokenScanner=[NSScanner scannerWithString:tokenText];int token=0;
+        NSString* tokenText=lines[3+i*stride],*readOnly=lines[4+i*stride],*name=lines[5+i*stride];NSScanner* tokenScanner=[NSScanner scannerWithString:tokenText];int token=0;
         if(![tokenScanner scanInt:&token]||!tokenScanner.isAtEnd||token<=0||![@[@"0",@"1"] containsObject:readOnly]||name.length>512||[name rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return -5;
         NSString* identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),token];if([identities containsObject:identity])return -5;[identities addObject:identity];
-        NSDictionary* document=@{@"identity":identity,@"name":name,@"readOnly":@([readOnly isEqual:@"1"])};[documents addObject:document];if(token==activeToken)active=@{@"identity":identity,@"name":name};
+        NSMutableDictionary* document=[@{@"identity":identity,@"name":name,@"readOnly":@([readOnly isEqual:@"1"])} mutableCopy];
+        if(settings){NSString* format=lines[6+i*stride];if(format.length>128||[format rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return -5;if(format.length)document[@"numberFormat"]=format;int revision=0;NSScanner* revisionScanner=[NSScanner scannerWithString:lines[7+i*stride]];if(![revisionScanner scanInt:&revision]||!revisionScanner.isAtEnd||revision<0||revision>2147483646)return -5;document[@"numberingRevision"]=@(revision);}[documents addObject:document];if(token==activeToken)active=@{@"identity":identity,@"name":name};
     }
     if((count==0&&activeToken!=0)||(count>0&&!active))return -6;
     bridge_probe::publishWordWorkspace(active,documents);return 0;

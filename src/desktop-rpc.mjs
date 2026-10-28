@@ -10,6 +10,7 @@ import {renderNative,nativePdf,warmNativeRenderer} from './font-renderer.mjs';
 import {readEqp,writeEqp} from './eqp.mjs';
 import {readTypography} from './typography-native.mjs';
 import {previewNumberFormat} from './layout.mjs';
+import {checkedWordNumbering} from './word-numbering.mjs';
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
 // Word stages immutable snapshots. Parse each snapshot once, including while
@@ -61,16 +62,18 @@ async function readWordSession(ticket){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
- const allowed=new Set(['mode','numberFormat','chapter','section','equation']);
+ const allowed=new Set(['mode','numberFormat','chapter','section','equation','contextEstablished']);
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(key=>!allowed.has(key)))throw Error('Word insertion layout is invalid');
  const modes={'inline':'inline','display':'display','right-numbered':'numbered-right','left-numbered':'numbered-left','numbered-right':'numbered-right','numbered-left':'numbered-left'};
  const mode=modes[value.mode];if(!mode)throw Error('Word insertion layout is invalid');
- for(const key of ['chapter','section','equation'])if(value[key]!==undefined&&value[key]!==retained[key])throw Error('Word insertion layout must retain the captured numbering values');
- const layout={mode,numberFormat:value.numberFormat??retained.numberFormat,chapter:retained.chapter,section:retained.section,equation:retained.equation};
+ if(value.contextEstablished!==undefined&&value.contextEstablished!==retained.contextEstablished)throw Error('Word counter context belongs to the captured insertion session');
+ if(value.equation!==undefined&&value.equation!==retained.equation)throw Error('Word insertion layout must retain the captured numbering values');
+ for(const key of ['chapter','section'])if(value[key]!==undefined&&(!Number.isSafeInteger(value[key])||value[key]<1||value[key]>32767))throw Error('Invalid Word chapter/section counter');
+ const layout={mode,numberFormat:value.numberFormat??retained.numberFormat,chapter:value.chapter??retained.chapter,section:value.section??retained.section,equation:retained.equation};
  if(typeof layout.numberFormat!=='string'||layout.numberFormat.length>128)throw Error('Word insertion layout is invalid');
  previewNumberFormat(layout.numberFormat,layout);
  return layout;
@@ -84,6 +87,10 @@ async function insertWordEquation(payload){
  if(session.insertion!==true||session.document?.index!==-1)throw Error('Word edit session cannot accept an insertion payload');
  if(payload.session!==undefined&&session.session!==payload.session)throw Error('Word insertion source session does not match');
  const layout=insertionLayout(payload.layout,session.layout);
+ const changedContext=layout.chapter!==session.layout.chapter||layout.section!==session.layout.section||session.numberingContextSupport&&session.layout.contextEstablished===false&&layout.mode.startsWith('numbered-')&&/#[CS]/.test(layout.numberFormat);
+ if(changedContext&&!session.numberingContextSupport)throw Error('Word insertion layout must retain the captured numbering values with this plugin; chapter/section changes require the updated plugin');
+ if(changedContext&&!layout.mode.startsWith('numbered-'))throw Error('Chapter/section changes require a numbered equation');
+ if(changedContext)layout.equation=1;
  const sourcePath=await realpath(session.path),inputPath=await realpath(payload.input);
  if(inputPath!==sourcePath)throw Error('Word 插入源文件不属于当前 Word 会话');
  const {objects}=await inspectDocx(await readFile(sourcePath));
@@ -96,7 +103,7 @@ async function insertWordEquation(payload){
   ole=applyRuler(base,{ruler:payload.ruler});if(ole!==base)base.fill(0);
   native=inspectOle(ole).native;
   const pdf=await nativePdf(ole);
-  docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:false});
+  docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:changedContext});
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:native.toString('base64'),...pdf,docx:docx.toString('base64')});
   return {...result,insertion:true,acknowledgement:session.acknowledgement===true};
  }finally{native?.fill(0);docx?.fill(0);ole.fill(0);if(ole!==base)base.fill(0);}
@@ -170,8 +177,8 @@ export async function desktopRequest(request) {
   let numbering;
   if(payload.numbering!==undefined){
    const value=payload.numbering;
-   if(!session.numberingSupport||!target||!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).length!==2||!['left','right'].includes(value.side)||typeof value.format!=='string')throw Error('Word 编号目标或插件能力无效');
-   previewNumberFormat(value.format,{chapter:1,section:1,equation:1});numbering={format:value.format,side:value.side};
+   if(!session.numberingSupport||!target)throw Error('Word 编号目标或插件能力无效');
+   numbering=checkedWordNumbering(value,{supported:session.numberingSupport,contextSupported:session.numberingContextSupport,target});
   }
   const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex),ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),p=await nativePdf(ole);
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p,...target?{target}:{},...numbering?{numbering}:{}});
@@ -183,7 +190,7 @@ export async function desktopRequest(request) {
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
  if(action==='inspect') {
-  const {objects,zip}=await readDocument(payload.path);
+  const {objects,zip,numberFormat,numberingRevision}=await readDocument(payload.path);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
@@ -209,7 +216,7 @@ export async function desktopRequest(request) {
    }
    return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
   }));
-  return {path:payload.path,objects:entries};
+  return {path:payload.path,objects:entries,documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision};
  }
  if(action==='export') {
   if(!Array.isArray(payload.equations)||payload.equations.length<1||payload.equations.length>500)throw Error('需要 1–500 条公式');

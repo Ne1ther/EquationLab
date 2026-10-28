@@ -175,6 +175,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             case "editor": break
             case "typography": inspectorTab = .style; showInspector = true
             case "spacing": inspectorTab = .spacing; showInspector = true
+            case "numbering": inspectorTab = .document; showInspector = true
             case "export": showInspector = true; inspectorTab = .document
             case "help", "capabilities": showCompatibility = true
             default: return
@@ -186,7 +187,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         let query = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         guard Set(query.map(\.name)).count == query.count, query.count <= 2,
               query.allSatisfy({ item in
-                  item.name == "tool" && ["typography", "spacing", "export"].contains(item.value ?? "") ||
+                  item.name == "tool" && ["typography", "spacing", "export", "numbering"].contains(item.value ?? "") ||
                   item.name == "request" && item.value?.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil
               }) else { return }
         let ticket = String(url.path.dropFirst())
@@ -302,6 +303,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         switch tool {
         case "typography": inspectorTab = .style
         case "spacing": inspectorTab = .spacing
+        case "numbering": inspectorTab = .document
         case "export": inspectorTab = .document
         default: return
         }

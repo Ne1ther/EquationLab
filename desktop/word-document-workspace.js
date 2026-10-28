@@ -2,7 +2,7 @@
 // reopening requires a fresh, Word-owned document capture and OLE session.
 window.createWordDocumentWorkspace = api => {
  let cached=null,pending=null,generation=0,selecting=false,statusFlight=null,refreshFlight=null,observedIdentity=undefined,active=null,wordDocumentUnavailable=false,unavailableIdentity=null,unavailableName='',knownRetired=new Set();
- let documents=[],connected=false,metadataFlight=null,emptyDocument=null;
+ let documents=[],connected=false,insertionSupported=false,metadataFlight=null,emptyDocument=null,preparedInsertionDraft=null;
  const changed=()=>api.changed();
  const readStatus=()=>metadataFlight??(metadataFlight=api.native('wordWorkspaceStatus').finally(()=>{metadataFlight=null;}));
  function updateCatalog(status){
@@ -11,9 +11,11 @@ window.createWordDocumentWorkspace = api => {
   const next=nextConnected&&Array.isArray(status.documents)?status.documents.slice(0,128).filter(item=>{
    if(!item||typeof item.identity!=='string'||typeof item.name!=='string'||seen.has(item.identity)||status.retiredIdentities?.includes(item.identity))return false;
    seen.add(item.identity);return true;
-  }).map(({identity,name,readOnly})=>({identity,name,readOnly:readOnly===true})):[];
-  if(connected===nextConnected&&JSON.stringify(documents)===JSON.stringify(next))return;
-  connected=nextConnected;documents=next;changed();
+  }).map(({identity,name,readOnly,numberFormat,numberingRevision})=>({identity,name,readOnly:readOnly===true,...typeof numberFormat==='string'?{numberFormat}:{},...Number.isSafeInteger(numberingRevision)?{numberingRevision}:{}})):[];
+  if(nextConnected)api.numberingMetadata?.(next);
+  const nextInsertionSupported=nextConnected&&status.insertionRequestSupport===true;
+  if(connected===nextConnected&&insertionSupported===nextInsertionSupported&&JSON.stringify(documents)===JSON.stringify(next))return;
+  connected=nextConnected;insertionSupported=nextInsertionSupported;documents=next;changed();
  }
  async function refreshList(){
   const before=generation;
@@ -42,7 +44,7 @@ window.createWordDocumentWorkspace = api => {
   cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
  };
  async function cancelPending(){
-  const old=pending;pending=null;generation++;changed();
+  const old=pending;pending=null;preparedInsertionDraft=null;generation++;changed();
   if(old?.requestId)void api.native('wordDocumentCancel',{requestId:old.requestId}).catch(()=>{});
  }
  function failure(request,text){
@@ -78,11 +80,12 @@ window.createWordDocumentWorkspace = api => {
    await api.pause(300);
   }
  }
- async function requestOpen(target=null,discardApproved=false,expectedIdentity=null,clearOnEmpty=false,documentIdentity=null){
+ async function requestOpen(target=null,discardApproved=false,expectedIdentity=null,clearOnEmpty=false,documentIdentity=null,insertion=null){
   await cancelPending();
-  let ready;const request={generation,requestId:null,target,discardApproved,expectedIdentity,clearOnEmpty,documentIdentity,ready:new Promise(resolve=>{ready=resolve;})};pending=request;changed();api.message('正在读取 Word 文档…');
+  let ready;const request={generation,requestId:null,target,discardApproved,expectedIdentity,clearOnEmpty,documentIdentity,insertion,ready:new Promise(resolve=>{ready=resolve;})};pending=request;changed();api.message(insertion?'正在准备 Word 插入位置…':'正在读取 Word 文档…');
   try{
-   const result=await api.native('wordDocumentOpen',documentIdentity?{documentIdentity}:target?{target}:{});
+   const destination=documentIdentity?{documentIdentity}:target?{target}:{};
+   const result=await api.native('wordDocumentOpen',{...destination,...insertion?{insertionMode:insertion.mode}:{}});
    if(pending!==request||request.generation!==generation){if(result.requestId)await api.native('wordDocumentCancel',{requestId:result.requestId}).catch(()=>{});return false;}
    if(!/^[a-f0-9]{64}$/.test(result.requestId||''))throw Error('Word 文档请求无效');
    request.requestId=result.requestId;ready();void monitor(request);return true;
@@ -235,6 +238,31 @@ window.createWordDocumentWorkspace = api => {
   }catch(error){api.message('未能切换 Word 文档：'+error.message,true);return false;}
   finally{selecting=false;changed();}
  }
+ async function insert(mode){
+  const before=api.state(),identity=currentIdentity(),beforeGeneration=generation;
+  if(!['inline','display','numbered-left','numbered-right'].includes(mode)||!identity||before.busy||before.outcomeUnknown||before.source?.insertion||pending||selecting)return false;
+  selecting=true;changed();
+  try{
+   const status=await readStatus();if(generation!==beforeGeneration)return false;updateCatalog(status);
+   if(!insertionSupported)throw Error('请先更新 Word 插件并重新打开 Word，再从 App 插入。');
+   if(!connected||!documents.some(doc=>doc.identity===identity&&!doc.readOnly)||status.retiredIdentities?.includes(identity))throw Error('目标 Word 文档已关闭或不可编辑。');
+   const index=before.selectedIndex??before.source?.activeIndex;
+   const object=before.wordTicket&&before.source?.hasDocumentContext?before.source.objects?.[index]:null;
+   const target=object?{identity,snapshot:before.source.documentSnapshot,index:before.source.documentPosition??index,nativeSha256:object.nativeSha256}:null;
+   if(before.wordTicket&&!validTarget(target))throw Error('当前公式位置尚未就绪，请等待文档加载完成。');
+   let draft=null;
+   if(before.wordTicket&&dirty(before)){
+    const answer=await api.native('confirmWordSessionSwitch',{newFormula:true});if(!answer?.discard)return false;
+   }else if(!before.wordTicket)draft=api.captureInsertionDraft?.()??null;
+   let current=api.state();
+   if(generation!==beforeGeneration||current.wordTicket!==before.wordTicket||current.source!==before.source||current.busy||current.outcomeUnknown)return false;
+   if(current.wordTicket&&!await api.detach({preserveDraft:true}))return false;
+   current=api.state();
+   if(generation!==beforeGeneration||current.wordTicket||current.busy||current.outcomeUnknown)return false;
+   return await requestOpen(target,true,identity,false,target?null:identity,{mode,draft});
+  }catch(error){api.message('未能准备 Word 插入：'+error.message+' 草稿仍保留。',true);return false;}
+  finally{selecting=false;changed();}
+ }
  return {
   remember,
   visibleSource:source=>wordDocumentUnavailable&&(identityOf(source)===unavailableIdentity||identityOf(cached)===unavailableIdentity)?null:source||cached,
@@ -243,6 +271,7 @@ window.createWordDocumentWorkspace = api => {
   get hasDocument(){return cached!==null;},
   get openDocuments(){return documents.map(item=>({...item}));},
   get connected(){return connected;},
+  get insertionSupported(){return insertionSupported;},
   get documentIdentity(){return currentIdentity();},
   get documentName(){return wordDocumentUnavailable?unavailableName:emptyDocument?.name|| (active&&active.identity===currentIdentity()?active.name:null);},
   get otherWordDocumentName(){const identity=currentIdentity();return active&&(wordDocumentUnavailable||active.identity!==identity)?active.name:null;},
@@ -250,6 +279,8 @@ window.createWordDocumentWorkspace = api => {
   refreshCurrent,
   switchToCurrent,
   chooseDocument,
+  insert,
+  takeInsertionDraft(requestId){const entry=preparedInsertionDraft;preparedInsertionDraft=null;return entry?.requestId===requestId?entry.draft:null;},
   refreshList,
   cancelPending,
   async resume(wordRunning=true){
@@ -265,10 +296,11 @@ window.createWordDocumentWorkspace = api => {
    if(status?.connected){if(Array.isArray(status.retiredIdentities))knownRetired=new Set(status.retiredIdentities.filter(identity=>typeof identity==='string'));const retired=new Set(knownRetired);const sourceIdentity=identityOf(current.source),cacheIdentity=identityOf(cached),cachedBeforeRetirement=cached,retiredIdentity=sourceIdentity&&retired.has(sourceIdentity)?sourceIdentity:!sourceIdentity&&cacheIdentity&&retired.has(cacheIdentity)?cacheIdentity:null;if(cacheIdentity&&retired.has(cacheIdentity))cached=null;if(retiredIdentity){wordDocumentUnavailable=true;unavailableIdentity=retiredIdentity;unavailableName=String(current.source?.documentName||cachedBeforeRetirement?.documentName||'Word 文档');cached=null;changed();if(current.busy||current.wordTicket||current.outcomeUnknown||current.draftChanged)return false;}if(status.active&&typeof status.active.identity==='string'&&retired.has(status.active.identity)){active=null;observedIdentity=null;changed();return false;}const next=status.active&&typeof status.active.identity==='string'?status.active:null;active=next?{identity:next.identity,name:String(next.name||'Word 文档')}:null;observedIdentity=active?.identity??null;}
    return requestOpen(null,false,status?.connected?active?.identity:null);
   },
-  async select(index){
+  async select(index,{reload=false}={}){
    const state=api.state(),document=state.source||cached,object=document?.objects[index];
    if(wordDocumentUnavailable){api.message('文档连接已结束，无法再选择原文档公式。草稿已保留。',true);return false;}
    if(state.busy||state.outcomeUnknown||pending||selecting||!object)return false;
+   if(reload&&state.draftChanged)return false;
    const target={identity:document.documentIdentity,snapshot:document.documentSnapshot,index,nativeSha256:object.nativeSha256};
    if(!validTarget(target)){api.message('文档信息已失效，请从 Word 重新打开公式。',true);return false;}
    selecting=true;changed();
@@ -277,7 +309,7 @@ window.createWordDocumentWorkspace = api => {
     if(state.draftChanged){const answer=await api.native('confirmWordSessionSwitch',{browsing:true});if(!answer?.discard)return false;approved=true;}
     remember(document);
     if(state.wordTicket&&!await api.detach())return false;
-    return await requestOpen(target,approved);
+    return await requestOpen(target,approved||reload);
    }finally{selecting=false;changed();}
   },
   async newFormula(){
@@ -308,10 +340,12 @@ window.createWordDocumentWorkspace = api => {
    if(!request)return false;
    if(!requestId){await cancelPending();return false;}
    if(request.expectedIdentity&&document.documentIdentity!==request.expectedIdentity){await cancelPending();throw Error('Word 当前文档已变化。草稿仍保留，请重新打开目标文档。');}
-   const target=request.target,object=document.objects?.[document.activeIndex];
-   const same=target&&document.documentIdentity===target.identity&&(document.documentPosition??document.activeIndex)===target.index;
+   if(request.insertion&&(!document.insertion||document.insertionLayout?.mode!==request.insertion.mode)){await cancelPending();throw Error('Word 返回的插入会话不匹配。草稿仍保留。');}
+   const target=request.target,object=document.objects?.[request.insertion?target?.index:document.activeIndex];
+   const same=target&&document.documentIdentity===target.identity&&(request.insertion?target.index:(document.documentPosition??document.activeIndex))===target.index;
    if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){await cancelPending();throw Error('Word 中的公式内容或位置已经变化。草稿仍保留，请重新打开文档后再选。');}
    const approved=request.discardApproved&&(!target||same);
+   preparedInsertionDraft=request.insertion?{requestId,draft:request.insertion.draft}:null;
    pending=null;generation++;changed();return !!approved;
   },
   clearUnavailable,

@@ -218,7 +218,7 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @end
 static NSString* editorLaunchURL(ProbeEditState* state){
     NSString* url=[@"equationlab://word-edit/" stringByAppendingString:state.ticket];
-    if([@[@"typography",@"spacing",@"export"] containsObject:state.toolIntent])url=[url stringByAppendingFormat:@"?tool=%@",state.toolIntent];
+    if([@[@"typography",@"spacing",@"export",@"numbering"] containsObject:state.toolIntent])url=[url stringByAppendingFormat:@"?tool=%@",state.toolIntent];
     if(state.documentRequestId.length)url=[url stringByAppendingFormat:@"%@request=%@",[url containsString:@"?"]?@"&":@"?",state.documentRequestId];
     return url;
 }
@@ -261,6 +261,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic) BOOL applying;
 @property(nonatomic,strong) ProbeBackgroundSave* backgroundSave;
 @property(nonatomic) BOOL numberingSupportRegistered;
+@property(nonatomic) BOOL numberingContextSupportRegistered;
 @property(nonatomic,strong) NSDictionary* reopenToolHandoff;
 @property(nonatomic,strong) NSDictionary* testDocumentContext;
 @property(nonatomic) std::uint64_t activation;
@@ -679,6 +680,7 @@ static ProbeEditorTransport* transport=nil;
     [self applyDeferredReopenTool:state];
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(self.numberingSupportRegistered)body[@"numberingSupport"]=@YES;
+    if(self.numberingContextSupportRegistered)body[@"numberingContextSupport"]=@YES;
     if(state.documentContext){
         // ELCTX4's one-shot token belongs to the Word/native handshake. The
         // service accepts only its public document schema after that check.
@@ -738,12 +740,12 @@ static ProbeEditorTransport* transport=nil;
     NSDictionary* context=state.documentContext;
     if([context[@"identity"] isKindOfClass:NSString.class]&&[context[@"identity"] isEqual:handoff[@"identity"]]&&
        [context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] isEqual:handoff[@"index"]]&&
-       [@[@"typography",@"spacing",@"export"] containsObject:handoff[@"tool"]])state.toolIntent=handoff[@"tool"];
+       [@[@"typography",@"spacing",@"export",@"numbering"] containsObject:handoff[@"tool"]])state.toolIntent=handoff[@"tool"];
 }
 - (bridge_probe::HResult)completeCancelledState:(ProbeEditState*)state {
     NSDictionary* handoff=nil;
     NSDictionary* binding=state.bindingContext;
-    if(state.reopenRequested&&state.ownerIdentity&&[@[@"typography",@"spacing",@"export"] containsObject:state.toolIntent]&&
+    if(state.reopenRequested&&state.ownerIdentity&&[@[@"typography",@"spacing",@"export",@"numbering"] containsObject:state.toolIntent]&&
        [binding[@"identity"] isKindOfClass:NSString.class]&&[binding[@"index"] isKindOfClass:NSNumber.class]){
         handoff=@{@"owner":@(state.ownerIdentity),@"identity":binding[@"identity"],@"index":binding[@"index"],@"tool":state.toolIntent};
         self.reopenToolHandoff=handoff;
@@ -786,7 +788,15 @@ static ProbeEditorTransport* transport=nil;
         if(!validPdf){[self failResult:current code:InvalidReply];return;}
         id targetValue=json[@"target"],numberingValue=json[@"numbering"];
         if(numberingValue){
-            if(!self.numberingSupportRegistered||![numberingValue isKindOfClass:NSDictionary.class]||[numberingValue count]!=2||![numberingValue[@"format"] isKindOfClass:NSString.class]||[numberingValue[@"format"] length]<1||[numberingValue[@"format"] length]>128||![@[@"left",@"right"] containsObject:numberingValue[@"side"]]||[numberingValue[@"format"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){[self failResult:current code:InvalidReply];return;}
+            if(!self.numberingSupportRegistered||![numberingValue isKindOfClass:NSDictionary.class]||[numberingValue count]!=static_cast<NSUInteger>(numberingValue[@"context"]?3:2)||![numberingValue[@"format"] isKindOfClass:NSString.class]||[numberingValue[@"format"] length]<1||[numberingValue[@"format"] length]>128||![@[@"left",@"right"] containsObject:numberingValue[@"side"]]||[numberingValue[@"format"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){[self failResult:current code:InvalidReply];return;}
+        }
+        if(numberingValue[@"context"]){
+            NSDictionary* context=numberingValue[@"context"];
+            if(!self.numberingContextSupportRegistered||![context isKindOfClass:NSDictionary.class]||context.count!=4){[self failResult:current code:InvalidReply];return;}
+            for(NSString* key in @[@"chapter",@"section",@"expectedChapter",@"expectedSection"]){
+                NSNumber* value=context[key];int minimum=[key hasPrefix:@"expected"]?0:1;
+                if(![value isKindOfClass:NSNumber.class]||CFGetTypeID((__bridge CFTypeRef)value)==CFBooleanGetTypeID()||value.doubleValue!=value.intValue||value.intValue<minimum||value.intValue>32767){[self failResult:current code:InvalidReply];return;}
+            }
         }
         if(targetValue&&![targetValue isKindOfClass:NSDictionary.class]){[self failResult:current code:InvalidReply];return;}
         NSDictionary* target=targetValue;
@@ -823,7 +833,7 @@ static ProbeEditorTransport* transport=nil;
 @end
 
 std::int32_t EquationLabQueueEditorTool(NSString* tool){
-    if(!NSThread.isMainThread||!transport||![@[@"typography",@"spacing",@"export"] containsObject:tool])return -1;
+    if(!NSThread.isMainThread||!transport||![@[@"typography",@"spacing",@"export",@"numbering"] containsObject:tool])return -1;
     for(ProbeEditState* state in transport.edits.allValues){
         if(!state.terminal&&state.activation==transport.activation){state.toolIntent=tool;return 0;}
     }
@@ -942,9 +952,26 @@ std::int32_t MathTypeBridgeBackgroundSaveIndex(){return NSThread.isMainThread&&t
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeRegisterNumberingSupport(){if(!NSThread.isMainThread||!transport)return -1;transport.numberingSupportRegistered=YES;return 0;}
 extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeRegisterNumberingContextSupport(){if(!NSThread.isMainThread||!transport)return -1;transport.numberingContextSupportRegistered=YES;return 0;}
+extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingSide(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return 0;return [save.numbering[@"side"] isEqual:@"left"]?1:2;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingNext(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;NSString* format=save.numbering[@"format"];if(save.numberingCursor>=format.length)return 0;return static_cast<std::int32_t>([format characterAtIndex:save.numberingCursor++])+1;}
+static std::int32_t backgroundNumberingCounter(NSString* key){
+    if(!NSThread.isMainThread)return -1;
+    ProbeBackgroundSave* save=transport.backgroundSave;
+    if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;
+    NSDictionary* context=save.numbering[@"context"];
+    return context?[context[key] intValue]:([key hasPrefix:@"expected"]?-1:0);
+}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundNumberingChapter(){return backgroundNumberingCounter(@"chapter");}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundNumberingSection(){return backgroundNumberingCounter(@"section");}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundNumberingExpectedChapter(){return backgroundNumberingCounter(@"expectedChapter");}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundNumberingExpectedSection(){return backgroundNumberingCounter(@"expectedSection");}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeFinishBackgroundNumbering(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;[transport ackBackground:save ok:YES];return 0;}
 extern "C" __attribute__((visibility("default")))

@@ -9,7 +9,7 @@ import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js';
 import { inspectOle, oleLatex, characters, editCharacters, replaceOleLatex,patchRuler,readRuler } from './native.mjs';
 import {makeNewOle} from './new-formula.mjs';
-import {equationLayout, equationReference, chapterBreak, standaloneNumber} from './layout.mjs';
+import {equationLayout, equationReference, chapterBreak, standaloneNumber,previewNumberFormat} from './layout.mjs';
 import {readTypography,patchTypography} from './typography-native.mjs';
 import {renderNative,rasterizeNativeSvg} from './font-renderer.mjs';
 
@@ -122,12 +122,16 @@ function fieldCodes(paragraph){
     if(n.localName==='fldChar'&&['separate','end'].includes(n.getAttributeNS(NS.w,'fldCharType'))&&open){result.push(code);open=false;}
   }return result;
 }
+const counterIndexes=new WeakMap();
 function priorCounters(doc,paragraph){
-  const values={EquationLab:0,ELChapter:null,ELSection:null};
-  for(const p of Array.from(doc.getElementsByTagNameNS(NS.w,'p'))){if(p===paragraph)break;for(const code of fieldCodes(p)){
+ if(!counterIndexes.has(doc)){
+  const index=new WeakMap(),values={EquationLab:0,ELChapter:null,ELSection:null};
+  for(const p of Array.from(doc.getElementsByTagNameNS(NS.w,'p'))){index.set(p,{...values});for(const code of fieldCodes(p)){
     const m=/^\s*SEQ (EquationLab|ELChapter|ELSection)\b([\s\S]*)/i.exec(code);if(!m||/\\c\b/.test(m[2]))continue;
     const reset=/\\r\s+(\d+)/.exec(m[2]);values[m[1]]=reset?Number(reset[1]):(values[m[1]]??0)+1;
-  }}return values;
+  }}counterIndexes.set(doc,index);
+ }
+ return counterIndexes.get(doc).get(paragraph)??{EquationLab:0,ELChapter:null,ELSection:null};
 }
 
 // Reconstruct the format from live fields, not their cached numeric text.
@@ -183,11 +187,12 @@ export async function inspectDocx(buffer) {
     const bookmark=owned?Array.from(paragraph.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>/^EL_/.test(b.getAttributeNS(NS.w,'name'))):null;
     const fields=owned?fieldCodes(paragraph):[];
     let numberText=null;if(bookmark){numberText='';let within=false;for(const node of Array.from(paragraph.childNodes)){if(node===bookmark){within=true;continue;}if(node.localName==='bookmarkEnd'&&node.getAttributeNS(NS.w,'id')===bookmark.getAttributeNS(NS.w,'id'))break;if(within&&node.nodeType===1)numberText+=Array.from(node.getElementsByTagNameNS(NS.w,'t')).map(n=>n.textContent).join('');}}
-    const layout={owned,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null,numberText};
+    const context=priorCounters(partDoc,paragraph);
+    const layout={owned,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null,numberText,chapter:context.ELChapter,section:context.ELSection};
     layout.mode=fields.some(code=>/SEQ EquationLab/.test(code))?(Array.from(paragraph.childNodes).indexOf(bookmark)<Array.from(paragraph.childNodes).indexOf(e.parentNode.parentNode)?'numbered-left':'numbered-right'):owned&&paragraph.getElementsByTagNameNS(NS.w,'jc')[0]?.getAttributeNS(NS.w,'val')==='center'?'display':'inline';
     if(!owned)layout.mode='unknown';
     if(bookmark){
-      const context=priorCounters(partDoc,paragraph);layout.numberFormat=bookmarkNumberFormat(bookmark);layout.chapter=context.ELChapter;layout.section=context.ELSection;
+      layout.numberFormat=bookmarkNumberFormat(bookmark);
       const code=fields.find(code=>/^\s*SEQ\s+EquationLab\b/i.test(code)&&!/\\c\b/.test(code));
       const reset=code&&/\\r\s+(\d+)/.exec(code);layout.equation=code?(reset?Number(reset[1]):context.EquationLab+1):null;
       layout.referenceCount=references.get(layout.bookmarkName)??0;
@@ -196,7 +201,16 @@ export async function inspectDocx(buffer) {
     objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
   }
   }
-  return {zip,doc,mainPart,objects};
+  let numberFormat=null,numberingRevision=0;
+  if(zip.file('word/settings.xml')){
+    const settings=parseXml(await zip.file('word/settings.xml').async('string'));
+    const variables=Array.from(settings.getElementsByTagNameNS(NS.w,'docVar'));
+    const revision=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberingRevision')?.getAttributeNS(NS.w,'val');
+    if(revision&&/^\d+$/.test(revision)&&Number(revision)<=2147483646)numberingRevision=Number(revision);
+    const variable=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberFormat');
+    if(variable){const value=variable.getAttributeNS(NS.w,'val');try{previewNumberFormat(value);numberFormat=value;}catch{/* Unknown document settings never become a write instruction. */}}
+  }
+  return {zip,doc,mainPart,objects,numberFormat,numberingRevision};
 }
 
 export async function editDocx(buffer,index,replacements,options={}) {
@@ -242,10 +256,11 @@ export async function arrangeDocx(buffer,{indices,layout={}}={}) {
     if(name){const b=Array.from(p.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>b.getAttributeNS(NS.w,'name')===name);id=Number(b.getAttributeNS(NS.w,'id'));existingBookmarks.delete(name);existingBookmarkIds.delete(String(id));}
     const opts={...layout,existingBookmarks,existingBookmarkIds};
     if(layout.mode?.startsWith('numbered-')){
+      counterIndexes.delete(o.partDoc);
       let context=priorCounters(o.partDoc,p);
       if(/#[CS]/.test(layout.numberFormat??'')&&(context.ELChapter===null||context.ELSection===null)){
         const marker=parseXml(`<root xmlns:w="${NS.w}">${chapterBreak({chapter:layout.chapter??1,section:layout.section??1,resetEquation:false})}</root>`).documentElement.firstChild;
-        p.parentNode.insertBefore(o.partDoc.importNode(marker,true),p);context=priorCounters(o.partDoc,p);
+        p.parentNode.insertBefore(o.partDoc.importNode(marker,true),p);counterIndexes.delete(o.partDoc);context=priorCounters(o.partDoc,p);
       }
       opts.equation=first&&layout.resetEquation?(layout.equation??1):context.EquationLab+1;
       opts.chapter=context.ELChapter??layout.chapter??1;opts.section=context.ELSection??layout.section??1;

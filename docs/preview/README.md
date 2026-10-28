@@ -6,9 +6,9 @@
 
 Actual workbench and open Word document menu in 0.6.5 build84.
 
-当前版本是 0.6.7 build90，主要调整编号写回和文档状态，沿用这些真实界面截图。长文档测试材料保留在本地，这里不展示私人文档。
+当前版本是 0.6.9 build94，新增 App 中的 Word 插入入口，并调整了文档选择器；这里保留较早版本的真实截图。长文档测试材料保留在本地，这里不展示私人文档。
 
-The current release is 0.6.7 build90. It mainly changes numbering and document state, so these actual interface screenshots remain in use. Private long-document test material is kept locally and is not shown here.
+The current release is 0.6.9 build94. It adds insertion into Word from the app and refines the document selector; these actual screenshots are from earlier versions. Private long-document test material is kept locally and is not shown here.
 
 ![已打开的 Word 文档](word-document-selector-0.6.5.png)
 

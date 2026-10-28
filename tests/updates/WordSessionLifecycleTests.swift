@@ -120,6 +120,20 @@ final class WordSessionLifecycleTests: XCTestCase {
         bridge.applyReadyWordTool(second)
         XCTAssertEqual(bridge.inspectorTab, .spacing)
     }
+    func testNumberingToolSelectsDocumentInspectorOnlyAfterItsTicketIsAccepted() {
+        let bridge = DesktopBridge()
+        bridge.openWordURL(URL(string: "equationlab://word-edit/" + second + "?tool=numbering")!)
+        XCTAssertEqual(bridge.inspectorTab, .style)
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])
+        bridge.applyReadyWordTool(first)
+        XCTAssertEqual(bridge.inspectorTab, .style)
+        _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": second])
+        bridge.applyReadyWordTool(second)
+        XCTAssertEqual(bridge.inspectorTab, .document)
+        XCTAssertTrue(bridge.showInspector)
+        XCTAssertTrue(bridge.updateWordSessionState(ended(second)))
+        XCTAssertFalse(bridge.wordSessionActive)
+    }
     func testEndingBeforeWindowAttachInvalidatesDeferredWordReveal() {
         let bridge = DesktopBridge()
         _ = bridge.updateWordSessionState(["wordSession": true, "wordTicket": first])

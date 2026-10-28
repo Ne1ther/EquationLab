@@ -13,6 +13,7 @@ std::int32_t EquationLabBeginWordInsertion(NSURL*,NSDictionary*,NSDictionary*,st
 std::int32_t EquationLabQueueEditorTool(NSString*){return -1;}
 bool EquationLabWordInsertionActive(){return false;}
 std::int32_t EquationLabWordInsertionInline(){return 0;}
+std::int32_t EquationLabWordInsertionNumberingNext(){return 0;}
 void EquationLabCancelWordInsertion(){}
 NSData* EquationLabClaimWordInsertion(std::int32_t*){return nil;}
 void EquationLabFinishWordInsertion(bool){}
@@ -31,6 +32,16 @@ std::int32_t finishWordDocumentRequest(std::int32_t,NSString*,NSString*){return 
 }
 namespace {void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}}
 int main(){@autoreleasepool{try{
+    using namespace bridge_probe::numbering_prompt;
+    check(request(@"ELNUM1\nformat\n(#C1.#E1)\n\n")!=nil,"native numbering format packet rejected");
+    check(request(@"ELNUM1\ncontext\n3\n2\n")!=nil,"native chapter/section packet rejected");
+    check(!request(@"ELNUM1\ncontext\n0\n2\n"),"zero chapter accepted");
+    check(!request(@"ELNUM1\nformat\n(#E1.#E1)\n\n"),"duplicate equation counter accepted");
+    check(!request(@"ELNUM1\nformat\n(#C1)\n\n"),"format without equation accepted");
+    check(!request(@"ELNUM1\nformat\n(#E1)\nextra\n"),"unexpected numbering prompt field accepted");
+    result=@"式(#C1.#E1)";cursor=0;NSMutableString* copy=[NSMutableString string];
+    for(std::int32_t unit=nextCharacter();unit;unit=nextCharacter())[copy appendFormat:@"%C",static_cast<unichar>(unit)];
+    check([copy isEqual:@"式(#C1.#E1)"]&&!result&&nextCharacter()==0,"numbering response changed Unicode or was replayed");
     NSString* unicodeCapture=@"ELCTX4\n1\n2\n3\n0\n论文.docx\n<pkg>中文</pkg>";
     NSMutableData* unicodeBytes=[NSMutableData dataWithBytes:"\xff\xfe" length:2];[unicodeBytes appendData:[unicodeCapture dataUsingEncoding:NSUTF16LittleEndianStringEncoding]];
     check([documentCaptureText(unicodeBytes) isEqual:unicodeCapture],"bulk VBA UTF-16 capture changed Unicode or retained its BOM");
@@ -73,6 +84,15 @@ int main(){@autoreleasepool{try{
     NSDictionary* explicitRequest=@{@"requestId":requestId,@"documentIdentity":@"process:inactive-42"};
     NSArray* explicitFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n2\nprocess:inactive-42\n0\n0\n\n",requestId] componentsSeparatedByString:@"\n"];
     check(wordRequestFieldsMatch(explicitFields,explicitRequest),"explicit document identity did not survive the native sidecar");
+    for(NSString* mode in @[@"inline",@"display",@"numbered-left",@"numbered-right"]){
+        NSMutableDictionary* insert=[explicitRequest mutableCopy];insert[@"insertionMode"]=mode;
+        NSArray* fields=[[@"ELDREQ3\n1\n" stringByAppendingFormat:@"%@\n2\nprocess:inactive-42\n0\n0\n\n%@\n",requestId,mode] componentsSeparatedByString:@"\n"];
+        check(wordRequestFieldsMatch(fields,insert),"App insertion lost its identity or mode in the sidecar");
+        check(!wordRequestFieldsMatch(explicitFields,insert),"insertion silently downgraded to ordinary open");
+        check(!wordRequestFieldsMatch(fields,explicitRequest),"unrequested insertion sidecar accepted");
+        NSMutableArray* wrong=[fields mutableCopy];wrong[8]=@"replace";
+        check(!wordRequestFieldsMatch(wrong,insert),"changed insertion mode accepted");
+    }
     NSArray* conflictFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n2\nprocess:inactive-42\n5\n0\n%@\n",requestId,requestId] componentsSeparatedByString:@"\n"];
     check(!wordRequestFieldsMatch(conflictFields,explicitRequest),"conflicting explicit document request fields were accepted");
     badRequest=[targetFields mutableCopy];badRequest[5]=@"5x";

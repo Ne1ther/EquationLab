@@ -46,8 +46,27 @@ window.nativeReply=({id,result})=>{const p=pending.get(id);if(!p)return;pending.
 function native(action,payload={}){return new Promise((resolve,reject)=>{const id=String(++sequence);pending.set(id,{resolve,reject});window.webkit.messageHandlers.native.postMessage({id,action,payload});});}
 window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
  native,now:()=>Date.now(),pause:ms=>new Promise(resolve=>setTimeout(resolve,ms)),message,
+ numberingMetadata:documents=>{
+  if(!source?.documentIdentity)return;
+  const document=documents.find(item=>item.identity===source.documentIdentity);
+  if(!document)return;
+  if(!source.insertion&&Number.isSafeInteger(document.numberingRevision)&&Number.isSafeInteger(source.documentNumberingRevision)&&document.numberingRevision!==source.documentNumberingRevision){
+   if(!source.numberingRefreshNeeded&&wordSessionChanged())message('Word 中的编号已更新；当前草稿已保留。结束当前编辑后会重新读取编号。');
+   source.numberingRefreshNeeded=true;
+  }
+  if(typeof document.numberFormat!=='string'||document.numberFormat===source.documentNumberFormat)return;
+  const previous=source.documentNumberFormat;
+  source.documentNumberFormat=document.numberFormat;
+  // Existing equations keep their own format. A clean insertion inherits an
+  // external default change, while a user-edited format remains a draft.
+  if(source.insertion&&!busy&&!wordSaveQueued&&!wordOutcomeUnknown&&$('layout-format').value===(previous??source.insertionLayout.numberFormat)){
+   source.insertionLayout={...source.insertionLayout,numberFormat:document.numberFormat};$('layout-format').value=document.numberFormat;
+  }
+  requestWorkbenchSync();
+ },
  empty:()=>{if(!wordTicket)resetNewFormula();},
- state:()=>({source,wordTicket,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordSaveInFlight,outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'}),
+ captureInsertionDraft:()=>({latex:mf.value,ruler:editingRuler,typography:window.desktopTypographySnapshot?.()??window.desktopTypographyPatch?.()}),
+ state:()=>({source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordSaveInFlight,outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'}),
  changed:()=>{renderObjects();controls();},
  detach:async({preserveDraft=false}={})=>{
   if(busy||wordSaveQueued||wordOutcomeUnknown||window.wordSaveInFlight)return false;
@@ -64,7 +83,17 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
  }
 });
 window.nativeResumeWordDocument=wordRunning=>window.wordDocumentWorkspace?.resume(wordRunning!==false);
-window.nativeSyncWordWorkspace=()=>window.wordDocumentWorkspace?.syncCurrent();
+window.nativeSyncWordWorkspace=async()=>{
+ const followed=await window.wordDocumentWorkspace?.syncCurrent();
+ if(source?.numberingRefreshNeeded&&wordTicket&&!source.insertion&&source.hasDocumentContext&&!source.documentLoading&&!source.documentLoadFailed&&!busy&&!wordNavigating&&!wordOutcomeUnknown&&!wordCommitRunning&&!window.wordDocumentWorkspace?.pending&&!wordSessionChanged()){
+  const document=source,index=selected?.index;if(!Number.isInteger(index))return followed;
+  document.numberingRefreshNeeded=false;
+  const refreshed=await window.wordDocumentWorkspace.select(index,{reload:true});
+  if(!refreshed&&source===document)document.numberingRefreshNeeded=true;
+  return refreshed||followed;
+ }
+ return followed;
+};
 window.nativeRefreshWordWorkspace=()=>window.wordDocumentWorkspace?.refreshCurrent();
 window.nativeSwitchWordDocument=()=>window.wordDocumentWorkspace?.switchToCurrent();
 window.nativeChooseWordDocument=identity=>window.wordDocumentWorkspace?.chooseDocument(identity);
@@ -132,6 +161,7 @@ async function waitForEditorIdle(timeoutMs=25000){
 }
 function resetNewFormula(){if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return false;}window.wordDocumentWorkspace?.clearUnavailable();source=null;selected=null;loadObjectLayout({});editingRuler=undefined;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;$('title').textContent='新建公式';$('eyebrow').textContent='FORMULA EDITOR';$('subtitle').textContent='点击模板、输入内容，再导出可编辑的 Word 公式。';mf.readOnly=false;$('latex').readOnly=false;for(const b of $('palette').querySelectorAll('button'))b.disabled=false;mf.value='';window.resetEditorHistory?.();renderObjects();window.desktopTypographyNew?.();changed();}
 window.nativeNew=()=>busy?false:wordTicket?window.wordDocumentWorkspace?.newFormula():resetNewFormula();
+window.nativeInsertWord=mode=>window.wordDocumentWorkspace?.insert(mode);
 window.nativeOpen=()=>perform(async()=>{if(wordTicket)throw Error('请先保存或取消当前 Word 编辑会话');const r=await native('open');if(!r){message('');return;}source=r;message('已读取 '+r.objects.length+' 个 MathType 对象');renderObjects();$('subtitle').textContent=r.path;if(r.objects.length)selectObject(0);else message('这个文档未找到 MathType OLE 公式。Word 自带公式和纯图片不在此列表。');});
 function renderObjects(){return syncSidebar();}
 function selectObject(index,{scheduleValidation=true}={}){selected=source.objects[index];if(!selected)return;loadObjectLayout(selected);mode='rebuild';$('title').textContent='编辑文档中的公式';$('eyebrow').textContent='LEGACY MATHTYPE';$('source-panel').hidden=false;$('save-edit').hidden=false;$('arrange-source').hidden=false;$('source-class').textContent=selected.progId;mf.value=selected.latex||'';window.syncEquationMacros(mf);selected.editorBaseline=mf.value;editingRuler=selected.ruler??undefined;window.resetEditorHistory?.();window.desktopTypographyLoad?.(selected.typography);renderModes();const sidebarSync=renderObjects();$('original-preview').replaceChildren();if(selected.image){const image=document.createElement('img');image.src=selected.image;image.alt='原文档中的公式预览';$('original-preview').append(image);}if(selected.error){status('当前公式只读',selected.error,true);valid=false;controls();}else changed(scheduleValidation);return sidebarSync;}
@@ -164,18 +194,23 @@ syncSidebar();
 function loadObjectLayout(object){
  const layout=object.layout||{},unknown=!!wordTicket&&!source?.hasDocumentContext||layout.mode==='unknown';
  for(const [id,key] of [['layout-mode','mode'],['layout-format','numberFormat'],['layout-chapter','chapter'],['layout-section','section']]){
-  // New Word equations may change their format; their captured position and
-  // counter context remain bound to the original insertion session.
+  // Placement changes are available for a new insertion. Counter changes are
+  // advertised only by the matching plugin and remain bound to this target.
   const canSetWordFormat=id==='layout-format'&&(source?.insertion||source?.wordNumberingSupported&&source?.hasDocumentContext&&!source?.documentLoading&&!source?.documentLoadFailed&&!object.error);
-  const el=$(id);el.disabled=!!wordTicket&&!canSetWordFormat;
+  const canSetContext=['layout-chapter','layout-section'].includes(id)&&source?.wordNumberingContextSupported&&source?.hasDocumentContext&&!source?.documentLoading&&!source?.documentLoadFailed&&!object.error;
+  const el=$(id);el.disabled=!!wordTicket&&!canSetWordFormat&&!canSetContext&&!(id==='layout-mode'&&source?.insertion);
   if(id==='layout-mode'){
    let option=[...el.options].find(o=>o.value==='unknown');
    if(unknown&&!option){option=document.createElement('option');option.value='unknown';option.textContent='未读取文档信息';el.append(option);}
    el.value=unknown?'unknown':layout.mode||'inline';
-  }else el.value=unknown?'':layout[key]??(wordTicket?'':key==='numberFormat'?'(#E1)':'1');
+  }else el.value=unknown?'':layout[key]??(key==='numberFormat'?source?.documentNumberFormat??'(#E1)':canSetContext?'1':wordTicket?'':'1');
  }
+ object.editorNumberFormatBaseline=$('layout-format').value;object.editorNumberingRequested=false;
+ object.editorCounterBaseline={chapter:$('layout-chapter').value,section:$('layout-section').value};
 }
 function wordLayout(){return {mode:$('layout-mode').value,numberFormat:$('layout-format').value,chapter:Number($('layout-chapter').value),section:Number($('layout-section').value)};}
+window.nativeApplyNumberingFormat=()=>{if(selected&&wordTicket&&!source?.insertion&&!busy&&!$('layout-format').disabled){selected.editorNumberingRequested=true;requestWorkbenchSync();}};
+window.nativeUseDocumentNumberFormat=()=>{if(source?.documentNumberFormat&&!busy&&!$('layout-format').disabled){$('layout-format').value=source.documentNumberFormat;if(selected)selected.editorNumberingRequested=true;requestWorkbenchSync();}};
 $('arrange').onclick=()=>perform(async()=>{if(wordSourceUnavailable())throw Error('文档连接已结束，无法再访问原公式；草稿已保留。');if(!source||!selected)throw Error('请先打开 Word 并选择公式');const r=await native('arrange',{input:source.path,indices:$('arrange-all').checked?source.objects.map(o=>o.index):[selected.index],layout:wordLayout()});if(r)message('已另存编排后的副本，公式原生数据保留：'+r.path);else message('');});
 
 window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
@@ -200,10 +235,11 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   // A cancelled window must not be resurrected by a delayed Word read.
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   const workspaceDiscardApproved=await window.wordDocumentWorkspace?.prepareIncoming(r,documentRequestId);
+  const insertionDraft=window.wordDocumentWorkspace?.takeInsertionDraft(documentRequestId);
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   const changedDraft=!wordNavigating&&(wordTicket?wordSessionChanged():selected?wordSessionChanged():!!mf.value.trim());
   const sameDraftTarget=changedDraft&&wordTicket&&source?.documentIdentity&&r.documentIdentity===source.documentIdentity&&source.documentSnapshot&&r.documentSnapshot===source.documentSnapshot&&r.activeIndex===selected?.index&&/^[a-f0-9]{64}$/.test(selected?.nativeSha256??'')&&r.objects[r.activeIndex]?.nativeSha256===selected.nativeSha256;
-  const draft=sameDraftTarget?{latex:mf.value,mode,ruler:editingRuler,numberFormat:$('layout-format').value,typography:window.desktopTypographyPatch?.(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:null;
+  const draft=sameDraftTarget?{latex:mf.value,mode,ruler:editingRuler,numberFormat:$('layout-format').value,chapter:$('layout-chapter').value,section:$('layout-section').value,typography:window.desktopTypographyPatch?.(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:null;
   if(changedDraft&&!sameDraftTarget&&!workspaceDiscardApproved){const answer=await native('confirmWordSessionSwitch');if(!answer.discard){await native('wordSessionCancel',{ticket});message('已保留当前编辑；刚才打开的 Word 公式未修改。');return false;}}
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   if(wordTicket&&wordTicket!==ticket&&!wordNavigating)await native('wordSessionCancel',{ticket:wordTicket}).catch(error=>{if(!/Unknown or expired native session/.test(error.message))throw error;});
@@ -214,8 +250,9 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   if(r.insertion){
    selected=null;mode='rebuild';editingRuler=undefined;mf.value='';mf.readOnly=false;$('latex').readOnly=false;
    loadObjectLayout({layout:r.insertionLayout});window.desktopTypographyNew?.();window.resetEditorHistory?.();renderModes();changed(false);sidebarSync=renderObjects();
+   if(insertionDraft){mf.value=insertionDraft.latex;editingRuler=insertionDraft.ruler;window.desktopTypographyRestorePatch?.(insertionDraft.typography);window.resetEditorHistory?.();changed(false);}
   }else sidebarSync=r.objects.length?selectObject(r.activeIndex??0,{scheduleValidation:false}):renderObjects();
-  if(draft){mf.value=draft.latex;mode=draft.mode;editingRuler=draft.ruler;$('layout-format').value=draft.numberFormat;renderModes();window.desktopTypographyRestorePatch?.(draft.typography);for(const input of $('character-editor').querySelectorAll('input'))if(Object.hasOwn(draft.replacements,input.dataset.offset))input.value=draft.replacements[input.dataset.offset];}
+  if(draft){mf.value=draft.latex;mode=draft.mode;editingRuler=draft.ruler;$('layout-format').value=draft.numberFormat;selected.editorNumberingRequested=draft.numberingRequested;$('layout-chapter').value=draft.chapter;$('layout-section').value=draft.section;renderModes();window.desktopTypographyRestorePatch?.(draft.typography);for(const input of $('character-editor').querySelectorAll('input'))if(Object.hasOwn(draft.replacements,input.dataset.offset))input.value=draft.replacements[input.dataset.offset];}
  $('word-session-actions').hidden=false;$('export').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
  $('title').textContent=r.insertion?'新建 Word 公式':'编辑 Word 中的原生公式';$('subtitle').textContent=r.insertion?'输入或粘贴公式，完成后插入 Word；取消不会修改文档。':'编辑后点击更新公式；也可以取消并保留 Word 原公式。';
  if(r.documentLoading)r.layoutBaseline=JSON.stringify(wordLayout());
@@ -286,6 +323,22 @@ async function bindSelectedWordFormula(){
  if(source?.insertion)return;
  if(selected.index!==(source.activeIndex??selected.index)&&(!source.hasDocumentContext||!source.documentIdentity))throw Error('没有读取到可靠的 Word 文档信息。输入内容已保留，请从 Word 重新打开目标公式。');
 }
+function changedWordCounterContext(){
+ if(!source?.wordNumberingContextSupported||source.insertion||$('layout-chapter').disabled||$('layout-section').disabled)return null;
+ const expectedChapter=selected?.layout?.chapter??0,expectedSection=selected?.layout?.section??0;
+ const rawChapter=$('layout-chapter').value,rawSection=$('layout-section').value;
+ const chapter=rawChapter===''?expectedChapter:Number(rawChapter),section=rawSection===''?expectedSection:Number(rawSection);
+ if(chapter===expectedChapter&&section===expectedSection)return null;
+ const baseline=selected?.editorCounterBaseline??{chapter:String(selected?.layout?.chapter??''),section:String(selected?.layout?.section??'')};
+ const explicitlyChanged=rawChapter!==baseline.chapter||rawSection!==baseline.section;
+ const needsInitialContext=/#[CS]/.test($('layout-format').value)&&(expectedChapter<1||expectedSection<1);
+ // Showing an editable 1/1 default must not restart an ordinary content edit.
+ // A chapter format does need real fields, including for an existing (1).
+ if(!explicitlyChanged&&!needsInitialContext)return null;
+ if(!Number.isInteger(chapter)||chapter<1||chapter>32767||!Number.isInteger(section)||section<1||section>32767)throw Error('Set both Chapter and Section to integers from 1 to 32767.');
+ return {chapter,section,expectedChapter,expectedSection};
+}
+function wordCounterContextRestarts(){try{return !!changedWordCounterContext();}catch{return false;}}
 window.nativeCommitWordSession=()=>{
  if(wordCommitRunning)return wordCommitRunning;
  if(wordSourceUnavailable()){message('文档连接已结束，无法保存回原文档。草稿已保留。',true);return Promise.resolve(false);}
@@ -300,9 +353,10 @@ window.nativeCommitWordSession=()=>{
  if(!current())return false;
  if(!wordTicket||!valid||!source?.insertion&&(!selected||selected.error))throw Error('当前公式尚不能保存。请修正标出的内容，或点“取消”保留 Word 原公式。');
  const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));
- const numberFormatChanged=!source.insertion&&source.wordNumberingSupported&&!$('layout-format').disabled&&$('layout-format').value!==(selected.layout?.numberFormat??'');
+ const counterContext=changedWordCounterContext();
+ const numberFormatChanged=!source.insertion&&source.wordNumberingSupported&&!$('layout-format').disabled&&($('layout-format').value!==(selected.editorNumberFormatBaseline??selected.layout?.numberFormat??'')||selected.editorNumberingRequested||!!counterContext);
  const destination=source.insertion||!numberFormatChanged&&selected.index===(source.activeIndex??selected.index)?undefined:{index:selected.index,expectedNativeSha256:selected.nativeSha256,documentIdentity:source.documentIdentity};
- const numbering=numberFormatChanged?{format:$('layout-format').value,side:selected.layout?.mode==='numbered-left'?'left':'right'}:undefined;
+ const numbering=numberFormatChanged?{format:$('layout-format').value,side:selected.layout?.mode==='numbered-left'?'left':'right',...counterContext?{context:counterContext}:{}}:undefined;
  window.wordSaveInFlight=true;
  const result=source.insertion?await native('wordSessionInsert',{ticket,input:source.activePath??source.path,latex:mf.value,layout:{...source.insertionLayout,...wordLayout()},typography:window.desktopTypographyPatch?.(),...rulerPatch()}):await native('wordSessionSave',{ticket,input:source.activePath??source.path,target:destination,numbering,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});
  if(!current())return false;
@@ -345,7 +399,7 @@ function wordSessionChanged(){
   return !!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'||
    layout.mode!==(initial.mode||'inline')||layout.numberFormat!==(initial.numberFormat??'(#E1)')||layout.chapter!==(initial.chapter??1)||layout.section!==(initial.section??1);
  }
- return !selected||mf.value!==selected.editorBaseline||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||source?.wordNumberingSupported&&!$('layout-format').disabled&&$('layout-format').value!==(selected.layout?.numberFormat??'')||[...$('character-editor').querySelectorAll('input')].some(input=>input.value!==(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char));
+ return !selected||source?.wordNumberingContextSupported&&['chapter','section'].some(key=>!$('layout-'+key).disabled&&$('layout-'+key).value!==(selected.editorCounterBaseline?.[key]??String(selected.layout?.[key]??'')))||mf.value!==selected.editorBaseline||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||source?.wordNumberingSupported&&!$('layout-format').disabled&&($('layout-format').value!==(selected.editorNumberFormatBaseline??selected.layout?.numberFormat??'')||selected.editorNumberingRequested)||[...$('character-editor').querySelectorAll('input')].some(input=>input.value!==(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char));
 }
 window.nativePrepareToClose=async()=>{
  if(window.wordDocumentWorkspace?.pending&&!wordTicket){window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;await window.wordDocumentWorkspace.cancelPending();}
@@ -402,8 +456,11 @@ function publishWorkbenchState(){
  const state={
   documentName:documentSource?.documentName||window.wordDocumentWorkspace?.documentName||window.wordDocumentWorkspace?.otherWordDocumentName||(wordTicket?'Word 中的公式':source?.path?.split(/[\\/]/).pop()||'新建公式'),otherWordDocumentName:window.wordDocumentWorkspace?.otherWordDocumentName||null,wordDocumentUnavailable:!!window.wordDocumentWorkspace?.wordDocumentUnavailable,documentPath:source?.path||'',latex:mf.value,
   openWordDocuments:window.wordDocumentWorkspace?.openDocuments||[],wordWorkspaceConnected:!!window.wordDocumentWorkspace?.connected,wordDocumentIdentity:window.wordDocumentWorkspace?.documentIdentity||null,
+  wordAppInsertionSupported:!!window.wordDocumentWorkspace?.insertionSupported,
   selected:selected?.index??null,
   wordInsertionEquation:source?.insertion?source.insertionLayout?.equation??null:null,
+  documentNumberFormat:source?.documentNumberFormat??null,
+  wordNumberingRestarts:!!source?.wordNumberingContextSupported&&(source.insertion&&(source.insertionLayout?.contextEstablished===false&&$('layout-mode').value.startsWith('numbered-')&&/#[CS]/.test($('layout-format').value)||['chapter','section'].some(key=>$('layout-'+key).value!==String(source.insertionLayout?.[key]??'')))||!source.insertion&&wordCounterContextRestarts()),
   wordDocumentLoading:!!documentSource?.documentLoading,wordDocumentLoadFailed:!!documentSource?.documentLoadFailed,wordDocumentTotal:documentSource?.documentTotal??sidebar.objects.length,
   objects:sidebar.objects,
   favorites:favorites.map((latex,id)=>({id,label:'收藏 '+(id+1),detail:'收藏公式',latex,image:workbenchFavoriteImages.get(latex)||source?.objects?.find(o=>o.latex===latex)?.image||null,readOnly:false})),

@@ -1,4 +1,5 @@
 import {randomBytes} from 'node:crypto';
+import {previewNumberFormat} from './layout.mjs';
 
 const terminalStates=new Set(['opened','empty','no-document','failed','cancelled','superseded','expired']);
 const outcomes=new Set(['opened','empty','no-document','failed','cancelled']);
@@ -18,7 +19,8 @@ function validDocumentIdentity(value,label='document identity'){
  return value;
 }
 function copyWorkspace(body){
- if(!isRecord(body)||!Object.hasOwn(body,'hostId')||!Object.hasOwn(body,'active')||Object.keys(body).some(key=>!['hostId','active','documents','retiredIdentities'].includes(key)))throw protocolError('Expected {hostId,active[,documents,retiredIdentities]}');
+ if(!isRecord(body)||!Object.hasOwn(body,'hostId')||!Object.hasOwn(body,'active')||Object.keys(body).some(key=>!['hostId','active','documents','retiredIdentities','insertionRequestSupport'].includes(key)))throw protocolError('Expected {hostId,active[,documents,retiredIdentities]}');
+ if(body.insertionRequestSupport!==undefined&&typeof body.insertionRequestSupport!=='boolean')throw protocolError('Invalid insertion request capability');
  const hostId=requireHostId(body.hostId);
  let activeValue=null;
  if(body.active!==null){
@@ -32,12 +34,14 @@ function copyWorkspace(body){
  if(Object.hasOwn(body,'documents')){
   if(!Array.isArray(body.documents)||body.documents.length>128)throw protocolError('Invalid workspace documents');
   const seen=new Set();documents=body.documents.map(document=>{
-   if(!isRecord(document)||Object.keys(document).length!==3||!Object.hasOwn(document,'identity')||!Object.hasOwn(document,'name')||!Object.hasOwn(document,'readOnly'))throw protocolError('Invalid workspace document metadata');
+   if(!isRecord(document)||Object.keys(document).some(key=>!['identity','name','readOnly','numberFormat','numberingRevision'].includes(key))||!Object.hasOwn(document,'identity')||!Object.hasOwn(document,'name')||!Object.hasOwn(document,'readOnly'))throw protocolError('Invalid workspace document metadata');
    validDocumentIdentity(document.identity);
    if(seen.has(document.identity))throw protocolError('Duplicate workspace document identity');seen.add(document.identity);
    if(typeof document.name!=='string'||Array.from(document.name).length>512||Buffer.byteLength(document.name,'utf8')>2048||/[\u0000-\u001f\u007f-\u009f]/.test(document.name))throw protocolError('Invalid workspace document name');
    if(typeof document.readOnly!=='boolean')throw protocolError('Invalid workspace document readOnly flag');
-   return {identity:document.identity,name:document.name,readOnly:document.readOnly};
+   if(document.numberFormat!==undefined){try{previewNumberFormat(document.numberFormat);}catch{throw protocolError('Invalid workspace number format');}}
+   if(document.numberingRevision!==undefined&&(!Number.isSafeInteger(document.numberingRevision)||document.numberingRevision<0||document.numberingRevision>2147483646))throw protocolError('Invalid numbering revision');
+   return {identity:document.identity,name:document.name,readOnly:document.readOnly,...document.numberFormat!==undefined?{numberFormat:document.numberFormat}:{},...document.numberingRevision!==undefined?{numberingRevision:document.numberingRevision}:{}};
   });
   if(activeValue&&!documents.some(document=>document.identity===activeValue.identity&&document.name===activeValue.name))throw protocolError('Active document must match workspace metadata');
  }
@@ -48,13 +52,20 @@ function copyWorkspace(body){
   for(const identity of body.retiredIdentities){validDocumentIdentity(identity);if(unique.has(identity))throw protocolError('Duplicate retired document identity');unique.add(identity);}
   retiredIdentities=[...unique];
  }
- return {hostId,active:activeValue,documents,retiredIdentities};
+ return {hostId,active:activeValue,documents,retiredIdentities,insertionRequestSupport:body.insertionRequestSupport===true};
 }
 
 function requireHostId(value){if(typeof value!=='string'||!idPattern.test(value))throw protocolError('Invalid host id');return value;}
 
 function copyRequest(body){
  if(!isRecord(body))throw protocolError('JSON object required');
+ if(Object.hasOwn(body,'insertionMode')){
+  const {insertionMode,...destination}=body;
+  if(!['inline','display','numbered-left','numbered-right'].includes(insertionMode))throw protocolError('Invalid insertion mode');
+  const request=copyRequest(destination);
+  if(!request.target&&!request.documentIdentity)throw protocolError('Insertion requires an explicit Word destination');
+  return {...request,insertionMode};
+ }
  const keys=Object.keys(body);
  if(keys.length===0)return {target:null,documentIdentity:null};
  if(keys.length===1&&keys[0]==='documentIdentity')return {target:null,documentIdentity:validDocumentIdentity(body.documentIdentity,'document identity')};
@@ -74,7 +85,7 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
  if(maxWaiters!==1)throw new TypeError('the native document protocol supports exactly one long-poll waiter');
  const records=new Map();
  const retiredHosts=new Map();
- let activeId=null,hostId=null,waiter=null,hostLastSeenAt=null,workspaceRevision=0,activeWorkspace=null,workspaceDocuments=[],retiredIdentities=[];
+ let activeId=null,hostId=null,waiter=null,hostLastSeenAt=null,workspaceRevision=0,activeWorkspace=null,workspaceDocuments=[],retiredIdentities=[],insertionRequestSupport=false;
 
  function touchHost(id){hostId=id;hostLastSeenAt=now();}
  function setWorkspace(value,documents=null,retired=[]){
@@ -90,12 +101,13 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
  function workspaceStatus(){
   expireWorkspace();
   const connected=!!hostId&&hostLastSeenAt!==null&&now()-hostLastSeenAt<workspaceHeartbeatMs;
-  return {connected,revision:workspaceRevision,active:connected&&activeWorkspace?{...activeWorkspace}:null,documents:connected?workspaceDocuments.map(document=>({...document})):[],retiredIdentities:connected?[...retiredIdentities]:[]};
+  return {connected,revision:workspaceRevision,active:connected&&activeWorkspace?{...activeWorkspace}:null,documents:connected?workspaceDocuments.map(document=>({...document})):[],retiredIdentities:connected?[...retiredIdentities]:[],...connected&&insertionRequestSupport?{insertionRequestSupport:true}:{}};
  }
  function publishWorkspace(body){
   const update=copyWorkspace(body);trimRetiredHosts();expireWorkspace();
   if(!hostId||hostId!==update.hostId||retiredHosts.has(update.hostId))throw protocolError('Workspace publisher is not the current native host',409);
   touchHost(update.hostId);
+  if(insertionRequestSupport!==update.insertionRequestSupport){insertionRequestSupport=update.insertionRequestSupport;workspaceRevision++;}
   const retirements=update.retiredIdentities??retiredIdentities;
   setWorkspace(update.active,update.documents,retirements);
   return workspaceStatus();
@@ -128,7 +140,7 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
   if(!record||record.state!=='queued')return false;
   const current=waiter;waiter=null;clearTimeout(current.timer);
   record.state='delivered';record.claimedBy=current.hostId;record.deliveredAt=now();
-  current.resolve({state:'delivered',requestId:record.requestId,...record.target?{target:record.target}:{},...record.documentIdentity?{documentIdentity:record.documentIdentity}:{}});
+  current.resolve({state:'delivered',requestId:record.requestId,...record.target?{target:record.target}:{},...record.documentIdentity?{documentIdentity:record.documentIdentity}:{},...record.insertionMode?{insertionMode:record.insertionMode}:{}});
   return true;
  }
  function expire(){
@@ -146,11 +158,14 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
 
  function request(body){
   expire();const requestData=copyRequest(body);
-  if(requestData.documentIdentity){
+  if(requestData.documentIdentity||requestData.insertionMode){
    const workspace=workspaceStatus();
-   if(!workspace.connected||retiredIdentities.includes(requestData.documentIdentity)||!workspaceDocuments.some(document=>document.identity===requestData.documentIdentity))throw protocolError('Requested Word document is not open in the current host',409);
+   const identity=requestData.documentIdentity||requestData.target.identity,document=workspaceDocuments.find(document=>document.identity===identity);
+   if(!workspace.connected||retiredIdentities.includes(identity)||!document)throw protocolError('Requested Word document is not open in the current host',409);
+   if(requestData.insertionMode&&!insertionRequestSupport)throw protocolError('Update the Word add-in to insert from the App',409);
+   if(requestData.insertionMode&&document.readOnly)throw protocolError('Requested Word document is read only',409);
   }
-  const {target,documentIdentity}=requestData;
+  const {target,documentIdentity,insertionMode}=requestData;
   if(records.size>=recordLimit&&!Array.from(records.values()).some(record=>terminalStates.has(record.state)))trim();
   if(records.size>=recordLimit)throw protocolError('Too many retained document requests',429);
   const previous=activeId&&records.get(activeId);
@@ -158,7 +173,7 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
   let requestId;
   for(let attempt=0;attempt<4;attempt++){requestId=makeId();if(idPattern.test(requestId)&&!records.has(requestId))break;requestId=null;}
   if(!requestId)throw protocolError('Could not allocate request id',503);
-  const record={requestId,state:'queued',target,documentIdentity,createdAt:now(),expiresAt:now()+ttlMs};
+  const record={requestId,state:'queued',target,documentIdentity,insertionMode,createdAt:now(),expiresAt:now()+ttlMs};
   records.set(requestId,record);activeId=requestId;deliver();trim();
   return {requestId,state:'queued'};
  }
@@ -184,7 +199,7 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
    if(waiter){const prior=waiter;waiter=null;clearTimeout(prior.timer);prior.resolve({state:'empty',reason:'host-restarted'});}
    const claimed=activeId&&records.get(activeId);
    if(claimed?.state==='delivered'&&claimed.claimedBy!==nextHost)terminal(claimed,'failed','host-restarted');
-   touchHost(nextHost);setWorkspace(null,[]);
+   touchHost(nextHost);insertionRequestSupport=false;setWorkspace(null,[]);
   }else{
    touchHost(nextHost);
   }
@@ -192,7 +207,7 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
   const current=activeId&&records.get(activeId);
   if(current?.state==='queued'){
    current.state='delivered';current.claimedBy=nextHost;current.deliveredAt=now();
-   return Promise.resolve({state:'delivered',requestId:current.requestId,...current.target?{target:current.target}:{},...current.documentIdentity?{documentIdentity:current.documentIdentity}:{}});
+   return Promise.resolve({state:'delivered',requestId:current.requestId,...current.target?{target:current.target}:{},...current.documentIdentity?{documentIdentity:current.documentIdentity}:{},...current.insertionMode?{insertionMode:current.insertionMode}:{}});
   }
   if(waitMs===0)return Promise.resolve({state:'empty'});
   return new Promise(resolve=>{

@@ -33,6 +33,18 @@ async function openEdit(latex='x^3'){
  const native=inspectOle(makeOle(latex)).native,session=String(next++),opened=await operation('native-open',{session,native:native.toString('base64')});
  live.add(opened.ticket);return {...opened,session,native};
 }
+
+test('App insertion validates its selected equation against a new live snapshot',async()=>{
+ const bytes=await createDocx([{latex:'a+b'},{latex:'c+d'}]);
+ const objects=(await inspectDocx(bytes)).objects;
+ const base={ooxml:await flatOpc(bytes),index:-1,name:'same-name.docx',identity:'app-insert:1',snapshot:119};
+ for(const bad of [{index:1,nativeSha256:objects[0].nativeSha256},{index:9,nativeSha256:objects[1].nativeSha256},{index:1,nativeSha256:objects[1].nativeSha256,extra:true}]){
+  await assert.rejects(operation('native-insert-open',{session:String(next++),acknowledgement:true,document:{...base,insertionAfter:bad},layout:defaultLayout}),/anchor/);
+ }
+ const opened=await operation('native-insert-open',{session:String(next++),acknowledgement:true,document:{...base,insertionAfter:{index:1,nativeSha256:objects[1].nativeSha256}},layout:defaultLayout});
+ live.add(opened.ticket);const read=await operation('native-read',{ticket:opened.ticket});
+ assert.equal(read.insertion,true);assert.equal(read.documentContext.identity,'app-insert:1');assert.equal(read.documentContext.count,2);
+});
 async function gone(path){await assert.rejects(access(path),error=>error.code==='ENOENT');}
 function insertionPayload(opened,read,patch={}){
  return {ticket:opened.ticket,input:read.activePath,latex:'u^2+1',layout:read.insertionLayout,...patch};

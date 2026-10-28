@@ -2,6 +2,7 @@
 #import <Foundation/Foundation.h>
 #include "word_document_requests.hpp"
 #include "editor_transport.hpp"
+#include "word_insertion.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
@@ -9,6 +10,7 @@
 namespace {
 constexpr NSUInteger MaximumReplyBytes=512*1024;
 constexpr NSTimeInterval RequestLifetimeSeconds=60.0;
+bool wordHostBusy(){return bridge_probe::editorTransportActive()!=0||EquationLabWordInsertionActive();}
 NSString* const RequestBaseURL=@"http://127.0.0.1:37952";
 
 NSString* randomHostId(){
@@ -137,7 +139,7 @@ BOOL terminalState(NSString* state){return [@[@"opened",@"empty",@"no-document",
 - (void)publishWorkspace {
     if(!self.installed||!self.hostRegistered||self.publishingWorkspace)return;
     self.publishingWorkspace=YES;NSUInteger version=self.workspaceVersion;
-    NSMutableDictionary* body=[@{@"hostId":self.hostId,@"active":self.workspace?:NSNull.null,@"retiredIdentities":self.retiredIdentities.array?:@[]} mutableCopy];
+    NSMutableDictionary* body=[@{@"hostId":self.hostId,@"active":self.workspace?:NSNull.null,@"retiredIdentities":self.retiredIdentities.array?:@[],@"insertionRequestSupport":@YES} mutableCopy];
     if(self.workspaceDocuments)body[@"documents"]=self.workspaceDocuments;
     [self.http post:@"native-document-workspace" body:body timeout:3 completion:^(NSDictionary* result,NSError* error){
         self.publishingWorkspace=NO;
@@ -181,9 +183,11 @@ BOOL terminalState(NSString* state){return [@[@"opened",@"empty",@"no-document",
         if(error){[self retryTake];return;}self.retryCount=0;self.hostRegistered=YES;self.workspaceRetries=0;[self publishWorkspace];
         NSString* state=result[@"state"];
         if([state isEqual:@"empty"]){[self startTake];return;}
-        id requestId=result[@"requestId"],target=result[@"target"],documentIdentity=result[@"documentIdentity"];
+        id requestId=result[@"requestId"],target=result[@"target"],documentIdentity=result[@"documentIdentity"],insertionMode=result[@"insertionMode"];
+        if(insertionMode&&(![@[@"inline",@"display",@"numbered-left",@"numbered-right"] containsObject:insertionMode]||(!target&&!documentIdentity))){[self retryTake];return;}
         if(![state isEqual:@"delivered"]||!validHexId(requestId)||(target&&!validTarget(target))||(documentIdentity&&(![documentIdentity isKindOfClass:NSString.class]||[documentIdentity length]<3||[documentIdentity length]>256||[documentIdentity rangeOfString:@":"].location==NSNotFound||target))){[self retryTake];return;}
         NSMutableDictionary* claim=[@{@"requestId":requestId} mutableCopy];if(target)claim[@"target"]=[target copy];if(documentIdentity)claim[@"documentIdentity"]=[documentIdentity copy];
+        if(insertionMode)claim[@"insertionMode"]=[insertionMode copy];
         self.claim=claim;self.claimDeadline=[NSDate dateWithTimeIntervalSinceNow:RequestLifetimeSeconds];self.waitingForTransportRelease=NO;self.token=++self.tokenSequence;if(self.token<=0){self.tokenSequence=1;self.token=1;}
         [self checkCurrent];
     }];
@@ -213,7 +217,7 @@ BOOL terminalState(NSString* state){return [@[@"opened",@"empty",@"no-document",
         if([self expireClaimIfNeeded])return;
         NSString* state=result[@"state"];
         if(!error&&[state isEqual:@"delivered"]){
-            if(bridge_probe::editorTransportActive()!=0&&!self.executing){self.revalidated=NO;self.taken=NO;self.checkedAt=nil;self.waitingForTransportRelease=YES;[self maintainWorkspaceHeartbeat];[self retryCheck];return;}
+            if(wordHostBusy()&&!self.executing){self.revalidated=NO;self.taken=NO;self.checkedAt=nil;self.waitingForTransportRelease=YES;[self maintainWorkspaceHeartbeat];[self retryCheck];return;}
             BOOL shouldWake=self.waitingForTransportRelease||!self.taken;
             self.revalidated=YES;self.checkedAt=NSDate.date;self.retryCount=0;self.waitingForTransportRelease=NO;if(shouldWake)EquationLabWakeWordHost();return;
         }
@@ -237,7 +241,7 @@ std::uint32_t wordDocumentRequestWatch(){return NSThread.isMainThread&&manager.i
 std::int32_t takeWordDocumentRequest(){
     if(!NSThread.isMainThread||!manager.installed)return 0;
     if([manager expireClaimIfNeeded])return 0;
-    if(editorTransportActive()!=0){[manager deferClaimWhileTransportActive];return 0;}
+    if(wordHostBusy()){[manager deferClaimWhileTransportActive];return 0;}
     if(manager.claim&&(!manager.revalidated||!manager.checkedAt||manager.checkedAt.timeIntervalSinceNow< -1.5)&&!manager.checking){manager.revalidated=NO;[manager checkCurrent];}
     if(!manager.claim||!manager.revalidated||manager.taken||manager.executing||manager.finishing)return 0;
     manager.taken=YES;return manager.token;
@@ -246,24 +250,24 @@ NSDictionary* wordDocumentRequestEnvelope(std::int32_t token){
     if(NSThread.isMainThread&&[manager expireClaimIfNeeded])return nil;
     // After begin, the requested OLE activation itself owns the active
     // transport. VBA must still be able to identify and finish this request.
-    if(NSThread.isMainThread&&editorTransportActive()!=0&&!manager.executing){[manager deferClaimWhileTransportActive];return nil;}
+    if(NSThread.isMainThread&&wordHostBusy()&&!manager.executing){[manager deferClaimWhileTransportActive];return nil;}
     if(!NSThread.isMainThread||!manager.claim||token<=0||token!=manager.token||!manager.revalidated||!manager.taken)return nil;
     return [manager.claim copy];
 }
 BOOL beginWordDocumentRequest(std::int32_t token){
     if(NSThread.isMainThread&&[manager expireClaimIfNeeded])return NO;
-    if(NSThread.isMainThread&&editorTransportActive()!=0){[manager deferClaimWhileTransportActive];return NO;}
+    if(NSThread.isMainThread&&wordHostBusy()){[manager deferClaimWhileTransportActive];return NO;}
     if(!NSThread.isMainThread||!manager.claim||token<=0||token!=manager.token||!manager.revalidated||!manager.taken||manager.executing||manager.finishing)return NO;
     manager.executing=YES;manager.openingId=[manager.claim[@"requestId"] copy];return YES;
 }
 BOOL wordDocumentRequestIsCurrent(std::int32_t token){
     if(NSThread.isMainThread&&[manager expireClaimIfNeeded])return NO;
-    if(NSThread.isMainThread&&editorTransportActive()!=0&&!manager.executing){[manager deferClaimWhileTransportActive];return NO;}
+    if(NSThread.isMainThread&&wordHostBusy()&&!manager.executing){[manager deferClaimWhileTransportActive];return NO;}
     return NSThread.isMainThread&&manager.claim&&manager.revalidated&&manager.taken&&token>0&&token==manager.token&&!manager.finishing;
 }
 std::int32_t currentWordDocumentRequestToken(){
     if(NSThread.isMainThread&&[manager expireClaimIfNeeded])return 0;
-    if(NSThread.isMainThread&&editorTransportActive()!=0&&!manager.executing){[manager deferClaimWhileTransportActive];return 0;}
+    if(NSThread.isMainThread&&wordHostBusy()&&!manager.executing){[manager deferClaimWhileTransportActive];return 0;}
     return NSThread.isMainThread&&manager.claim&&manager.taken&&!manager.finishing?manager.token:0;
 }
 std::int32_t finishWordDocumentRequest(std::int32_t token,NSString* outcome,NSString* reason){

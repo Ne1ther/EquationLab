@@ -15,7 +15,11 @@ struct NumberingFormatEditor: View {
     ]
     private var chapter: Int { counter("layout-chapter", fallback: bridge.state.numbering?.chapter ?? 1) }
     private var section: Int { counter("layout-section", fallback: bridge.state.numbering?.section ?? 1) }
-    private var equation: Int { bridge.state.numbering?.equation ?? bridge.state.wordInsertionEquation ?? 1 }
+    private var equation: Int { bridge.state.wordNumberingRestarts ? 1 : bridge.state.numbering?.equation ?? bridge.state.wordInsertionEquation ?? 1 }
+    private var hasPendingNumberingChange: Bool {
+        guard bridge.wordSessionActive, !bridge.wordSessionIsInsertion, let number = bridge.state.numbering else { return false }
+        return draft != (number.format ?? field.value) || bridge.state.wordNumberingRestarts
+    }
     private var previewKey: String { "\(draft)|\(chapter)|\(section)|\(equation)" }
     private func counter(_ id: String, fallback: Int) -> Int {
         guard let value = bridge.state.layout.first(where: { $0.id == id })?.value, !value.isEmpty else { return fallback }
@@ -24,6 +28,13 @@ struct NumberingFormatEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
+            if let format = bridge.state.documentNumberFormat {
+                HStack {
+                    Text(bridge.t("文档默认格式") + ": " + format).font(.caption.monospaced())
+                    Spacer()
+                    Button(bridge.t("使用文档默认格式")) { bridge.invoke("nativeUseDocumentNumberFormat") }.disabled(field.disabled)
+                }
+            }
             Picker(bridge.t("常用编号"), selection: Binding(get: {
                 presets.contains(where: { $0.0 == draft }) ? draft : "custom"
             }, set: { value in if value != "custom" { draft = value } })) {
@@ -50,6 +61,14 @@ struct NumberingFormatEditor: View {
                 }
             }.frame(maxWidth: .infinity, alignment: .leading).padding(12)
                 .background(.quaternary, in: RoundedRectangle(cornerRadius: 8))
+            if hasPendingNumberingChange {
+                Text(bridge.t("尚未写入 Word：请点击“更新公式”。"))
+                    .font(.caption).foregroundStyle(.orange)
+            }
+            if bridge.state.layout.contains(where: { ($0.id == "layout-chapter" || $0.id == "layout-section") && !$0.disabled }) {
+                Text(bridge.t("章、节来自当前位置的编号字段；修改后从当前公式重新起号，无需先给 Word 标题分章。"))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
 
             if let number = bridge.state.numbering {
                 VStack(alignment: .leading, spacing: 6) {
@@ -84,6 +103,9 @@ struct NumberingFormatEditor: View {
             }
             Text(bridge.t("#C 为章、#S 为节、#E 为公式；1 为数字，A/a 为字母，I/i 为罗马数字。"))
                 .font(.caption2).foregroundStyle(.secondary)
+            if bridge.wordSessionActive && !bridge.wordSessionIsInsertion && bridge.state.numbering?.actualNumber == nil {
+                Button(bridge.t("为当前公式添加编号")) { bridge.invoke("nativeApplyNumberingFormat") }.disabled(field.disabled)
+            }
             if bridge.wordSessionIsInsertion {
                 Text(bridge.t("插入时使用此编号格式；章、节和序号由 Word 提供。"))
                     .font(.caption2).foregroundStyle(.secondary)

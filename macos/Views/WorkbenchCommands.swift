@@ -11,8 +11,9 @@ struct WorkbenchCommands: Commands {
             Button(bridge.t("检查更新…")) { updater.check() }
         }
         CommandGroup(replacing: .newItem) {
-            Button(bridge.t("新建公式")) { bridge.invoke("nativeNew") }.keyboardShortcut("n").disabled(bridge.wordSessionActive || bridge.state.busy)
-            Button(bridge.t("打开 Word 文档…")) { bridge.invoke("nativeOpen") }.keyboardShortcut("o").disabled(bridge.wordSessionActive || bridge.state.busy)
+            WordInsertionMenu(bridge: bridge)
+            Button(bridge.t("新建独立草稿")) { bridge.invoke("nativeNew") }.keyboardShortcut("n").disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown)
+            Button(bridge.t("打开文件副本…")) { bridge.invoke("nativeOpen") }.keyboardShortcut("o").disabled(bridge.wordSessionActive || bridge.state.busy)
         }
         CommandGroup(replacing: .saveItem) {
             Button(bridge.t(bridge.wordSessionActive ? wordSessionSaveLabel : "另存 Word 副本…")) {

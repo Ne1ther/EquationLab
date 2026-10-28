@@ -53,7 +53,10 @@ export async function validateRibbonTemplateZip(zip){
     const asset=zip.file(assetPath);
     if(!asset)rejectRibbon(`missing icon asset ${assetPath}.`);
     const png=await asset.async('nodebuffer');
-    if(png.length<24||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a'||png.readUInt32BE(16)!==32||png.readUInt32BE(20)!==32)rejectRibbon(`invalid 32 by 32 PNG asset ${assetPath}.`);
+    const size=png.length>=24?png.readUInt32BE(16):0;
+    const large=buttons.some(button=>button.getAttribute('image')===id&&button.getAttribute('size')==='large');
+    // Preserve 32 px legacy templates and allow Retina artwork on large buttons.
+    if(png.length<24||png.subarray(0,8).toString('hex')!=='89504e470d0a1a0a'||![32,80].includes(size)||png.readUInt32BE(20)!==size||size===80&&!large)rejectRibbon(`invalid Ribbon PNG size ${assetPath}.`);
     byId.set(id,assetPath);
   }
   if(byId.size===0)rejectRibbon('no icon relationships were found.');

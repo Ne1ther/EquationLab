@@ -3,6 +3,7 @@ Option Explicit
 
 Private mEvents As EquationLabWordEvents
 Private mNumberingRegistered As Boolean
+Private mNumberingContextRegistered As Boolean
 Private mDocument As Document
 Private mEquations As Collection
 Private mPollScheduled As Boolean
@@ -32,6 +33,7 @@ Private mBoundTokens As Collection
 Private mInsertionDocument As Document
 Private mInsertionRange As Range
 Private mInsertionToken As Long
+Private mInsertionLeadingParagraph As Boolean
 Private mCaptureFailureNotified As Long
 Private mActivationDocument As Document
 Private mActivationRange As Range
@@ -160,14 +162,14 @@ Private Sub PublishDocumentWorkspace(ByVal Doc As Document, ByVal identity As Lo
     Dim documentIdentity As Long, candidate As Document, documentName As String, readOnly As String
     If identity <= 0 Then Exit Sub
     If Application.Documents.Count > 128 Then Exit Sub
-    content = "ELWORK2" & vbLf & CStr(identity) & vbLf & CStr(Application.Documents.Count) & vbLf
+    content = "ELWORK3" & vbLf & CStr(identity) & vbLf & CStr(Application.Documents.Count) & vbLf
     For Each candidate In Application.Documents
         documentIdentity = EnsureKnownDocumentIdentity(candidate)
         If documentIdentity <= 0 Then Exit Sub
         documentName = ELWorkspaceSafeName(candidate.Name)
         readOnly = "0"
         If candidate.ReadOnly Then readOnly = "1"
-        content = content & CStr(documentIdentity) & vbLf & readOnly & vbLf & documentName & vbLf
+        content = content & CStr(documentIdentity) & vbLf & readOnly & vbLf & documentName & vbLf & EquationLabRibbon.ELStoredNumberFormat(candidate) & vbLf & CStr(EquationLabRibbon.ELNumberingRevision(candidate)) & vbLf
     Next
     If mPublishedWorkspace = content Then Exit Sub
     directory = Options.DefaultFilePath(wdStartupPath)
@@ -367,10 +369,11 @@ Public Sub ELStartDocumentEvents()
 End Sub
 
 Private Sub ELRegisterNumberingSupport()
-    If mNumberingRegistered Then Exit Sub
+    If mNumberingRegistered And mNumberingContextRegistered Then Exit Sub
     On Error Resume Next
     ' Advertise only after the matching template has installed its callback.
     mNumberingRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingSupport") = 0)
+    mNumberingContextRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingContextSupport") = 0)
 End Sub
 
 Public Sub ELQueueDisplayRefresh(ByVal Doc As Document)
@@ -795,6 +798,7 @@ Private Sub ClearInsertion()
     Set mInsertionDocument = Nothing
     Set mInsertionRange = Nothing
     mInsertionToken = 0
+    mInsertionLeadingParagraph = False
 End Sub
 
 Private Function ELTryCleanupInlineInsertion(ByVal Doc As Document, ByVal insertionStart As Long, ByVal beforeEnd As Long) As Boolean
@@ -841,7 +845,7 @@ Failed:
     Err.Clear
 End Function
 
-Public Sub ELBeginEquationInsertion(ByVal kind As String)
+Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leadingParagraph As Boolean = False)
     If EquationLabNativeCommand("MathTypeBridgeInsertionActive") <> 0 Or EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then
         Err.Raise vbObjectError + 7358, "Equation Lab", "Please finish or cancel the current equation first."
     End If
@@ -852,6 +856,7 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String)
     Set mInsertionDocument = Selection.Document
     If mInsertionDocument.ReadOnly Then Err.Raise vbObjectError + 7360, "Equation Lab", "This document is read only."
     Set mInsertionRange = Selection.Range.Duplicate
+    mInsertionLeadingParagraph = leadingParagraph
     ELObserveDocument mInsertionDocument
     mInsertionToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
     Dim directory As String, xml As String, result As Long, shape As InlineShape, anchor As Range
@@ -927,6 +932,12 @@ Private Sub ApplyInsertion(ByVal token As Long)
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     mutationAttempted = True
+    If mInsertionLeadingParagraph Then
+        target.InsertBefore vbCr
+        target.SetRange start + 1, start + 1
+        start = target.Start
+        beforeEnd = Doc.Content.End
+    End If
     target.InsertFile FileName:=directory & "/.EquationLab/ribbon-complete-insert.docx", ConfirmConversions:=False, Link:=False, Attachment:=False
     mutationCompleted = True
     Set insertedRange = Doc.Range(start, start + Doc.Content.End - beforeEnd)
@@ -1119,7 +1130,8 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     Dim directory As String, path As String, fileNumber As Integer, content As String, fields As Variant
     Dim requestId As String, identity As String, snapshot As Long, targetIndex As Long, identityToken As Long
     Dim digest As String, separator As Long, Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape
-    Dim isOpen As Boolean, result As Long
+    Dim isOpen As Boolean, result As Long, insertionMode As String, insertionKind As String
+    Dim insertionPoint As Range, paragraphRange As Range, needsParagraph As Boolean
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     path = directory & "/.EquationLab/native-document-request.txt"
@@ -1130,7 +1142,20 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     Get #fileNumber, , content
     Close #fileNumber
     fields = Split(content, vbLf)
-    If UBound(fields) <> 8 Or fields(0) <> "ELDREQ2" Or fields(8) <> "" Then GoTo Failed
+    If fields(0) = "ELDREQ3" Then
+        If UBound(fields) <> 9 Or fields(9) <> "" Then GoTo Failed
+        insertionMode = CStr(fields(8))
+        Select Case insertionMode
+            Case "inline": insertionKind = "Inline"
+            Case "display": insertionKind = "Display"
+            Case "numbered-left": insertionKind = "Left"
+            Case "numbered-right": insertionKind = "Right"
+            Case Else: GoTo Failed
+        End Select
+        If fields(3) <> "1" And fields(3) <> "2" Then GoTo Failed
+    ElseIf UBound(fields) <> 8 Or fields(0) <> "ELDREQ2" Or fields(8) <> "" Then
+        GoTo Failed
+    End If
     If CLng(fields(1)) <> requestToken Or requestToken <= 0 Then GoTo Failed
     requestId = CStr(fields(2))
     If Not ELIsRequestId(requestId) Then GoTo Failed
@@ -1175,6 +1200,11 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
         If Not (Doc Is ActiveDocument) Then Doc.Activate
         If Not (Doc Is ActiveDocument) Then GoTo Failed
         ELObserveDocument Doc
+        If insertionMode <> "" Then
+            If Not (Selection.Document Is Doc) Or Selection.Start <> Selection.End Then GoTo Failed
+            Set insertionPoint = Selection.Range.Duplicate
+            GoTo PrepareInsertionRequest
+        End If
         Set shape = ELSelectedEquation(Selection)
         If shape Is Nothing Then
             Set shape = ELFirstSupportedEquation(Doc)
@@ -1213,9 +1243,35 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     End If
     If Not (shape.Range.Document Is Doc) Or shape.Range.StoryType <> wdMainTextStory Then GoTo Failed
     If shape.Range.InlineShapes.Count <> 1 Or Not Supported(shape) Then GoTo Failed
+    If insertionMode <> "" Then
+        If Not (Doc Is ActiveDocument) Then Doc.Activate
+        If Not (Doc Is ActiveDocument) Then GoTo Failed
+        ' Insert after the complete paragraph, including its existing number.
+        ' At the document/cell end defer a new paragraph until actual commit.
+        Set paragraphRange = shape.Range.Paragraphs(1).Range.Duplicate
+        If Right$(paragraphRange.Text, 2) = vbCr & Chr$(7) Then
+            Set insertionPoint = Doc.Range(paragraphRange.End - 2, paragraphRange.End - 2)
+            needsParagraph = True
+        ElseIf paragraphRange.End >= Doc.Content.End Then
+            Set insertionPoint = Doc.Range(Doc.Content.End - 1, Doc.Content.End - 1)
+            needsParagraph = True
+        Else
+            Set insertionPoint = Doc.Range(paragraphRange.End, paragraphRange.End)
+        End If
+        GoTo PrepareInsertionRequest
+    End If
     If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
     If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Cancelled
     ELOpenEquation shape
+    ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestOpened"
+    Exit Sub
+PrepareInsertionRequest:
+    If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Then GoTo Failed
+    If insertionPoint Is Nothing Then GoTo Failed
+    If Not (insertionPoint.Document Is Doc) Or insertionPoint.StoryType <> wdMainTextStory Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
+    If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Cancelled
+    EquationLabRibbon.ELStartEquationInsertion insertionKind, insertionPoint, needsParagraph
     ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestOpened"
     Exit Sub
 Cancelled:
@@ -1460,6 +1516,7 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
     On Error GoTo Failed
     Dim Doc As Document, anchors As Collection, anchor As Range, shape As InlineShape, index As Long, result As Long
     Dim stage As String, failureNumber As Long, failureDescription As String, side As Long, codeUnit As Long, numberFormat As String
+    Dim chapter As Long, section As Long, expectedChapter As Long, expectedSection As Long
     stage = "bindings"
     If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
     stage = "document-anchor"
@@ -1498,7 +1555,11 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
         Set shape = ResolveBoundEquation(Doc, anchor, index)
         If shape Is Nothing Then Err.Raise vbObjectError + 7380, "Equation Lab", "The saved equation is no longer available for numbering."
         stage = "apply-numbering"
-        EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True
+        chapter = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingChapter")
+        section = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingSection")
+        expectedChapter = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedChapter")
+        expectedSection = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedSection")
+        EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True, chapter, section, expectedChapter, expectedSection
         stage = "finish-numbering"
         result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumbering")
         If result <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Word did not confirm the numbering update."

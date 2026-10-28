@@ -16,6 +16,45 @@ function setup(){
  const workspace=context.window.createWordDocumentWorkspace(api);return {workspace,api,state,calls,messages,discard:()=>{discard=true;},behavior:fn=>{behavior=fn;}};
 }
 
+test('App insert binds the selected document and carries a standalone draft without clearing it',async()=>{
+ for(const mode of ['inline','display','numbered-left','numbered-right']){
+  const e=setup(),draft={latex:'x^2+1',ruler:[{position:40,type:0}],typography:{fonts:[{font:'Times New Roman'}]}};
+  e.api.captureInsertionDraft=()=>draft;e.state.draftChanged=true;
+  e.workspace.accepted(document());e.state.source=null;e.state.wordTicket=null;
+  e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,insertionRequestSupport:true,revision:1,active:{identity:'word:other',name:'B.docx'},documents:[{identity:'word:1:2',name:'A.docx',readOnly:false},{identity:'word:other',name:'B.docx',readOnly:false}]}:undefined);
+  assert.equal(await e.workspace.insert(mode),true);
+  assert.equal(e.calls.some(call=>call.action==='detach'||call.action==='confirmWordSessionSwitch'),false);
+  const opening=e.calls.find(call=>call.action==='wordDocumentOpen');assert.equal(opening.payload.documentIdentity,'word:1:2');assert.equal(opening.payload.insertionMode,mode);
+  assert.equal(await e.workspace.prepareIncoming({...document(),insertionLayout:{mode}},requestId),true);
+  assert.equal(e.workspace.takeInsertionDraft(requestId),draft);assert.equal(e.workspace.takeInsertionDraft(requestId),null);
+ }
+});
+
+test('App insert after a selected equation uses the retained range and rejects changed native data',async()=>{
+ const e=setup();e.state.source={...document(),insertion:false};e.state.wordTicket=ticket;e.state.selectedIndex=1;
+ e.workspace.accepted(e.state.source);
+ e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,insertionRequestSupport:true,documents:[{identity:'word:1:2',name:'A.docx',readOnly:false}]}:undefined);
+ assert.equal(await e.workspace.insert('numbered-right'),true);
+ const opening=e.calls.find(c=>c.action==='wordDocumentOpen');assert.equal(opening.payload.target.index,1);assert.equal(opening.payload.target.nativeSha256,'d'.repeat(64));
+ assert.equal(e.calls.find(c=>c.action==='detach').options.preserveDraft,true);
+ const changed={...document(),insertionLayout:{mode:'numbered-right'},objects:[{index:0,nativeSha256:digest},{index:1,nativeSha256:'e'.repeat(64)}]};
+ await assert.rejects(e.workspace.prepareIncoming(changed,requestId),/内容或位置已经变化/);
+ assert.equal(e.workspace.pending,false);
+});
+
+test('App insert rejects readonly, closed, stale, pending and unconfirmed destinations without losing a draft',async()=>{
+ for(const variant of ['closed','readOnly','busy','unknown','declined']){
+  const e=setup();e.state.source={...document(),insertion:false};e.state.wordTicket=ticket;e.state.draftChanged=true;e.workspace.accepted(e.state.source);
+  e.state.busy=variant==='busy';e.state.outcomeUnknown=variant==='unknown';
+  e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,insertionRequestSupport:true,documents:variant==='closed'?[]:[{identity:'word:1:2',name:'A.docx',readOnly:variant==='readOnly'}]}:undefined);
+  assert.equal(await e.workspace.insert('display'),false,variant);assert.equal(e.state.wordTicket,ticket,variant);
+  assert.equal(e.calls.some(c=>['detach','wordDocumentOpen'].includes(c.action)),false,variant);
+ }
+ const e=setup();e.workspace.accepted(document());e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,insertionRequestSupport:true,documents:[{identity:'word:1:2',name:'A.docx',readOnly:false}]}:undefined);
+ assert.equal(await e.workspace.insert('inline'),true);assert.equal(await e.workspace.insert('display'),false);
+ await e.workspace.cancelPending();await assert.rejects(e.workspace.prepareIncoming({...document(),insertionLayout:{mode:'inline'}},requestId),/请求已经结束/);
+});
+
 test('A large cold Word capture stays valid past 25 seconds and still has a bounded cancellation deadline',async()=>{
  for(const elapsed of [30000,60001]){
   const e=setup();let now=0,wake;

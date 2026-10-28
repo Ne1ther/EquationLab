@@ -124,6 +124,25 @@ test('Settings-only insertion drafts require confirmation before sidebar switchi
  }
 });
 
+test('App draft enters a document-bound insertion with text, typography and ruler retained',async()=>{
+ const editor=createEditor(),c=editor.context,requestId='9'.repeat(64);
+ const prior={...insertionDocument,insertion:false};c.window.wordDocumentWorkspace.accepted(prior);
+ c.mf.value='q^2+7';c.editingRuler=[{position:32,type:0}];editor.setTypographyPatch({size:15});
+ editor.setNativeBehavior(async(action)=>{
+  if(action==='wordWorkspaceStatus')return {connected:true,insertionRequestSupport:true,revision:1,active:{identity:prior.documentIdentity,name:'target.docx'},documents:[{identity:prior.documentIdentity,name:'target.docx',readOnly:false}]};
+  if(action==='wordDocumentOpen')return {requestId};
+  if(action==='wordDocumentStatus')return {state:'opened'};
+  if(action==='wordSessionRead')return {...insertionDocument,insertionLayout:{...insertionDocument.insertionLayout,mode:'numbered-right'}};
+  return {};
+ });
+ assert.equal(await c.window.wordDocumentWorkspace.insert('numbered-right'),true);
+ assert.equal(c.mf.value,'q^2+7','requesting an anchor does not clear the existing draft');
+ assert.equal(await c.window.nativeOpenWordSession(ticket,requestId),true);
+ assert.equal(c.mf.value,'q^2+7');assert.deepEqual(JSON.parse(JSON.stringify(c.editingRuler)),[{position:32,type:0}]);
+ assert.equal(c.window.desktopTypographyPatch().size,15);assert.equal(editor.element('layout-mode').value,'numbered-right');
+ assert.equal(editor.calls.some(call=>call.action==='confirmWordSessionSwitch'),false);
+});
+
 test('a numbered Word insertion submits the format selected in the inspector',async()=>{
  const editor=createEditor(),{context:c}=editor;
  editor.element('layout-mode').options=[{value:'numbered-right',textContent:'右侧编号'}];
@@ -137,7 +156,7 @@ test('a numbered Word insertion submits the format selected in the inspector',as
  });
  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
  assert.equal(editor.element('layout-format').disabled,false);
- assert.equal(editor.element('layout-mode').disabled,true);
+ assert.equal(editor.element('layout-mode').disabled,false);
  assert.equal(editor.element('layout-chapter').disabled,true);
  assert.equal(editor.element('layout-section').disabled,true);
  editor.element('layout-format').value='(#C1.#E1)';
@@ -146,6 +165,68 @@ test('a numbered Word insertion submits the format selected in the inspector',as
  assert.equal(submitted.layout.numberFormat,'(#C1.#E1)');
  assert.equal(submitted.layout.chapter,3);
  assert.equal(submitted.layout.equation,11);
+});
+
+test('Word default changes refresh a clean insertion by identity and preserve a custom format draft',async()=>{
+ for(const custom of [false,true]){
+  const editor=createEditor(),c=editor.context;let format='(#E1)';
+  editor.setNativeBehavior(async(action)=>{
+   if(action==='wordSessionRead')return {...insertionDocument,documentNumberFormat:'(#E1)'};
+   if(action==='wordWorkspaceStatus')return {connected:true,revision:1,active:{identity:documentIdentity,name:'A.docx'},documents:[{identity:documentIdentity,name:'A.docx',readOnly:false,numberFormat:format},{identity:'different:doc',name:'B.docx',readOnly:false,numberFormat:'[#E1]'}],retiredIdentities:[]};
+   return {};
+  });
+  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+  editor.element('layout-format').value=custom?'(#EI)':'(#E1)';format='(#C1.#E1)';
+  await c.window.nativeRefreshWordDocumentList();
+  assert.equal(c.source.documentNumberFormat,format);
+  assert.equal(editor.element('layout-format').value,custom?'(#EI)':format);
+  assert.equal(c.source.documentIdentity,documentIdentity);assert.equal(c.wordTicket,ticket);
+ }
+});
+
+test('changing an existing (1) to a chapter format creates missing counters; an ordinary content edit does not',async()=>{
+ for(const chapterFormat of [false,true]){
+  const editor=createEditor(),c=editor.context;
+  editor.element('layout-mode').options=[{value:'numbered-right',textContent:'右侧编号'}];
+  vm.runInContext(slice('function loadObjectLayout(', 'function wordLayout()'),c);
+  const document=structuredClone(documentSnapshotFor(0));
+  document.wordNumberingSupported=true;document.wordNumberingContextSupported=true;
+  document.objects[0].layout={mode:'numbered-right',numberFormat:'(#E1)',chapter:null,section:null,equation:1};
+  let submitted;
+  editor.setNativeBehavior(async(action,payload)=>{
+   if(action==='wordSessionRead')return document;
+   if(action==='wordSessionSave'){submitted=payload;return {acknowledgement:false};}
+   return {};
+  });
+  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+  c.loadObjectLayout(c.selected);
+  assert.equal(editor.element('layout-chapter').value,'1');assert.equal(editor.element('layout-section').value,'1');
+  assert.equal(c.wordSessionChanged(),false,'displayed defaults alone must not dirty a clean equation');
+  if(chapterFormat)editor.element('layout-format').value='(#C1.#E1)';else c.mf.value='x+2';
+  assert.equal(await c.window.nativeCommitWordSession(),true,editor.messages.map(m=>m.text).join(' | '));
+  if(chapterFormat)assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering.context)),{chapter:1,section:1,expectedChapter:0,expectedSection:0});
+  else assert.equal(submitted.numbering,undefined,'ordinary content edits must not create chapter markers');
+ }
+});
+
+test('Word renumbering reloads the same clean equation and preserves a dirty draft without detaching',async()=>{
+ for(const dirty of [false,true]){
+  const editor=createEditor(),c=editor.context;
+  const document={...documentSnapshotFor(1),documentNumberingRevision:0};
+  editor.setNativeBehavior(async(action)=>{
+   if(action==='wordSessionRead')return document;
+   if(action==='wordWorkspaceStatus')return {connected:true,revision:2,active:{identity:documentIdentity,name:'A.docx'},documents:[{identity:documentIdentity,name:'A.docx',readOnly:false,numberingRevision:1}],retiredIdentities:[]};
+   if(action==='wordDocumentOpen')return {requestId:'c'.repeat(64),state:'queued'};
+   if(action==='wordDocumentStatus')return {state:'delivered'};
+   return {};
+  });
+  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+  if(dirty)c.mf.value='draft+1';
+  await c.window.nativeSyncWordWorkspace();
+  const opens=editor.calls.filter(call=>call.action==='wordDocumentOpen');
+  if(dirty){assert.equal(opens.length,0);assert.equal(c.wordTicket,ticket);assert.equal(c.mf.value,'draft+1');assert.equal(c.source.numberingRefreshNeeded,true);}
+  else{assert.equal(opens.length,1);assert.deepEqual(JSON.parse(JSON.stringify(opens[0].payload.target)),{identity:documentIdentity,snapshot:documentSnapshot,index:1,nativeSha256:documentObjects[1].nativeSha256});assert.equal(c.mf.value,documentObjects[1].latex);}
+ }
 });
 
 test('Opening a Word insertion session keeps the editor blank and retains the full document sidebar',async()=>{

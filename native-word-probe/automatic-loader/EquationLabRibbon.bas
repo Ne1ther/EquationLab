@@ -15,8 +15,8 @@ Public Sub ELRibbonAction(ByVal control As IRibbonControl)
         Case "insert-number": InsertNumber
         Case "insert-reference": InsertReference
         Case "update-fields": UpdateNumbers
-        Case "number-format": SetNumberFormat
-        Case "chapter-section": SetChapter
+        Case "number-format": OpenNumberingSettings False
+        Case "chapter-section": OpenNumberingSettings True
         Case "previous-equation": NavigateEquation False
         Case "next-equation": NavigateEquation True
         Case "typography": EditEquation: NativeTool "Typography"
@@ -75,11 +75,15 @@ End Sub
 ' Compute preview counters from fields before the insertion point. A chapter
 ' reset is a hidden SEQ field, not a visible equation to count.
 Private Function SequenceBeforeSelection(ByVal sequenceName As String, ByRef found As Boolean) As Long
+    SequenceBeforeSelection = SequenceBeforePosition(ActiveDocument, Selection.Start, sequenceName, found)
+End Function
+
+Private Function SequenceBeforePosition(ByVal Doc As Document, ByVal beforePosition As Long, ByVal sequenceName As String, ByRef found As Boolean) As Long
     Dim field As Field, code As String, parts() As String, i As Long, value As Long
     Dim repeatCurrent As Boolean, resetFound As Boolean, resetValue As Long
     found = False
-    For Each field In ActiveDocument.Fields
-        If field.Code.Start < Selection.Start Then
+    For Each field In Doc.Fields
+        If field.Code.Start < beforePosition Then
             code = UCase$(Trim$(Replace(field.Code.Text, vbTab, " ")))
             Do While InStr(code, "  ") > 0: code = Replace(code, "  ", " "): Loop
             parts = Split(code, " ")
@@ -105,7 +109,7 @@ Private Function SequenceBeforeSelection(ByVal sequenceName As String, ByRef fou
             End If
         End If
     Next
-    SequenceBeforeSelection = value
+    SequenceBeforePosition = value
 End Function
 
 Private Function NextNumber() As Long
@@ -155,6 +159,7 @@ Private Sub InsertEquation(ByVal kind As String)
     RequireDocument
     Dim Doc As Document, selectedRange As Range, chosen As InlineShape
     Dim chapter As String, section As String, equationNumber As Long
+    Dim hasChapter As Boolean, hasSection As Boolean, ignoredCounter As Long
     Set Doc = ActiveDocument
     Set selectedRange = Selection.Range.Duplicate
     Set chosen = ELSelectedEquation(Selection)
@@ -167,14 +172,26 @@ Private Sub InsertEquation(ByVal kind As String)
     End If
     If selectedRange.Start <> selectedRange.End Then Err.Raise vbObjectError + 7346, "Equation Lab", "Please place an empty cursor where the equation should be inserted."
     If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7346, "Equation Lab", "Finish the active Equation Lab edit before changing equation numbering."
-    chapter = Preference("EquationLabChapter", "1"): section = Preference("EquationLabSection", "1"): equationNumber = 1
-    If kind = "Right" Or kind = "Left" Then
-        chapter = CurrentCounter("ELChapter", chapter)
-        section = CurrentCounter("ELSection", section)
-        equationNumber = NextNumber()
-    End If
-    ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", ELDocumentNumberFormat(Doc, selectedRange.Start) & vbLf & chapter & vbLf & section & vbLf & CStr(equationNumber) & vbLf
-    EquationLabDocumentContext.ELBeginEquationInsertion kind
+    ELStartEquationInsertion kind, selectedRange
+End Sub
+
+' Both the Ribbon and App requests enter this document-bound path. Read all
+' counters at the actual insertion position, including initially unnumbered
+' equations which may be changed to numbered mode inside the editor.
+Public Sub ELStartEquationInsertion(ByVal kind As String, ByVal selectedRange As Range, Optional ByVal leadingParagraph As Boolean = False)
+    Dim Doc As Document, chapter As String, section As String, equationNumber As Long
+    Dim hasChapter As Boolean, hasSection As Boolean, ignoredCounter As Long
+    Set Doc = selectedRange.Document
+    If Not (Doc Is ActiveDocument) Then Err.Raise vbObjectError + 7346, "Equation Lab", "The insertion document changed."
+    If selectedRange.Start <> selectedRange.End Or selectedRange.StoryType <> wdMainTextStory Then Err.Raise vbObjectError + 7346, "Equation Lab", "Place an empty cursor in the document body."
+    selectedRange.Select
+    chapter = CurrentCounter("ELChapter", Preference("EquationLabChapter", "1"))
+    section = CurrentCounter("ELSection", Preference("EquationLabSection", "1"))
+    equationNumber = NextNumber()
+    ignoredCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELChapter", hasChapter)
+    ignoredCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELSection", hasSection)
+    ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", ELDocumentNumberFormat(Doc, selectedRange.Start) & vbLf & chapter & vbLf & section & vbLf & CStr(equationNumber) & vbLf & IIf(hasChapter And hasSection, "1", "0") & vbLf
+    EquationLabDocumentContext.ELBeginEquationInsertion kind, leadingParagraph
 End Sub
 
 Private Function IsEquation(ByVal equation As InlineShape) As Boolean
@@ -266,9 +283,10 @@ End Sub
 
 ' Numbering a selected equation is deliberately restricted to a plain, single
 ' equation paragraph. It never inserts/replaces the OLE or imports a DOCX.
-Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False)
+Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1)
     Dim paragraph As Range, objectRange As Range, oleRange As Range, numberBookmark As Bookmark
-    Dim oldNumberRange As Range, insertion As Range, copiedRange As Range, bookmarkRange As Range
+    Dim oldNumberRange As Range, insertion As Range, copiedRange As Range, bookmarkRange As Range, equationField As Field
+    Dim contextChanged As Boolean, foundCounter As Boolean, actualCounter As Long
     Dim bookmarkName As String, field As Field, code As String, numberCount As Long
     Dim undoRecord As UndoRecord, customUndo As Boolean, changed As Boolean
     Dim oldSmartCutPaste As Boolean, smartCutPasteChanged As Boolean
@@ -286,7 +304,7 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
         If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Finish the active Equation Lab edit before changing equation numbering."
     End If
     Set objectRange = equation.Range.Duplicate
-    Set paragraph = objectRange.Paragraphs(1).Range.Duplicate
+    Set paragraph = NumberingEquationParagraph(Doc, equation)
     If paragraph.Revisions.Count <> 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Equation numbering is unavailable in a paragraph with tracked revisions."
     If paragraph.InlineShapes.Count <> 1 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Select a standalone paragraph containing one equation."
     If Not (paragraph.InlineShapes(1).Range.Start = objectRange.Start And paragraph.InlineShapes(1).Range.End = objectRange.End) Then Err.Raise vbObjectError + 7360, "Equation Lab", "Select one exact equation in a standalone paragraph."
@@ -303,6 +321,7 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
             If Not (field.Result.Start <= objectRange.Start And field.Result.End >= objectRange.End) Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected equation is not the complete embedded field result."
             fieldStart = RibbonEmbeddedEquationFieldStart(field, Doc)
             If fieldStart < 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The OLE field boundary could not be resolved safely."
+            Set equationField = field
             Set oleRange = Doc.Range(fieldStart, field.Result.End + 1)
             If oleRange.Start < paragraph.Start Or oleRange.End > paragraph.End Then Err.Raise vbObjectError + 7360, "Equation Lab", "The embedded field crosses a paragraph boundary."
             oleStart = oleRange.Start: oleEnd = oleRange.End
@@ -339,13 +358,22 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     If numberCount = 0 And bookmarkName <> "" Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected paragraph has an Equation Lab bookmark without a number."
     If numberCount > 1 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected paragraph contains multiple equation counters."
     If numberCount > 0 Then ValidateExistingRibbonNumber Doc, paragraph, bookmarkName
+    contextChanged = (chapter <> 0 Or section <> 0)
+    If contextChanged Then
+        If chapter < 1 Or chapter > 32767 Or section < 1 Or section > 32767 Then Err.Raise vbObjectError + 7363, "Equation Lab", "Chapter and section must be between 1 and 32767."
+        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELChapter", foundCounter)
+        If expectedChapter >= 0 And actualCounter <> expectedChapter Then Err.Raise vbObjectError + 7363, "Equation Lab", "Chapter changed in Word. Reopen the equation before saving."
+        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELSection", foundCounter)
+        If expectedSection >= 0 And actualCounter <> expectedSection Then Err.Raise vbObjectError + 7363, "Equation Lab", "Section changed in Word. Reopen the equation before saving."
+    End If
 
     Set bookmarkRange = Nothing
     If bookmarkName <> "" Then Set bookmarkRange = Doc.Bookmarks(bookmarkName).Range.Duplicate
     ValidateEquationParagraphRemainder Doc, paragraph, oleRange, bookmarkRange
     If Not bookmarkRange Is Nothing Then
-        If patternOverride = "" And ((rightSide And bookmarkRange.Start >= oleEnd) Or ((Not rightSide) And bookmarkRange.End <= oleStart)) Then
+        If Not contextChanged And patternOverride = "" And ((rightSide And bookmarkRange.Start >= oleEnd) Or ((Not rightSide) And bookmarkRange.End <= oleStart)) Then
             UpdateNumbersForDocument Doc
+            NumberingChanged Doc
             ELInvalidateDocumentSnapshot
             Exit Sub
         End If
@@ -355,7 +383,7 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     If numberCount = 0 Or patternOverride <> "" Then
         If patternOverride <> "" Then pattern = patternOverride Else pattern = ELDocumentNumberFormat(Doc, oleStart)
         ValidateRibbonNumberFormat pattern
-        RequireCounterContext Doc, pattern, oleStart
+        If Not contextChanged Then RequireCounterContext Doc, pattern, oleStart
     End If
     ' Word must expose an isolated undo record before the first change.
     Set undoRecord = Application.UndoRecord
@@ -368,6 +396,13 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     oldSmartCutPaste = Options.SmartCutPaste
     Options.SmartCutPaste = False
     smartCutPasteChanged = True
+    If contextChanged Then
+        InsertNumberingContext Doc, paragraph.Start, chapter, section, changed
+        fieldStart = RibbonEmbeddedEquationFieldStart(equationField, Doc)
+        If fieldStart < 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The equation moved while setting its chapter."
+        Set oleRange = Doc.Range(fieldStart, equationField.Result.End + 1)
+        oleStart = oleRange.Start: oleEnd = oleRange.End
+    End If
     If numberCount > 0 And patternOverride <> "" Then
         ' Insert the replacement before the old range, then remove the old
         ' fields only after Word confirms that its retained range still has
@@ -419,6 +454,11 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     NormalizeNumberParagraph Doc, equation, copiedRange, bookmarkName, rightSide, changed
     UpdateNumbersForDocument Doc
     If patternOverride <> "" Then SavePreferenceForDocument Doc, "EquationLabNumberFormat", patternOverride
+    If contextChanged Then
+        SavePreferenceForDocument Doc, "EquationLabChapter", CStr(chapter)
+        SavePreferenceForDocument Doc, "EquationLabSection", CStr(section)
+    End If
+    NumberingChanged Doc
     ELInvalidateDocumentSnapshot
     undoRecord.EndCustomRecord
     customUndo = False
@@ -438,6 +478,29 @@ Failed:
     On Error GoTo 0
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
+
+Private Function NumberingEquationParagraph(ByVal Doc As Document, ByVal equation As InlineShape) As Range
+    ' With hidden text off, Word can report the preceding hidden chapter marker
+    ' as part of the equation's logical paragraph. Use real paragraph marks so
+    ' a reset counter is never counted as an equation or deleted as whitespace.
+    Dim logical As Range, character As Range, position As Long, start As Long, finish As Long
+    Set logical = equation.Range.Paragraphs(1).Range.Duplicate
+    start = logical.Start: finish = logical.End
+    If equation.Range.Start - start > 16384 Or finish - equation.Range.End > 16384 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The equation paragraph boundary is too large to resolve safely."
+    For position = equation.Range.Start - 1 To start Step -1
+        Set character = Doc.Range(position, position + 1)
+        character.TextRetrievalMode.IncludeHiddenText = True
+        character.TextRetrievalMode.IncludeFieldCodes = True
+        If character.Text = Chr$(13) Then start = position + 1: Exit For
+    Next
+    For position = equation.Range.End To finish - 1
+        Set character = Doc.Range(position, position + 1)
+        character.TextRetrievalMode.IncludeHiddenText = True
+        character.TextRetrievalMode.IncludeFieldCodes = True
+        If character.Text = Chr$(13) Then finish = position + 1: Exit For
+    Next
+    Set NumberingEquationParagraph = Doc.Range(start, finish)
+End Function
 
 Private Function RibbonEmbeddedEquationFieldStart(ByVal embedded As Field, ByVal Doc As Document) As Long
     On Error GoTo Missing
@@ -484,6 +547,25 @@ Private Sub RequireLayoutWhitespace(ByVal checkedRange As Range)
     Next
 End Sub
 
+Private Sub InsertNumberingContext(ByVal Doc As Document, ByVal beforePosition As Long, ByVal chapter As Long, ByVal section As Long, ByRef changed As Boolean)
+    Dim marker As Range, field As Field, cursor As Long, codes As Variant, code As Variant
+    Set marker = Doc.Range(beforePosition, beforePosition)
+    marker.InsertBefore vbCr
+    changed = True
+    Set marker = Doc.Range(beforePosition, beforePosition + 1)
+    marker.Font.Hidden = True: marker.Font.Size = 1
+    marker.ParagraphFormat.SpaceBefore = 0: marker.ParagraphFormat.SpaceAfter = 0
+    marker.ParagraphFormat.LineSpacingRule = wdLineSpaceExactly: marker.ParagraphFormat.LineSpacing = 1
+    codes = Array("ELChapter \r " & CStr(chapter) & " \h", "ELSection \r " & CStr(section) & " \h", "EquationLab \r 0 \h")
+    For Each code In codes
+        ' Hidden SEQ fields have an empty result and a different Result.End
+        ' boundary. The retained paragraph mark is the insertion boundary.
+        cursor = marker.End - 1
+        Set field = Doc.Fields.Add(Range:=Doc.Range(cursor, cursor), Type:=wdFieldSequence, Text:=CStr(code), PreserveFormatting:=False)
+        field.Result.Font.Hidden = True
+    Next
+End Sub
+
 Private Sub RequireCounterContext(ByVal Doc As Document, ByVal pattern As String, ByVal beforePosition As Long)
     Dim field As Field, code As String, hasChapter As Boolean, hasSection As Boolean
     If InStr(1, pattern, "#C", vbBinaryCompare) = 0 And InStr(1, pattern, "#S", vbBinaryCompare) = 0 Then Exit Sub
@@ -511,7 +593,7 @@ Private Sub NormalizeNumberParagraph(ByVal Doc As Document, ByVal equation As In
     Dim originalNumberText As String, originalNumberFields As Long
     originalNumberText = numberRange.Text
     originalNumberFields = numberRange.Fields.Count
-    Set paragraph = equation.Range.Paragraphs(1).Range.Duplicate
+    Set paragraph = NumberingEquationParagraph(Doc, equation)
     For Each embedded In paragraph.Fields
         If embedded.Type = wdFieldEmbed Then
             Set oleRange = Doc.Range(RibbonEmbeddedEquationFieldStart(embedded, Doc), embedded.Result.End + 1)
@@ -656,6 +738,33 @@ Private Function RibbonNumberFormat(ByVal Doc As Document, ByVal numberBookmark 
     ValidateRibbonNumberFormat pattern
     RibbonNumberFormat = pattern
 Unsupported:
+End Function
+
+Public Function ELNumberingRevision(ByVal Doc As Document) As Long
+    On Error GoTo Missing
+    Dim value As String
+    value = PreferenceForDocument(Doc, "EquationLabNumberingRevision", "0")
+    If IsNumeric(value) Then
+        If CDbl(value) >= 0 And CDbl(value) <= 2147483646# And CDbl(value) = Fix(CDbl(value)) Then ELNumberingRevision = CLng(value)
+    End If
+Missing:
+End Function
+
+Private Sub NumberingChanged(ByVal Doc As Document)
+    Dim revision As Long
+    revision = ELNumberingRevision(Doc)
+    If revision >= 2147483646 Then revision = 0
+    SavePreferenceForDocument Doc, "EquationLabNumberingRevision", CStr(revision + 1)
+    EquationLabDocumentContext.ELQueueWorkspaceRefresh
+End Sub
+
+Public Function ELStoredNumberFormat(ByVal Doc As Document) As String
+    On Error GoTo Missing
+    Dim pattern As String
+    pattern = PreferenceForDocument(Doc, "EquationLabNumberFormat", "")
+    If pattern <> "" Then ValidateRibbonNumberFormat pattern
+    ELStoredNumberFormat = pattern
+Missing:
 End Function
 
 Public Function ELDocumentNumberFormat(ByVal Doc As Document, ByVal beforePosition As Long) As String
@@ -893,6 +1002,7 @@ End Sub
 Public Sub ELUpdateNumbersForDocument(ByVal Doc As Document)
     If Doc Is Nothing Then Err.Raise vbObjectError + 7372, "Equation Lab", "The insertion document is unavailable."
     UpdateNumbersForDocument Doc
+    NumberingChanged Doc
 End Sub
 
 Private Sub InsertPreparedFragment(ByVal tool As String)
@@ -935,31 +1045,77 @@ Public Sub UpdateNumbers()
     Dim Doc As Document
     Set Doc = ActiveDocument
     UpdateNumbersForDocument Doc
+    NumberingChanged Doc
     ELInvalidateDocumentSnapshot
 End Sub
 
+Private Sub OpenNumberingSettings(ByVal chapterSettings As Boolean)
+    RequireDocument
+    Dim equation As InlineShape
+    Set equation = EquationLabDocumentContext.ELSelectedEquation(Selection)
+    If Not equation Is Nothing Then
+        EditEquation
+        NativeTool "Numbering"
+    ElseIf EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then
+        ' A Word modal dialog would block the host callback needed to finish
+        ' that edit. Keep the draft in its current editor instead.
+        NativeTool "Numbering"
+    ElseIf chapterSettings Then
+        SetChapter
+    Else
+        SetNumberFormat
+    End If
+End Sub
+
+Private Function PromptNumberingSettings(ByVal kind As String, ByVal first As String, Optional ByVal second As String = "") As String
+    Dim status As Long, unit As Long, i As Long, value As String
+    ELWriteUtf8 WorkDirectory() & "ribbon-numbering-prompt.txt", "ELNUM1" & vbLf & kind & vbLf & first & vbLf & second & vbLf
+    status = EquationLabNativeCommand("MathTypeBridgeNumberingPrompt")
+    If status = 1 Then Exit Function
+    If status <> 0 Then Err.Raise vbObjectError + 7355, "Equation Lab", "The numbering dialog is unavailable. Update the Word component and restart Word."
+    For i = 1 To 257
+        unit = EquationLabNativeCommand("MathTypeBridgeNumberingPromptNextChar")
+        If unit = 0 Then Exit For
+        If unit < 0 Or unit > 65535 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Invalid numbering dialog response."
+        If unit > 32767 Then unit = unit - 65536
+        value = value & ChrW$(unit)
+    Next
+    If i > 257 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Numbering dialog response is too long."
+    PromptNumberingSettings = value
+End Function
+
 Private Sub SetNumberFormat()
     RequireDocument
-    Dim value As String
-    value = InputBox("Format for new numbered equations. Example: (#C1.#E1)", "Equation Lab", ELDocumentNumberFormat(ActiveDocument, Selection.Start))
+    Dim value As String, Doc As Document
+    Set Doc = ActiveDocument
+    value = PromptNumberingSettings("format", ELDocumentNumberFormat(Doc, Selection.Start))
     If value = "" Then Exit Sub
+    If Not Doc Is ActiveDocument Then Err.Raise vbObjectError + 7355, "Equation Lab", "The Word document changed while the dialog was open."
     If Len(value) > 128 Or InStr(value, vbLf) > 0 Or InStr(value, vbCr) > 0 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Invalid number format."
     ValidateRibbonNumberFormat value
-    SavePreference "EquationLabNumberFormat", value
+    SavePreferenceForDocument Doc, "EquationLabNumberFormat", value
+    NumberingChanged Doc
+    ELInvalidateDocumentSnapshot
 End Sub
 
 Private Sub SetChapter()
     RequireDocument
-    Dim chapter As String, section As String
+    Dim chapter As String, section As String, response As String, parts() As String, Doc As Document, anchor As Range
+    Set Doc = ActiveDocument
+    Set anchor = Selection.Range.Duplicate
     If Selection.Start <> Selection.End Then Err.Raise vbObjectError + 7356, "Equation Lab", "Place an empty cursor before setting chapter and section."
-    chapter = InputBox("Chapter number (1-32767)", "Equation Lab", Preference("EquationLabChapter", "1"))
-    If chapter = "" Then Exit Sub
-    section = InputBox("Section number (1-32767)", "Equation Lab", Preference("EquationLabSection", "1"))
-    If section = "" Then Exit Sub
+    If EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7356, "Equation Lab", "Finish the active Equation Lab edit before starting a new chapter."
+    response = PromptNumberingSettings("context", CurrentCounter("ELChapter", Preference("EquationLabChapter", "1")), CurrentCounter("ELSection", Preference("EquationLabSection", "1")))
+    If response = "" Then Exit Sub
+    parts = Split(response, vbLf)
+    If UBound(parts) <> 1 Then Err.Raise vbObjectError + 7356, "Equation Lab", "Invalid chapter and section response."
+    chapter = parts(0): section = parts(1)
+    If Not Doc Is ActiveDocument Then Err.Raise vbObjectError + 7356, "Equation Lab", "The Word document changed while the dialog was open."
+    If Selection.Start <> anchor.Start Or Selection.End <> anchor.End Then Err.Raise vbObjectError + 7356, "Equation Lab", "The Word cursor changed while the dialog was open."
     If Not IsNumeric(chapter) Or Not IsNumeric(section) Then Exit Sub
     If CDbl(chapter) < 1 Or CDbl(chapter) > 32767 Or CDbl(chapter) <> Fix(CDbl(chapter)) Or CDbl(section) < 1 Or CDbl(section) > 32767 Or CDbl(section) <> Fix(CDbl(section)) Then Exit Sub
-    SavePreference "EquationLabChapter", CStr(CLng(chapter))
-    SavePreference "EquationLabSection", CStr(CLng(section))
+    SavePreferenceForDocument Doc, "EquationLabChapter", CStr(CLng(chapter))
+    SavePreferenceForDocument Doc, "EquationLabSection", CStr(CLng(section))
     ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", ELDocumentNumberFormat(ActiveDocument, Selection.Start) & vbLf & CStr(CLng(chapter)) & vbLf & CStr(CLng(section)) & vbLf & CStr(NextNumber()) & vbLf
     InsertPreparedFragment "Chapter"
 End Sub

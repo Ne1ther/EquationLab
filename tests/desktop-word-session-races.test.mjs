@@ -249,6 +249,23 @@ test('A changed Word number format is bound to the selected equation, including 
  assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering)),{format:'[#C1-#E1]',side:'right'});
 });
 
+test('Chapter-only changes carry the old context and exact formula target, while a displayed default never numbers an untouched equation',async()=>{
+ for(const changeContext of [false,true]){
+  let submitted;const editor=createEditor(async(action,payload)=>{if(action==='wordSessionSave')submitted=payload;return {acknowledgement:false};}),c=editor.context;
+  const elements=new Map();c.$=id=>{if(!elements.has(id))elements.set(id,{disabled:false,value:'',hidden:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
+  c.favorites=[];c.wordTicket='7'.repeat(64);
+  const object={...sourceDocument.objects[0],layout:{mode:'inline',chapter:3,section:1},editorNumberFormatBaseline:'(#C1.#E1)'};
+  c.source={wordNumberingSupported:true,wordNumberingContextSupported:true,hasDocumentContext:true,documentIdentity:'exact:doc1',activeIndex:0,path:'/tmp/equations.docx',objects:[object]};
+  c.selected=object;c.selected.editorBaseline=c.selected.latex;c.mf.value=c.selected.latex;
+  c.$('layout-format').value='(#C1.#E1)';c.$('layout-chapter').value=changeContext?'4':'3';c.$('layout-section').value=changeContext?'2':'1';
+  installWordCommit(c);assert.equal(await c.window.nativeCommitWordSession(),true,editor.messages.join(' | '));
+  if(changeContext){
+   assert.equal(submitted.target.documentIdentity,'exact:doc1');
+   assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering.context)),{chapter:4,section:2,expectedChapter:3,expectedSection:1});
+  }else assert.equal(submitted.numbering,undefined,'opening a document with a saved default must not implicitly number its inline equations');
+ }
+});
+
 test('Save preflight locks the captured local formula until its single target-bound write completes',async()=>{
  const ticket='3'.repeat(64),targetIndex=25,nextIndex=16;let startValidation,releaseValidation;
  const validationStarted=new Promise(resolve=>{startValidation=resolve;}),validationGate=new Promise(resolve=>{releaseValidation=resolve;});
