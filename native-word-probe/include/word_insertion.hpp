@@ -18,3 +18,9 @@ void EquationLabFinishWordInsertion(bool ok);
 void EquationLabFinishWordInsertionUncertain();
 // Returns the insertion error, or 7 when the outcome/acknowledgement is unconfirmed.
 std::int32_t EquationLabWordInsertionError();
+// Read-only list enrichment for a partial insertion context. Claim once, then
+// validate the same token before every host chunk; cancellation retires it.
+std::int32_t EquationLabTakeInsertionDocumentRequest();
+std::int32_t EquationLabInsertionDocumentRequestToken();
+std::int32_t EquationLabFinishInsertionDocumentCapture(NSDictionary* document);
+void EquationLabFailInsertionDocumentCapture();

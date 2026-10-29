@@ -34,6 +34,15 @@ Private mInsertionDocument As Document
 Private mInsertionRange As Range
 Private mInsertionToken As Long
 Private mInsertionLeadingParagraph As Boolean
+Private mRequestedInsertionAfter As Range
+Private mRequestedInsertionIndex As Long
+Private mInsertionAfter As Range
+Private mInsertionAfterIndex As Long
+Private mInsertionAfterXml As String
+Private mInsertionIdentity As Long
+Private mInsertionCount As Long
+Private mInsertionEnd As Long
+Private mInsertionText As String
 Private mCaptureFailureNotified As Long
 Private mActivationDocument As Document
 Private mActivationRange As Range
@@ -54,6 +63,7 @@ Private mChunkSnapshot As Long
 Private mChunkSelected As Long
 Private mChunkEquations As Collection
 Private mChunkText As String
+Private mChunkInsertion As Boolean
 
 Public Sub ELObserveDocument(ByVal Doc As Document)
     If Not mReconcilingDocuments Then ELReconcileKnownDocuments
@@ -795,8 +805,13 @@ Private Sub SchedulePoll()
 End Sub
 
 Private Sub ClearInsertion()
+    If mChunkInsertion Then ELClearDocumentChunks
     Set mInsertionDocument = Nothing
     Set mInsertionRange = Nothing
+    Set mInsertionAfter = Nothing
+    mInsertionAfterXml = ""
+    mInsertionIdentity = 0
+    mInsertionText = ""
     mInsertionToken = 0
     mInsertionLeadingParagraph = False
 End Sub
@@ -859,6 +874,13 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
     mInsertionLeadingParagraph = leadingParagraph
     ELObserveDocument mInsertionDocument
     mInsertionToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    mInsertionIdentity = KnownDocumentIdentity(mInsertionDocument)
+    Set mInsertionAfter = Nothing
+    mInsertionAfterXml = ""
+    If Not mRequestedInsertionAfter Is Nothing Then
+        Set mInsertionAfter = mRequestedInsertionAfter.Duplicate
+        mInsertionAfterIndex = mRequestedInsertionIndex
+    End If
     Dim directory As String, xml As String, result As Long, shape As InlineShape, anchor As Range
     Dim insertionEquations As Collection, insertionAnchors As Collection
     Set insertionEquations = New Collection
@@ -871,6 +893,8 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
         insertionAnchors.Add anchor
     Next
     RememberDocumentRanges mInsertionDocument, mInsertionToken, insertionAnchors
+    mInsertionCount = insertionEquations.Count
+    mInsertionEnd = mInsertionDocument.Content.End
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     xml = SavedDocumentCaptureHeader(mInsertionDocument, mDocumentIdentity, mInsertionToken, 0, insertionEquations.Count, 0)
@@ -878,6 +902,25 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
         ELWriteUtf8 directory & "/.EquationLab/ribbon-insertion-context.txt", xml
         result = EquationLabNativeCommand("MathTypeBridgeRibbon" & kind)
         If result = 0 Then GoTo InsertionPrepared
+    End If
+    If (mInsertionCount > 20 Or mInsertionEnd > 20000) And EquationLabNativeCommand("MathTypeBridgeInsertionProgressiveSupport") > 0 Then
+        ' Only the exact after-formula anchor (or an empty cursor Range) is
+        ' serialized before showing the editor. The full list follows later.
+        Dim partialIndex As Long
+        partialIndex = -1
+        If mInsertionAfter Is Nothing Then
+            xml = mInsertionRange.WordOpenXML
+        Else
+            xml = mInsertionAfter.WordOpenXML
+            mInsertionAfterXml = xml
+            partialIndex = mInsertionAfterIndex
+        End If
+        mInsertionText = mInsertionDocument.Content.Text
+        If Len(xml) > 134217728 Then GoTo Failed
+        ELWriteDocumentCapture directory & "/.EquationLab/ribbon-insertion-context.txt", "ELINS1" & vbLf & CStr(mInsertionIdentity) & vbLf & CStr(mInsertionToken) & vbLf & CStr(mInsertionCount) & vbLf & CStr(partialIndex) & vbLf & Replace(Replace(mInsertionDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
+        result = EquationLabNativeCommand("MathTypeBridgeRibbon" & kind)
+        If result <> 0 Then Err.Raise vbObjectError + 7362, "Equation Lab", "The blank equation editor could not be opened."
+        GoTo InsertionPrepared
     End If
     xml = mInsertionDocument.Content.WordOpenXML
     If Len(xml) > 134217728 Then Err.Raise vbObjectError + 7361, "Equation Lab", "This document exceeds the 128 MiB Word capture limit."
@@ -909,9 +952,20 @@ Private Sub ApplyInsertion(ByVal token As Long)
     For Each candidate In Application.Documents
         If candidate Is Doc Then isOpen = True: Exit For
     Next
-    If Not isOpen Or Doc.ReadOnly Then GoTo Failed
+    If Not isOpen Or Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Then GoTo Failed
+    If KnownDocumentIdentity(Doc) <> mInsertionIdentity Then GoTo Failed
     If Not (mInsertionRange.Document Is Doc) Then GoTo Failed
     If mInsertionRange.StoryType <> wdMainTextStory Or mInsertionRange.Start <> mInsertionRange.End Or mInsertionRange.Text <> "" Then GoTo Failed
+    If Not mInsertionAfter Is Nothing Then
+        Dim originalAfter As InlineShape
+        Set originalAfter = ResolveBoundEquation(Doc, mInsertionAfter, mInsertionAfterIndex + 1)
+        If originalAfter Is Nothing Then GoTo Failed
+        ' A partial opening proved this exact formula's native hash. Recheck
+        ' its small immutable capture before mutating the retained insertion.
+        If mInsertionAfterXml <> "" Then
+            If originalAfter.Range.WordOpenXML <> mInsertionAfterXml Then GoTo Failed
+        End If
+    End If
     inlineMode = EquationLabNativeCommand("MathTypeBridgeInsertionInline")
     If inlineMode < 0 Then GoTo Failed
     Do
@@ -1013,7 +1067,17 @@ Public Sub ELPollNavigation()
         SchedulePoll
         Exit Sub
     End If
-    If EquationLabNativeCommand("MathTypeBridgeInsertionActive") <> 0 Then SchedulePoll: Exit Sub
+    If EquationLabNativeCommand("MathTypeBridgeInsertionActive") <> 0 Then
+        If mChunkInsertion And mChunkToken > 0 Then
+            ELContinueDocumentChunks
+        Else
+            Dim insertionDocumentToken As Long
+            insertionDocumentToken = EquationLabNativeCommand("MathTypeBridgeTakeInsertionDocumentRequest")
+            If insertionDocumentToken > 0 Then ELBeginInsertionDocumentChunks insertionDocumentToken
+        End If
+        SchedulePoll
+        Exit Sub
+    End If
     If mInsertionToken > 0 Then
         ClearInsertion
         If EquationLabNativeCommand("MathTypeBridgeInsertionError") <> 0 Then MsgBox "Equation Lab could not complete this insertion. The document was not changed.", vbExclamation, "Equation Lab"
@@ -1271,10 +1335,17 @@ PrepareInsertionRequest:
     If Not (insertionPoint.Document Is Doc) Or insertionPoint.StoryType <> wdMainTextStory Then GoTo Failed
     If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
     If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Cancelled
+    Set mRequestedInsertionAfter = Nothing
+    If fields(3) = "1" Then
+        Set mRequestedInsertionAfter = shape.Range.Duplicate
+        mRequestedInsertionIndex = targetIndex
+    End If
     EquationLabRibbon.ELStartEquationInsertion insertionKind, insertionPoint, needsParagraph
+    Set mRequestedInsertionAfter = Nothing
     ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestOpened"
     Exit Sub
 Cancelled:
+    Set mRequestedInsertionAfter = Nothing
     ' A status recheck retired this request before activation. Do not open it.
     On Error Resume Next
     If Len(Dir$(path)) > 0 Then Kill path
@@ -1283,6 +1354,7 @@ Cancelled:
     Exit Sub
 Failed:
     On Error Resume Next
+    Set mRequestedInsertionAfter = Nothing
     If fileNumber <> 0 Then Close #fileNumber
     Debug.Print "Equation Lab document request failed: "; Err.Number
     ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestFailed"
@@ -1393,15 +1465,57 @@ Private Sub ELClearDocumentChunks()
     Set mChunkEquations = Nothing
     mChunkToken = 0
     mChunkText = ""
+    mChunkInsertion = False
     mCapturing = False
 End Sub
+
+Private Sub ELBeginInsertionDocumentChunks(ByVal token As Long)
+    On Error GoTo Failed
+    If token <> mInsertionToken Or token <= 0 Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeInsertionDocumentRequestToken") <> token Then Exit Sub
+    If Not ELIsDocumentOpen(mInsertionDocument) Then GoTo Failed
+    If KnownDocumentIdentity(mInsertionDocument) <> mInsertionIdentity Then GoTo Failed
+    If mInsertionDocument.Content.End <> mInsertionEnd Or mInsertionDocument.Content.Text <> mInsertionText Then GoTo Failed
+    Dim equations As Collection, shape As InlineShape, result As Long
+    Set equations = New Collection
+    For Each shape In mInsertionDocument.InlineShapes
+        If Supported(shape) Then equations.Add shape
+    Next
+    If equations.Count <> mInsertionCount Then GoTo Failed
+    Set mChunkDocument = mInsertionDocument
+    Set mChunkEquations = equations
+    mChunkInsertion = True
+    mChunkToken = token
+    mChunkPart = 0
+    mChunkStart = mInsertionDocument.Content.Start
+    mChunkEnd = mInsertionEnd
+    mChunkShapeCount = mInsertionDocument.InlineShapes.Count
+    mChunkGeneration = EquationLabNativeCommand("MathTypeBridgeEditGeneration")
+    mChunkIdentity = mInsertionIdentity
+    mChunkSnapshot = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
+    mChunkSelected = 0
+    mChunkText = mInsertionText
+    ELContinueDocumentChunks
+    Exit Sub
+Failed:
+    result = EquationLabNativeCommand("MathTypeBridgeFailInsertionDocumentCapture")
+    ELClearDocumentChunks
+End Sub
+
+Private Function ELDocumentChunkRequestToken() As Long
+    If mChunkInsertion Then
+        ELDocumentChunkRequestToken = EquationLabNativeCommand("MathTypeBridgeInsertionDocumentRequestToken")
+    Else
+        ELDocumentChunkRequestToken = EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken")
+    End If
+End Function
 
 Private Sub ELContinueDocumentChunks()
     On Error GoTo Failed
     Dim token As Long, result As Long, last As Long, span As Range, directory As String, xml As String, header As String, final As Long
     token = mChunkToken
     If token <= 0 Then Exit Sub
-    If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> token Then ELClearDocumentChunks: Exit Sub
+    If ELDocumentChunkRequestToken() <> token Then ELClearDocumentChunks: Exit Sub
     If Not ELIsDocumentOpen(mChunkDocument) Then GoTo Failed
     If KnownDocumentIdentity(mChunkDocument) <> mChunkIdentity Then GoTo Failed
     If mChunkDocument.Content.End <> mChunkEnd Or mChunkDocument.InlineShapes.Count <> mChunkShapeCount Then GoTo Failed
@@ -1425,6 +1539,7 @@ Private Sub ELContinueDocumentChunks()
     final = 0
     If last = mChunkEnd Then final = 1
     header = "ELPART1" & vbLf & CStr(token) & vbLf & CStr(mChunkIdentity) & vbLf & CStr(mChunkSnapshot) & vbLf & CStr(mChunkSelected) & vbLf & CStr(mChunkEquations.Count) & vbLf & CStr(mChunkPart) & vbLf & CStr(final) & vbLf & Replace(Replace(mChunkDocument.Name, vbCr, " "), vbLf, " ") & vbLf
+    If mChunkInsertion Then header = "ELIPART1" & Mid$(header, Len("ELPART1") + 1)
     directory = Options.DefaultFilePath(wdStartupPath)
     ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", header & xml
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
@@ -1434,7 +1549,11 @@ Private Sub ELContinueDocumentChunks()
         mChunkStart = last
         mChunkPart = mChunkPart + 1
         mCapturing = False
-        result = EquationLabNativeCommand("MathTypeBridgeQueueDocumentChunk")
+        If mChunkInsertion Then
+            result = EquationLabNativeCommand("MathTypeBridgeQueueInsertionDocumentChunk")
+        Else
+            result = EquationLabNativeCommand("MathTypeBridgeQueueDocumentChunk")
+        End If
         If result <> 0 Then GoTo Failed
         Exit Sub
     End If
@@ -1448,12 +1567,18 @@ Private Sub ELContinueDocumentChunks()
     ' This segmented snapshot is intentionally not reusable by an ordinary
     ' selection event; every future activation still gets its own fresh nonce.
     mSnapshotReady = False
-    result = EquationLabNativeCommand("MathTypeBridgeFinishDocumentCaptureRequest")
+    If Not mChunkInsertion Then result = EquationLabNativeCommand("MathTypeBridgeFinishDocumentCaptureRequest")
     ELClearDocumentChunks
     Exit Sub
 Failed:
     If token > 0 Then
-        If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") = token Then result = EquationLabNativeCommand("MathTypeBridgeFailDocumentCaptureRequest")
+        If ELDocumentChunkRequestToken() = token Then
+            If mChunkInsertion Then
+                result = EquationLabNativeCommand("MathTypeBridgeFailInsertionDocumentCapture")
+            Else
+                result = EquationLabNativeCommand("MathTypeBridgeFailDocumentCaptureRequest")
+            End If
+        End If
     End If
     ELClearDocumentChunks
 End Sub

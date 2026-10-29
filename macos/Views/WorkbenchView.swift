@@ -78,6 +78,7 @@ struct WorkbenchView: View {
         .sheet(isPresented: $bridge.showCompatibility) { CompatibilitySheet(bridge: bridge) }
         .sheet(isPresented: $updater.showPanel) { AppUpdateSheet(updater: updater, bridge: bridge) }
         .sheet(isPresented: $bridge.showOfficePlugins) { OfficePluginSheet(bridge: bridge) }
+        .sheet(isPresented: $bridge.showDocumentTools) { DocumentToolsSheet(bridge: bridge) }
         .sheet(isPresented: $bridge.showMatrixBuilder) { MatrixBuilder(bridge: bridge) }
         .alert(bridge.t("Word 插件安装"), isPresented: Binding(get: { !bridge.showOfficePlugins && !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {
             Button(bridge.t("好"), role: .cancel) { bridge.installationMessage = "" }

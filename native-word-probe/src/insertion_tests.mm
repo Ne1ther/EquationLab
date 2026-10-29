@@ -5,14 +5,17 @@
 
 namespace { NSString* openingRequestId=nil; }
 namespace bridge_probe { NSString* openingWordDocumentRequestId(){return openingRequestId;} }
+void EquationLabDiscardDocumentParts(){}
 
 namespace {
 NSMutableArray<NSDictionary*>* calls;
 NSMutableArray<NSDictionary*>* delayedAckReplies;
 BOOL delayOpen=NO;BOOL delayPoll=NO;BOOL failLaunch=NO;BOOL malformed=NO;BOOL delayAcks=NO;BOOL failEveryAck=NO;
+BOOL editingPoll=NO;BOOL loadDocument=NO;BOOL delayEnrich=NO;
 NSUInteger failedAcksRemaining=0;
 void(^openReply)(NSDictionary*,NSError*);
 void(^pollReply)(NSDictionary*,NSError*);
+void(^enrichReply)(NSDictionary*,NSError*);
 NSString* statusState;
 NSString* documentRequestState=@"opened";
 NSString* completedMode=@"inline";
@@ -24,8 +27,10 @@ NSUInteger count(NSString* operation){NSUInteger result=0;for(NSDictionary* call
 NSDictionary* callFor(NSString* operation,NSUInteger index){for(NSDictionary* call in calls)if([call[@"operation"] isEqual:operation]){if(index--==0)return call[@"body"];}return nil;}
 BOOL waitUntil(BOOL(^predicate)(void),NSTimeInterval timeout){NSDate* deadline=[NSDate dateWithTimeIntervalSinceNow:timeout];while(!predicate()&&deadline.timeIntervalSinceNow>0)[[NSRunLoop mainRunLoop] runMode:NSDefaultRunLoopMode beforeDate:[NSDate dateWithTimeIntervalSinceNow:0.01]];return predicate();}
 void replyDelayedAck(NSUInteger index,NSDictionary* result,NSError* error){NSDictionary* item=delayedAckReplies[index];[delayedAckReplies removeObjectAtIndex:index];void(^reply)(NSDictionary*,NSError*)=item[@"reply"];reply(result,error);}
-void reset(){if(insertion)EquationLabCancelWordInsertion();calls=[NSMutableArray array];delayedAckReplies=[NSMutableArray array];delayOpen=NO;delayPoll=NO;failLaunch=NO;malformed=NO;delayAcks=NO;failEveryAck=NO;failedAcksRemaining=0;openReply=nil;pollReply=nil;statusState=nil;completedNumberFormat=nil;insertionError=0;acknowledgementError=0;}
+void reset(){if(insertion)EquationLabCancelWordInsertion();calls=[NSMutableArray array];delayedAckReplies=[NSMutableArray array];delayOpen=NO;delayPoll=NO;failLaunch=NO;malformed=NO;delayAcks=NO;failEveryAck=NO;editingPoll=NO;loadDocument=NO;delayEnrich=NO;failedAcksRemaining=0;openReply=nil;pollReply=nil;enrichReply=nil;statusState=nil;completedNumberFormat=nil;insertionError=0;acknowledgementError=0;}
 std::int32_t begin(std::int32_t token=7){return EquationLabBeginWordInsertion([NSURL fileURLWithPath:@"/tmp"],@{@"identity":@"doc:1",@"snapshot":@(token),@"index":@(-1),@"name":@"Test",@"ooxml":@"<live/>"},@{@"mode":@"inline"},token);}
+std::int32_t beginPartial(){return EquationLabBeginWordInsertion([NSURL fileURLWithPath:@"/tmp"],@{@"identity":@"doc:1",@"snapshot":@7,@"index":@(-1),@"name":@"Test",@"ooxml":@"<anchor/>",@"scope":@"insertion",@"count":@30,@"insertionAfter":@{@"index":@25,@"nativeSha256":@"anchor-digest"}},@{@"mode":@"inline"},7);}
+NSDictionary* enriched(){return @{@"captureToken":@7,@"identity":@"doc:1",@"snapshot":@8,@"index":@(-1),@"count":@30,@"name":@"Test",@"ooxml":@"<full/>"};}
 NSError* ackFailure(){return [NSError errorWithDomain:@"test" code:28 userInfo:nil];}
 }
 
@@ -34,8 +39,10 @@ id EquationLabTransportRequest(NSString* path,NSDictionary* body,void(^reply)(NS
     if([path isEqual:@"/api/native-insert-open"]){if(delayOpen)openReply=[reply copy];else reply(@{@"ticket":ticket},nil);}
     else if([path isEqual:@"/api/native-poll"]){
         if(insertion&&insertion.ticket&&delayPoll)pollReply=[reply copy];
+        else if(insertion&&insertion.ticket&&editingPoll)reply(@{@"state":@"editing",@"loadDocument":@(loadDocument)},nil);
         else if(insertion&&insertion.ticket){NSMutableDictionary* value=[@{@"state":@"complete",@"insertionMode":completedMode,@"docx":[(malformed?[@"wrong" dataUsingEncoding:NSUTF8StringEncoding]:[NSData dataWithBytes:"PK\x03\x04test" length:8]) base64EncodedStringWithOptions:0]} mutableCopy];if(completedNumberFormat)value[@"insertionNumberFormat"]=completedNumberFormat;reply(value,nil);}
         else reply(@{@"state":@"cancelled"},nil);
+    }else if([path isEqual:@"/api/native-enrich"]){if(delayEnrich)enrichReply=[reply copy];else reply(@{@"ok":@YES},nil);
     }else if([path isEqual:@"/api/native-document-status"]){reply(@{@"state":documentRequestState},nil);
     }else if([path isEqual:@"/api/native-status"]){if(statusState)reply(@{@"state":statusState},nil);else reply(nil,ackFailure());
     }else if([path isEqual:@"/api/native-ack"]){
@@ -130,5 +137,29 @@ int main(){@autoreleasepool{try{
     check([uncertainBody isEqual:callFor(@"/api/native-ack",1)],"uncertain ACK retry changed its one-shot outcome");
     EquationLabFinishWordInsertion(true);EquationLabFinishWordInsertion(false);check(count(@"/api/native-ack")==2,"a later finish downgraded the immutable uncertain outcome");
     check(EquationLabWordInsertionError()==7,"accepted uncertain outcome was reported as confirmed success");
+    reset();openingRequestId=nil;editingPoll=YES;
+    check(beginPartial()==0&&EquationLabTakeInsertionDocumentRequest()==0,"insertion captured the full list before editor request");
+    loadDocument=YES;[insertion poll];
+    check(EquationLabTakeInsertionDocumentRequest()==7&&EquationLabTakeInsertionDocumentRequest()==0,"insertion document request was not one-shot");
+    check(EquationLabInsertionDocumentRequestToken()==7,"claimed enrichment lost its token");
+    for(NSDictionary* patch in @[@{@"identity":@"other:1"},@{@"count":@29},@{@"snapshot":@7},@{@"index":@0},@{@"captureToken":@8}]){
+        NSMutableDictionary* invalid=[enriched() mutableCopy];[invalid addEntriesFromDictionary:patch];
+        check(EquationLabFinishInsertionDocumentCapture(invalid)<0,"unbound insertion enrichment was accepted");
+    }
+    check(EquationLabFinishInsertionDocumentCapture(enriched())==0,"bound insertion enrichment failed");
+    NSDictionary* enrichment=last(@"/api/native-enrich");
+    check([enrichment[@"initialSnapshot"] intValue]==7&&[enrichment[@"document"][@"insertionAfter"][@"index"] intValue]==25&&!enrichment[@"document"][@"captureToken"],"enrichment lost its initial snapshot/anchor or leaked internal token");
+    check(EquationLabInsertionDocumentRequestToken()==0&&EquationLabFinishInsertionDocumentCapture(enriched())<0,"enrichment was replayed");
+    check(EquationLabWordInsertionActive(),"loading the sidebar ended insertion");
+    reset();editingPoll=YES;loadDocument=YES;beginPartial();check(EquationLabTakeInsertionDocumentRequest()==7,"failure fixture missing claim");
+    EquationLabFailInsertionDocumentCapture();
+    check([last(@"/api/native-enrich")[@"failed"] boolValue]&&EquationLabWordInsertionActive()&&EquationLabInsertionDocumentRequestToken()==0,"list failure destroyed the editing draft or kept capture pending");
+    reset();editingPoll=YES;loadDocument=YES;beginPartial();check(EquationLabTakeInsertionDocumentRequest()==7,"deadline fixture missing claim");
+    insertion.enrichmentDeadline=[NSDate dateWithTimeIntervalSinceNow:-1];
+    check(EquationLabInsertionDocumentRequestToken()==0&&[last(@"/api/native-enrich")[@"failed"] boolValue],"insertion capture deadline was unbounded");
+    reset();editingPoll=YES;loadDocument=YES;delayEnrich=YES;beginPartial();EquationLabTakeInsertionDocumentRequest();
+    check(EquationLabFinishInsertionDocumentCapture(enriched())==0&&enrichReply!=nil,"late enrichment fixture failed");
+    EquationLabCancelWordInsertion();const auto enrichCount=count(@"/api/native-enrich");enrichReply(nil,ackFailure());
+    check(!EquationLabWordInsertionActive()&&EquationLabInsertionDocumentRequestToken()==0&&count(@"/api/native-enrich")==enrichCount,"late list callback resurrected cancelled insertion");
     std::cout<<"{\"blank_open_without_placeholder\":true,\"token_bound_one_shot_fragment\":true,\"second_insertion_rejected\":true,\"late_open_retired_after_cancel\":true,\"launch_failure_cleanup\":true,\"malformed_fragment_rejected\":true,\"close_before_apply_fails_ack\":true,\"lost_ack_retry_success\":true,\"duplicate_finish_cancel_idempotent\":true,\"saved_ack_not_downgraded\":true,\"late_callback_new_insertion_isolated\":true,\"cancel_race_delivered_receipt_rejected\":true,\"all_five_ACKs_lost_reported\":true,\"uncertain_outcome_is_immutable\":true,\"uncertain_ACK_retries_preserve_body\":true,\"real_word_or_gui_used\":false}\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}}

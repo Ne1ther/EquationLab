@@ -32,6 +32,10 @@ struct OfficePluginSheet: View {
                         Button(bridge.t("检查连接")) { bridge.verifyWordPlugin(showResult: true) }
                         Button(bridge.t("移除…")) { bridge.uninstallWordPlugin() }
                     }
+                    Button(bridge.language.usesEnglish ? "Copy connection diagnostics" : "复制连接诊断") { bridge.copyWordConnectionDiagnostics() }
+                        .disabled(bridge.copyingWordDiagnostics)
+                    Text(bridge.language.usesEnglish ? "Includes versions and connection states only. No document names, content or paths are copied or uploaded." : "仅复制版本和连接状态，不包含文档名、内容或路径，也不会上传。")
+                        .font(.caption).foregroundStyle(.secondary)
                     Button(bridge.t("选择 Word 应用…")) { bridge.chooseWordApplication() }
                         .controlSize(.small)
                     if bridge.wordOfficeAccessRequired {

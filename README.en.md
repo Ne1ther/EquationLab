@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.9 (build94)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.9/Equation-Lab-0.6.9.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.10 (build98)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.10/Equation-Lab-0.6.10.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -13,24 +13,23 @@ Save your documents, quit Word and Equation Lab, then open the installer. Reopen
 
 ## What it does
 
-- Browse and search document equations, edit them, and save back to Word.
+- Choose a Word document, then browse, search, insert, and edit its MathType equations.
 - Enter templates or LaTeX, including multiple lines, cases, and matrices; adjust fonts, sizes, and spacing.
-- Use equation numbering, cross-references, format presets, and custom previews.
-- Export PDF, SVG, or PNG, and copy LaTeX.
+- Set equation numbers, chapters, and sections, and insert cross-references from a searchable list.
+- Check document numbering and references, preview batch style and numbering changes, and save a Word copy.
+- Store a document style preset for future equations, export PDF, SVG, or PNG, and copy LaTeX.
 
-You can now insert into Word directly from the app. Choose a document at the top of the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. While editing an existing equation, the new one goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor and carries its content and formatting into the insertion session. Finish and insert waits for Word’s confirmation; cancelling leaves no empty object.
+Choose a document at the top of the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. While editing an existing equation, the new one goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor and carries its content and formatting into the insertion session. After you choose Finish and insert, the app shows the save result returned by Word.
 
-The menu on the left lists open Word documents and distinguishes documents by identity, even when names match. Switching protects changed drafts, and background metadata updates do not bring the editor to the front. Refreshing the document menu updates document details; refreshing the formula area rereads equations.
+The sidebar menu lists open Word documents and distinguishes files with the same name. Switching prompts you to handle unsaved drafts. Long documents open the current equation first and load the rest in batches. Thumbnails appear and update individually as you browse, and the current equation scrolls into view.
 
-The app and Word share numbering state, including editable chapter and section values. Change the format under Document → Word Layout, then choose Update Equation to apply it to the selected equation and use it for later numbered insertions. A new equation adopts the format when you choose Done and Insert. Word’s Update Numbers recalculates existing sequence numbers and cross-references; it does not replace every old number format in the document.
+Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 
-Long documents still open the selected equation first and fill in the list in batches. Earlier checks covered 30 demo equations, 11 complex inputs, and editing, point sizes, save/reopen, deletion, renumbering, and references in a local 120-equation document. This round adds all four app insertion modes, three-document switching, consecutive numbering, and draft retention after the source closes. The sidebar scrolls the selected equation into view when opening from Word. Some unmapped legacy font characters still show a square and a warning, with original data retained. Full compatibility with every MathType equation is still unfinished.
+The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving. Open the new file in Word and update its numbering and references to continue editing. [Read the document tools guide](docs/document-tools.md)
 
-The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads.
+The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads. For connection issues, check the status and copy connection diagnostics from the **Office plugin** panel.
 
-![Equation Lab workbench](docs/preview/workbench-0.6.5.png)
-
-This screenshot is from 0.6.5; see the text above for the updated document selector and insertion entry.
+![Equation Lab workbench](docs/preview/workbench-0.6.10.png)
 
 ## Try a document
 
@@ -40,7 +39,7 @@ Three sections, ten equations each, with 12 pt SimSun Chinese text. Includes rad
 
 ![30-equation demo](docs/preview/word-30-formulas.png)
 
-[More screenshots](docs/preview/README.md) · [Fonts and spacing](docs/features.md)
+[More screenshots](docs/preview/README.md) · [Equations, fonts, and spacing](docs/features.md)
 
 ## Build it yourself
 

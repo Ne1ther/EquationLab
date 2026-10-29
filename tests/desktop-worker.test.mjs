@@ -19,6 +19,20 @@ test('Editor control requests bypass rendering warmup and queued previews',async
  assert.equal(replies.length,9);
 });
 
+test('only explicitly disposable previews coalesce; preference validation must actually run',async()=>{
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
+ let output='',errors='';child.stdout.on('data',s=>output+=s);child.stderr.on('data',s=>errors+=s);
+ const end=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+ const requests=[
+  {id:'default-check',action:'validate',coalescePreview:true,payload:{latex:'\\unsupportedcommand'}},
+  ...Array.from({length:8},(_,i)=>({id:'preview-'+i,action:'validate',coalescePreview:true,payload:{previewOnly:true,latex:'x^'+(i+1)}}))
+ ];
+ child.stdin.end(requests.map(value=>JSON.stringify(value)).join('\n')+'\n');assert.equal(await end,0,errors);
+ const replies=output.trim().split('\n').map(JSON.parse),defaults=replies.find(value=>value.id==='default-check');
+ assert.equal(defaults.ok,false);assert.equal(defaults.cancelled,undefined);assert.ok(defaults.error);
+ assert.equal(replies.find(value=>value.id==='preview-7').ok,true);assert.ok(replies.some(value=>value.superseded));assert.equal(replies.length,9);
+});
+
 test('Persistent worker frames split requests, recovers from invalid input, drains at EOF and matches direct validation',async()=>{
  const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
  let out='',errors='';child.stdout.on('data',s=>out+=s);child.stderr.on('data',s=>errors+=s);

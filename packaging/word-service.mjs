@@ -55,6 +55,12 @@ export async function manageWordService({action='install',app,home=homedir(),uid
  }
  await mkdir(directory,{recursive:true,mode:0o700});await mkdir(join(support,'logs'),{recursive:true,mode:0o700});
  const temporary=target+`.${process.pid}.tmp`;
+ const recordTemporary=record+`.${process.pid}.tmp`;
+ const recordSuccessfulInstall=async()=>{
+  const next={schema:'equationlab.word-service-install.v1',label:SERVICE_LABEL,app,plistSha256:digest(plist),installedAt:new Date().toISOString()};
+  try{await writeFile(recordTemporary,JSON.stringify(next,null,2)+'\n',{mode:0o600,flag:'wx'});await rename(recordTemporary,record);}
+  finally{await unlink(recordTemporary).catch(()=>{});}
+ };
  const bootstrap=async()=>{for(let attempt=0;;attempt++){try{return execute('/bin/launchctl',['bootstrap',domain,target]);}catch(error){if(attempt>=15||!String(error.stderr??error.message).includes('Bootstrap failed: 5:'))throw error;await delay(200);}}};
  // If the exact hash-owned configuration is already installed, keep the
  // launchd job registered. A deleted and restored app can leave launchd with
@@ -65,6 +71,7 @@ export async function manageWordService({action='install',app,home=homedir(),uid
    if(wasLoaded)execute('/bin/launchctl',['kickstart','-k',service]);
    else await bootstrap();
    if(!loaded())throw Error('macOS 未启动 Word 后台服务');
+   await recordSuccessfulInstall();
    return {installed:true,label:SERVICE_LABEL,app};
   }catch(error){throw Error('Word 后台服务安装失败：'+error.message);}
  }
@@ -73,8 +80,7 @@ export async function manageWordService({action='install',app,home=homedir(),uid
   await writeFile(temporary,plist,{mode:0o600,flag:'wx'});await rename(temporary,target);
   await bootstrap();
   if(!loaded())throw Error('macOS 未启动 Word 后台服务');
-  const next={schema:'equationlab.word-service-install.v1',label:SERVICE_LABEL,app,plistSha256:digest(plist),installedAt:new Date().toISOString()};
-  await writeFile(record,JSON.stringify(next,null,2)+'\n',{mode:0o600});
+  await recordSuccessfulInstall();
   return {installed:true,label:SERVICE_LABEL,app};
  }catch(error){
   try{if(loaded())execute('/bin/launchctl',['bootout',service]);}catch{}

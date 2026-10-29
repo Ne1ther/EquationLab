@@ -180,6 +180,7 @@ extension DesktopBridge {
         lastWordPluginVerification = (Date(), wordPID)
         restoreWordOfficeAccess()
         guard refreshWordApplication() else {
+            wordPluginDiagnosticInput = ["installation": ["phase": "failed", "error": ["code": "WORD_NOT_FOUND"]]]
             nativeWordStatus = "没有找到桌面版 Microsoft Word。请安装 Word，或选择它的实际位置。"
             if showResult { installationMessage = nativeWordStatus }
             return
@@ -203,10 +204,12 @@ extension DesktopBridge {
     private func performNativeInstallation(_ request: [String: Any], installAfterPlan: Bool = false, showResult: Bool = true) {
         guard let node = bundledNodeURL(), let installer = nativeInstallerURL,
               FileManager.default.fileExists(atPath: installer.path) else {
+            wordPluginDiagnosticInput = ["installation": ["phase": "failed", "error": ["code": "INSTALLER_UNAVAILABLE"]]]
             if showResult { installationMessage = "此构建未包含 Word 插件安装器。" }
             return
         }
         installationRunning = true
+        let started = DispatchTime.now().uptimeNanoseconds
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var result: [String: Any]
             do {
@@ -227,6 +230,7 @@ extension DesktopBridge {
                 }
             } catch { result = ["ok": false, "error": error.localizedDescription] }
             let completed = result
+            let elapsedMs = Double(DispatchTime.now().uptimeNanoseconds - started) / 1_000_000
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.installationRunning = false
@@ -239,6 +243,11 @@ extension DesktopBridge {
                 let expected = expectedVersion.flatMap { try? Data(contentsOf: $0) }
                     .flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }?["nativeVersion"] as? String
                 let installedVersion = (completed["installedFiles"] as? [[String: Any]])?.first?["version"] as? String
+                // Kept only in this process. The export helper applies a fixed
+                // whitelist; error messages, paths and receipt IDs never leave it.
+                self.wordPluginDiagnosticInput["installation"] = completed
+                self.wordPluginDiagnosticInput["installationElapsedMs"] = elapsedMs
+                if let expected { self.wordPluginDiagnosticInput["expectedHelperVersion"] = expected }
                 let message: String
                 if !success {
                     message = self.wordOfficeAccessRequired
@@ -262,6 +271,80 @@ extension DesktopBridge {
                 if showResult { self.installationMessage = message }
             }
         }
+    }
+
+    // Called only by observed bridge events; never retain ticket, path or text.
+    func recordWordConnectionOperation(kind: String, stage: String, state: String, elapsedMs: Double? = nil, editorAccepted: Bool? = nil, receiptObserved: Bool = false) {
+        let kinds = ["open", "edit", "insert", "save", "cancel"]
+        let stages = ["capture", "service-request", "editor-launch", "editor-accepted", "editing", "save-request", "word-delivery", "word-confirmation", "finished"]
+        let states = ["editing", "queued", "delivered", "unconfirmed", "committed", "failed", "cancelled", "expired", "not-observed"]
+        guard kinds.contains(kind), stages.contains(stage), states.contains(state) else { return }
+        var value: [String: Any] = ["kind": kind, "stage": stage, "state": state, "receiptObserved": receiptObserved]
+        if let elapsedMs, elapsedMs.isFinite, elapsedMs >= 0, elapsedMs <= 86_400_000 { value["elapsedMs"] = elapsedMs }
+        if let editorAccepted { value["editorAccepted"] = editorAccepted }
+        wordPluginDiagnosticInput["operation"] = value
+    }
+
+    func copyWordConnectionDiagnostics() {
+        guard !copyingWordDiagnostics, !installationRunning else { return }
+        guard let node = bundledNodeURL(), let root = Bundle.main.resourceURL?.appendingPathComponent("engine") else {
+            installationMessage = language.usesEnglish ? "The diagnostic helper is not available in this build." : "此构建未包含连接诊断工具。"
+            return
+        }
+        var payload = wordPluginDiagnosticInput
+        payload["app"] = ["version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "",
+                          "build": Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? ""]
+        payload["word"] = ["installed": !wordApplicationPath.isEmpty, "version": wordApplicationVersion,
+                           "running": !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty]
+        if payload["expectedHelperVersion"] == nil,
+           let manifest = nativeArtifactURL?.appendingPathComponent("artifact-manifest.json"),
+           let data = try? Data(contentsOf: manifest),
+           let info = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let version = info["nativeVersion"] as? String { payload["expectedHelperVersion"] = version }
+        if let wordTicket { payload["ticket"] = wordTicket }
+        if state.wordOutcomeUnknown || payload["operation"] == nil {
+            payload["operation"] = ["kind": wordSessionIsInsertion ? "insert" : wordSessionActive ? "edit" : wordDocumentRequestPending ? "open" : "not-observed",
+                                "state": state.wordOutcomeUnknown ? "unconfirmed" : wordSessionActive ? "editing" : "not-observed",
+                                "stage": state.wordOutcomeUnknown ? "word-confirmation" : wordSessionActive ? "editing" : wordDocumentRequestPending ? "capture" : "not-observed"]
+        }
+        let request = payload
+        copyingWordDiagnostics = true
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            let report: String?
+            do { report = try Self.runConnectionDiagnostic(node: node, root: root, request: request) }
+            catch { report = nil }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.copyingWordDiagnostics = false
+                guard let report else {
+                    self.installationMessage = self.language.usesEnglish ? "Could not prepare the diagnostic report. Nothing was copied." : "未能生成诊断信息，没有复制任何内容。"
+                    return
+                }
+                NSPasteboard.general.clearContents()
+                let copied = NSPasteboard.general.setString(report, forType: .string)
+                self.installationMessage = copied
+                    ? (self.language.usesEnglish ? "Diagnostic report copied. It contains versions and connection states, without document names, content, paths or session identifiers. Nothing was uploaded." : "诊断信息已复制，仅包含版本和连接状态，不含文档名、内容、路径或会话标识；没有上传。")
+                    : (self.language.usesEnglish ? "Could not write the diagnostic report to the clipboard." : "无法将诊断信息写入剪贴板。")
+            }
+        }
+    }
+
+    nonisolated private static func runConnectionDiagnostic(node: URL, root: URL, request: [String: Any]) throws -> String {
+        let process = Process(), input = Pipe(), output = Pipe()
+        process.executableURL = node
+        process.arguments = [root.appendingPathComponent("src/connection-diagnostics.mjs").path]
+        process.standardInput = input; process.standardOutput = output; process.standardError = FileHandle.nullDevice
+        try process.run()
+        try input.fileHandleForWriting.write(contentsOf: JSONSerialization.data(withJSONObject: request))
+        try input.fileHandleForWriting.close()
+        let data = output.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0, data.count <= 32_768,
+              let report = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              report["schema"] as? String == "equationlab.connection-diagnostics.v1" else {
+            throw NSError(domain: "EquationLab.ConnectionDiagnostic", code: 1)
+        }
+        return String(data: try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8) ?? ""
     }
 
     nonisolated private static func runNativeInstaller(node: URL, installer: URL, request: [String: Any]) throws -> [String: Any] {

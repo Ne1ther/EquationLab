@@ -27,7 +27,7 @@ const roots = [
   'scripts/build/build-rendering-resources.mjs', 'scripts/build/build-word-demo.mjs',
   'scripts/build/check-catalog-library.mjs', 'scripts/build/check-catalog-library.swift',
   'docs/install.md', 'docs/features.md', 'docs/development.md', 'docs/releases.md', 'docs/updates.md', 'docs/ocr.md', 'docs/file-guide.md',
-  'docs/source-publication.md', 'docs/feature-parity.md', 'docs/new-formula-defaults.md', 'docs/examples', 'docs/preview',
+  'docs/source-publication.md', 'docs/feature-parity.md', 'docs/document-tools.md', 'docs/new-formula-defaults.md', 'docs/examples', 'docs/preview',
   'design/office-product-icons',
   'design/workbench-concepts/assets/equationlab-header-mark.svg',
   'design/equation-lab-icons/v5/svg/e2-lab-orange-paper.svg',

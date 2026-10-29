@@ -11,13 +11,14 @@
 | Word 选区、双击与原位置回存 | `native-word-probe/automatic-loader/`、`native-word-probe/src/`；`tests/word-ribbon.test.mjs` 及原生测试 |
 | 窗口恢复与前台交接 | `macos/Services/DesktopBridge.swift`、`WordFocusHandoff.swift`；`tests/updates/WordSessionLifecycleTests.swift` |
 | 编号和交叉引用 | `src/layout.mjs`、`src/word-numbering.mjs`、Word Ribbon 命令 |
+| 文档审计、引用搜索与批量副本 | `src/document-audit.mjs`、`src/document-typography.mjs`、`src/document-numbering-plan.mjs`；相关文档工具测试 |
 | 自动更新 | `macos/Services/AppUpdater.swift`、`updater/`；`tests/updates/AppUpdaterTests.swift` |
 | 安装与修复 | `packaging/word-native-installer/`；安装器测试及真实 Word 加载记录 |
 
 发布前除代码测试外，还要在 Word 中检查插入、列表切换、双击、保存、重开、编号和引用。程序化读回用于核对原生公式是否改变，界面测试用于核对实际显示和前台切换。
 
-MathType/Windows 往返、打印和特定旧对象的结论按实际验证样本记录。公开的 [30 公式演示](examples/equation-lab-30-formulas.docx) 可用于重复检查；本机详细记录保留在 `evidence/`。
+公开的 [30 公式演示](examples/equation-lab-30-formulas.docx) 提供编号、引用和多种公式结构，可用于开发回归。
 
 ---
 
-The table maps current features to their code and tests. Word insertion, list switching, double-click, saving, reopening, numbering, and references also need host checks. Native readback and GUI checks answer different questions; compatibility results follow the samples actually tested.
+The table maps current features to their code and tests. Word insertion, list switching, double-click, saving, reopening, numbering, and references also need host checks. Use the public thirty-equation demo for repeatable numbering, reference, and layout checks.

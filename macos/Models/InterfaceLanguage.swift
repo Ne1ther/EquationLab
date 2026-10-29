@@ -44,6 +44,7 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
         ("工作台状态读取失败：", "Could not read editor state: ")
     ]
     private static let englishStrings: [String: String] = [
+        "文档检查与批量处理":"Document checks and batch tools",
         "切换到":"Switch to ", "切换 Word 文档":"Switch Word document",
         "刷新当前 Word 文档":"Refresh current Word document", "刷新 Word 文档列表":"Refresh Word document list",
         "没有打开的 Word 文档":"No open Word documents", "尚未连接 Word":"Word is not connected", "只读":"Read-only", "Word 文档":"Word document",

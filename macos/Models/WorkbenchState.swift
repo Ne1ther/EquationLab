@@ -20,6 +20,14 @@ struct SidebarFormula: Identifiable, Decodable {
     }
 }
 
+private struct SidebarDelta: Decodable {
+    let generation: String
+    let baseRevision: Int
+    let revision: Int
+    let reset: [SidebarFormula]?
+    let upserts: [SidebarFormula]?
+}
+
 private final class FormulaImageCache {
     static let shared = FormulaImageCache()
     private let cache: NSCache<NSString, NSImage> = { let result = NSCache<NSString, NSImage>(); result.totalCostLimit = 48 * 1024 * 1024; result.countLimit = 128; return result }()
@@ -105,6 +113,8 @@ struct WorkbenchState: Decodable {
     var selected: Int? = nil
     var wordInsertionEquation: Int? = nil
     var objects: [SidebarFormula] = []
+    private var sidebarGeneration = ""
+    private var sidebarRevision = 0
     var favorites: [SidebarFormula] = []
     var categories: [String] = []
     var templates: [FormulaTemplate] = []
@@ -159,6 +169,22 @@ struct WorkbenchState: Decodable {
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
         if payload["wordInsertionEquation"] is NSNull { wordInsertionEquation = nil } else if let v = try value("wordInsertionEquation", Int.self) { wordInsertionEquation = v }
         if let v = try value("objects", [SidebarFormula].self) { objects = v }
+        if let change = try value("objectsDelta", SidebarDelta.self) {
+            if let reset = change.reset {
+                if change.generation != sidebarGeneration || change.revision > sidebarRevision {
+                    guard change.baseRevision == 0, change.revision > 0,
+                          Set(reset.map(\.id)).count == reset.count else { throw CocoaError(.coderInvalidValue) }
+                    objects = reset; sidebarGeneration = change.generation; sidebarRevision = change.revision
+                }
+            } else if change.generation == sidebarGeneration && change.revision > sidebarRevision {
+                guard change.baseRevision == sidebarRevision, change.revision == sidebarRevision + 1 else { throw CocoaError(.coderInvalidValue) }
+                for row in change.upserts ?? [] {
+                    guard let index = objects.firstIndex(where: { $0.id == row.id }) else { throw CocoaError(.coderInvalidValue) }
+                    objects[index] = row
+                }
+                sidebarRevision = change.revision
+            }
+        }
         if let v = try value("wordDocumentLoading", Bool.self) { wordDocumentLoading = v }
         if let v = try value("wordDocumentLoadFailed", Bool.self) { wordDocumentLoadFailed = v }
         if let v = try value("wordDocumentTotal", Int.self) { wordDocumentTotal = v }

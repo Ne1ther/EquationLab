@@ -50,6 +50,21 @@ test('Same owned plist bootstraps directly when its job is unloaded',async()=>{
   assert.deepEqual(commands,['print','bootstrap','print']);assert.equal(f.loaded,true);
  }finally{await f.cleanup();}
 });
+test('Successful same-path reinstall refreshes its receipt after a loaded or unloaded service restart',async()=>{
+ const f=await fixture();try{
+  const request={home:f.home,app:f.app,uid:501,execute:f.execute};await manageWordService(request);
+  const recordPath=join(f.home,'Library/Application Support/Equation Lab/word-service-install.json');
+  const initial=JSON.parse(await readFile(recordPath,'utf8')),plist=await readFile(f.target);
+  for(const loaded of [true,false]){
+   await writeFile(recordPath,JSON.stringify({...initial,installedAt:'2000-01-01T00:00:00.000Z'}));f.setLoaded(loaded);
+   const started=Date.now();await manageWordService(request);
+   const next=JSON.parse(await readFile(recordPath,'utf8'));
+   assert.ok(Date.parse(next.installedAt)>=started);
+   assert.equal(next.app,f.app);assert.equal(next.plistSha256,initial.plistSha256);
+   assert.deepEqual(await readFile(f.target),plist);assert.equal(f.loaded,true);
+  }
+ }finally{await f.cleanup();}
+});
 test('Changed app configuration replaces and bootstraps the owned job',async()=>{
  const f=await fixture();try{
   const request={home:f.home,app:f.app,uid:501,execute:f.execute};await manageWordService(request);

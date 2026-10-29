@@ -1,22 +1,36 @@
 # 安装与使用
 
-[下载 Equation Lab 0.6.9（build94）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.9/Equation-Lab-0.6.9.pkg)
+**[下载 Equation Lab 0.6.10（build98）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.10/Equation-Lab-0.6.10.pkg)**
+
+适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
 3. 重新打开 Word，新建或打开文档，点击顶部的 **Equation Lab**。
 
-适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
+## 开始编辑
 
-双击公式进入独立编辑窗口；左边浏览当前文档的公式，右边调整样式、排版和编号预览。新公式点“完成并插入”，已有公式点“更新公式”；按钮在编辑模式选择栏的右侧。“取消”会保留 Word 原内容。插入后关闭窗口，从 Dock 重开会重新读取文档公式。插入时也能选择左侧已有公式；如果草稿已修改，会先询问是否放弃。
+双击 Word 中的 MathType 公式，进入独立编辑窗口。左侧浏览和搜索文档公式，右侧调整样式、排版和编号。改好后点“更新公式”，保存回 Word 中的原位置。
 
-长文档还没有保存修改时，会先打开当前公式，再分批补齐左侧列表。看到加载提示时可以继续输入和调整字号；不需要等整篇读完。文档在读取期间发生变化时，加载会停止并保留当前草稿，可以稍后重新读取。少数旧字体字符暂时无法识别时，会显示方框并提示，原始字符数据仍保留。
+要添加公式，在左侧顶部选择 Word 文档，再点底部“插入到 Word”，选择行内、居中、右侧编号或左侧编号。也可以从 Word 的 Equation Lab 功能区开始插入。写好后点“完成并插入”，App 会显示 Word 的保存结果；点“取消”返回原文档。
 
-要给已有公式编号，先在 Word 正文普通段落中选中公式对象，再用功能区的“右侧编号”或“左侧编号”添加编号或移动已有编号；“独立编号”会给选中公式添加右侧编号。此操作适用于每段一个公式；表格、列表、修订或受保护内容暂不支持。操作后点“更新编号”，更新自动序号和交叉引用。在编辑器右侧“文档 → Word 编排”修改编号格式后，点“更新公式”写回所选公式，后续新增编号也会沿用；新公式的格式在“完成并插入”时生效。“更新编号”只重算现有序号与引用，不会统一替换旧格式。App 中可直接修改“章”和“节”，中文界面保持中文。Word 的默认编号设置弹窗使用英文和系统字体；有正在编辑的公式时，功能区会回到 App 设置，避免弹窗阻塞保存。数值从目标位置之前的编号字段读取，不自动猜测正文标题。修改章或节会从当前公式重新起号，直到下一处章／节标记。此功能需要配套的新 App 和 Word 插件。
+正在编辑已有公式时，新公式插在它所在段落之后；独立草稿使用所选文档在 Word 中的空光标位置。**文件 → 新建独立草稿**和**打开文件副本…**可用于单独写公式或编辑文件副本。
 
-已有 MathType 编号的文档也可以用“更新编号”：支持 MTEqn、MTChap、MTSec 序号，以及 MTPlaceRef 内的相关字段和指向公式编号的 REF 引用。手工输入的编号文字不会自动重排，图表等无关序号也不会跟着修改。
+左侧文件名菜单列出 Word 打开的文档，并区分同名文件。切换前会提示处理未保存的草稿。菜单刷新更新文档列表；公式区刷新重新读取当前文档公式。长文档先打开当前公式，再分批补齐列表和缩略图，加载期间可继续输入和调整字号。
 
-左侧文件名菜单列出 Word 当前打开的文档。同名文件按文档身份区分；只读项不可选。有未保存修改时，切换前会询问是否放弃。保存忙碌、保存结果未确定或 Word 状态未知时不能切换。切换 Word 当前文档后，干净的编辑器会自动跟随；有修改的草稿留在原文档。来源文档关闭后会清理其不可用公式列表，并保留草稿。菜单刷新更新文档列表和可用状态；公式区刷新重新读取当前文档公式，有未保存修改时会跳过并保留草稿。文档信息刷新本身不会重读公式。
+## 编号和引用
+
+在 Word 正文中选中一个公式对象，点功能区的“右侧编号”或“左侧编号”，给它添加编号或移动编号位置。这项操作用于每段一个公式的普通正文段落；“独立编号”会在公式右侧添加编号。
+
+在 App 的 **文档 → Word 编排** 中调整编号格式、章和节，点“更新公式”应用到当前公式；新公式在“完成并插入”时采用这些设置。格式也会用于后续新增编号。修改章或节会从当前公式重新起号，后面的公式沿用该设置，直到下一处章／节标记。
+
+旧 MathType 公式的编号通过 Word 功能区调整。插入、删除或移动公式后，点“更新编号”重算公式序号和交叉引用。它也会更新旧 MathType 的 MTEqn、MTChap、MTSec 和 MTPlaceRef 中的相关字段。点“插入引用”后，可以在列表中搜索编号和附近文字，再选择目标。
+
+## 检查和批量整理
+
+在右侧 **文档 → 文档检查与批量处理** 中，可检查编号和引用，把当前公式的字体、字号、间距应用到文档副本，或按范围整理 Equation Lab 编号格式。
+
+先查看预检结果，再点“另存应用后的副本…”。这些工具生成新文件；要使用修改后的文档，在 Word 中打开这个副本，检查排版并更新编号与引用。[详细用法](document-tools.md)
 
 ## Word 里没有显示 Equation Lab
 
@@ -24,11 +38,13 @@
 
 如果系统要求选择 Office 文件夹，按窗口提示选择。安装前需要关闭 Word，窗口也会提示仍在运行的程序。
 
+该面板还提供连接检查和“复制连接诊断”。诊断列出版本、组件状态、本地服务和最近操作阶段，便于随问题描述一起提供。
+
 ## 更新
 
-App 底部提供“插入到 Word”，可选行内、居中和左右编号；顶部文件名指定目标文档。独立草稿及打开文件副本在“文件”菜单中。此入口需要配套的新 Word 组件，安装后重新打开 Word 才能加载；仅更新 App 界面不能代替插件更新。安装包同时更新 App 和插件，装好后请重新打开 Word。
-
 默认每天检查一次，有新版时在工具栏显示更新按钮。在 **Equation Lab → 检查更新…** 中可随时手动检查、设置自动下载；下载完成后选择合适的时间安装。
+
+安装包同时更新 App 和 Word 插件。保存文档并退出两个程序，安装完成后重新打开 Word，即可加载新组件。
 
 ## 安装报错
 
@@ -36,8 +52,52 @@ App 底部提供“插入到 Word”，可选行内、居中和左右编号；�
 
 ---
 
-Save your documents and quit Word and Equation Lab, then open the [0.6.9 build94 installer](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.9/Equation-Lab-0.6.9.pkg). Reopen Word and find the Equation Lab ribbon. The package includes the app, plugin, and runtime; desktop Word is required for Word integration. Use Done and Insert for a new equation, Update Equation for an existing one, or Cancel to keep Word unchanged. These buttons share a row with the editing mode controls. To number an existing equation, select its object in a plain body paragraph and choose Right Number or Left Number to add or move its number; Independent Number adds a right-side number. This supports one equation per paragraph and excludes tables, lists, tracked changes, and protected content. Choose Update Numbers after inserting, deleting, or moving numbers to refresh sequence numbers and REF cross-references. Change the format under Document → Word Layout and choose Update Equation to apply it to the selected equation and later numbered insertions. New equations adopt the format at Done and Insert. Update Numbers recalculates existing numbers and references without replacing their formats. The app’s localized numbering settings also let you edit Chapter and Section. Word’s default-numbering dialogs use English controls and the system font; during an equation edit the ribbon returns to the app’s settings to avoid blocking the save callback. Values come from sequence fields before the target, rather than being guessed from headings. Changing chapter or section restarts the equation sequence at that formula until the next chapter/section marker. This requires the matching updated app and Word plugin. Reopening from the Dock refreshes the document list. The filename menu lists open Word documents and distinguishes them by identity; read-only choices are disabled. A changed draft prompts before switching. Switching is unavailable while saving, when the save result is unknown, or when Word's state is unavailable. A clean editor follows the active Word document; a changed draft stays with its original document. Closing the source document clears its unavailable formula list and keeps the draft. The menu refresh updates document metadata; the formula refresh rereads the current document's equations but skips the refresh when the draft has unsaved changes. If the ribbon is missing, quit Word, repair the plugin from the app's Office plugin window, and reopen Word. For an installation error, attach the Installer log and version details to an issue.
+# Installation and use
 
-Long documents with unsaved changes open the selected equation first and fill the list in batches. You can type and change point sizes while it loads. A change to the source stops loading and keeps the draft. Unmapped legacy font characters show a square and a warning while retaining original data. Update Numbers also supports legacy MathType MTEqn, MTChap, MTSec, and related fields inside MTPlaceRef, along with equation-number REF references. Manually typed numbers and unrelated figure/table sequences are left as they are.
+**[Download Equation Lab 0.6.10 (build98)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.10/Equation-Lab-0.6.10.pkg)**
 
-Insert into Word in the sidebar offers inline, centered, and left/right numbered placement in the document selected at the top. Standalone drafts and file-copy editing are in the File menu. The new entry requires a matching Word component and a Word restart after installation. The installer updates both the app and add-in; reopen Word after installation. Updating the app interface alone is insufficient.
+Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
+
+1. Save your documents and quit Word and Equation Lab.
+2. Open the package and follow the macOS Installer.
+3. Reopen Word, create or open a document, and choose the **Equation Lab** ribbon.
+
+## Start editing
+
+Double-click a MathType equation in Word to open its editor. Browse and search equations on the left, and adjust style, layout, and numbering on the right. Choose Update equation to save back in place.
+
+To add an equation, choose a Word document at the top of the sidebar and use Insert into Word at the bottom. Pick inline, centered, right-numbered, or left-numbered placement. You can also start from the Word ribbon. Choose Finish and insert when ready; the app displays Word’s save result. Cancel returns to the original document.
+
+While editing an existing equation, insertion goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor. **File → New standalone draft** and **Open a file copy…** let you write independently or edit a file copy.
+
+The filename menu lists open Word documents and distinguishes matching names. Switching prompts you to handle unsaved drafts. The menu refresh updates the document list; the formula-area refresh reloads the current document’s equations. Long documents open the current equation first and load the list and thumbnails in batches, so you can keep typing and adjusting sizes.
+
+## Numbering and references
+
+Select an equation object in Word and choose Right Number or Left Number to add a number or move it to that side. This action is for plain body paragraphs containing one equation each. Independent Number adds a right-side number.
+
+Under **Document → Word layout** in the app, adjust the number format, chapter, and section, then choose Update equation. New equations use these settings at Finish and insert. The format also becomes the default for later numbered insertions. Changing the chapter or section restarts numbering at the current equation; later equations follow it until the next chapter/section marker.
+
+Use the Word ribbon to adjust legacy MathType numbering. After inserting, deleting, or moving equations, choose Update Numbers to recalculate equation sequences and cross-references. This also updates legacy MTEqn, MTChap, MTSec, and related fields inside MTPlaceRef. Insert Reference opens a list you can search by number or nearby text.
+
+## Check and organize a document
+
+Under **Document → Document checks and batch tools**, check numbering and references, apply the current equation’s fonts, sizes, and spacing to a document copy, or choose a scope for Equation Lab number-format changes.
+
+Review the preview, then choose Save changed copy. These tools create a new file. Open that copy in Word, check its layout, and update numbering and references to use the changes. [Read the full guide](document-tools.md)
+
+## If the ribbon is missing
+
+Quit Word completely. Install or repair the plugin from Equation Lab’s **Office plugin** window, then reopen Word. The app detects Word and its Startup folder. Run repair again if you moved Word or changed its startup location.
+
+If prompted to choose an Office folder, follow the window’s instructions. The panel also provides a connection check and Copy connection diagnostics, which lists versions, component status, local service status, and recent operation stages for a problem report.
+
+## Updates
+
+The app checks daily by default and shows an update button for a newer version. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads. Install at a convenient time once the download finishes.
+
+The installer updates both the app and Word plugin. Save your documents and quit both programs before installing, then reopen Word to load the new components.
+
+## Installation errors
+
+Quit Word and Equation Lab and retry. If installation still fails, save the log from **Installer → Window → Installer Log → Show All Logs**. Attach it to an [issue](https://github.com/Ne1ther/EquationLab/issues) with the package name, Mac chip, macOS version, and Word version.

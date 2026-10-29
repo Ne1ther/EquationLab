@@ -17,7 +17,7 @@ final class EquationEngine: @unchecked Sendable {
         queue.async { [self] in
             do {
                 try start(node: node, root: root)
-                var bytes = try JSONSerialization.data(withJSONObject: ["id": id, "action": action, "payload": payload])
+                var bytes = try JSONSerialization.data(withJSONObject: ["id": id, "action": action, "payload": payload, "coalescePreview": ["validate", "editPreview"].contains(action) && payload["previewOnly"] as? Bool == true])
                 guard bytes.count <= 5_000_000 else { throw failure("请求过大") }
                 bytes.append(10)
                 let timeout = DispatchWorkItem { [weak self] in self?.failAll("公式引擎处理超时，请重试") }

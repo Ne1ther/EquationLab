@@ -15,6 +15,7 @@
 #include "word_document_requests.hpp"
 #include "word_snapshot_zip.hpp"
 #include "numbering_prompt.hpp"
+#include "reference_picker.hpp"
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
@@ -232,12 +233,13 @@ NSString* withoutSnapshotPictures(NSString* xml){
     [result appendString:[xml substringFromIndex:kept]];return result;
 }
 NSDictionary* decodeDocumentPart(NSString* text,BOOL* selectionBound){
+    const BOOL insertionPart=[text hasPrefix:@"ELIPART1\n"];
     NSMutableArray<NSString*>* fields=[NSMutableArray array];NSUInteger offset=0;
     for(NSUInteger i=0;i<9;i++){NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound){clearDocumentParts();return nil;}[fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);}
     NSInteger values[7]{};
     for(NSUInteger i=0;i<7;i++){NSString* field=fields[i+1];NSScanner* scanner=[NSScanner scannerWithString:field];if(!field.length||[field rangeOfCharacterFromSet:NSCharacterSet.decimalDigitCharacterSet.invertedSet].location!=NSNotFound||![scanner scanInteger:&values[i]]||!scanner.isAtEnd||values[i]<0||values[i]>INT32_MAX){clearDocumentParts();return nil;}}
-    if(!values[0]||!values[1]||!values[2]||!values[4]||values[4]>10000||values[3]>=values[4]||values[5]>=256||values[6]>1||fields[8].length>512){clearDocumentParts();return nil;}
-    NSString* binding=[NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%@",fields[1],fields[2],fields[3],fields[4],fields[5],fields[8]];
+    if(!values[0]||!values[1]||!values[2]||values[4]>10000||(!insertionPart&&(!values[4]||values[3]>=values[4]))||(insertionPart&&values[3]!=0)||values[5]>=256||values[6]>1||fields[8].length>512){clearDocumentParts();return nil;}
+    NSString* binding=[NSString stringWithFormat:@"%@\n%@\n%@\n%@\n%@\n%@\n%@",fields[0],fields[1],fields[2],fields[3],fields[4],fields[5],fields[8]];
     if(values[5]==0&&![documentPartsBinding isEqual:binding]){clearDocumentParts();documentParts=[NSMutableArray array];documentPartsBinding=binding;}
     if(!documentParts||![documentPartsBinding isEqual:binding]||static_cast<NSUInteger>(values[5])!=documentParts.count){clearDocumentParts();return nil;}
     NSString* xml=[text substringFromIndex:offset];
@@ -250,10 +252,20 @@ NSDictionary* decodeDocumentPart(NSString* text,BOOL* selectionBound){
     NSData* packed=[json compressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
     clearDocumentParts();if(!packed||packed.length>34000000)return nil;
     if(selectionBound)*selectionBound=YES;
-    return @{@"captureToken":@(values[0]),@"identity":[NSString stringWithFormat:@"%@:%ld",documentProcessIdentity(),static_cast<long>(values[1])],@"snapshot":@(values[2]),@"index":@(values[3]),@"count":@(values[4]),@"name":fields[8],@"encoding":@"parts-deflate-base64",@"ooxml":[packed base64EncodedStringWithOptions:0]};
+    return @{@"captureToken":@(values[0]),@"identity":[NSString stringWithFormat:@"%@:%ld",documentProcessIdentity(),static_cast<long>(values[1])],@"snapshot":@(values[2]),@"index":@(insertionPart?-1:values[3]),@"count":@(values[4]),@"name":fields[8],@"encoding":@"parts-deflate-base64",@"ooxml":[packed base64EncodedStringWithOptions:0]};
 }
 NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr){
-    if([text hasPrefix:@"ELPART1\n"])return decodeDocumentPart(text,selectionBound);
+    if([text hasPrefix:@"ELPART1\n"]||[text hasPrefix:@"ELIPART1\n"])return decodeDocumentPart(text,selectionBound);
+    if([text hasPrefix:@"ELINS1\n"]){
+        NSMutableArray<NSString*>* fields=[NSMutableArray array];NSUInteger offset=0;
+        for(NSUInteger i=0;i<6;i++){NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound)return nil;[fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);}
+        NSInteger count=0,anchor=-1;NSScanner* countScanner=[NSScanner scannerWithString:fields[3]],*anchorScanner=[NSScanner scannerWithString:fields[4]];
+        if(![countScanner scanInteger:&count]||!countScanner.isAtEnd||count<0||count>10000||![anchorScanner scanInteger:&anchor]||!anchorScanner.isAtEnd||anchor< -1||anchor>=count||fields[5].length>512)return nil;
+        NSString* header=[NSString stringWithFormat:@"ELCTX2\n%@\n%@\n0\n%@\n",fields[1],fields[2],fields[5]];
+        NSMutableDictionary* context=[decodeDocumentContext([header stringByAppendingString:[text substringFromIndex:offset]]) mutableCopy];
+        if(!context)return nil;
+        context[@"scope"]=@"insertion";context[@"count"]=@(count);context[@"index"]=@(-1);context[@"anchorIndex"]=@(anchor);return context;
+    }
     if([text hasPrefix:@"ELFRAG1\n"]){
         NSMutableArray<NSString*>* fields=[NSMutableArray array];NSUInteger offset=0;
         for(NSUInteger i=0;i<7;i++){NSRange line=[text rangeOfString:@"\n" options:0 range:NSMakeRange(offset,text.length-offset)];if(line.location==NSNotFound)return nil;[fields addObject:[text substringWithRange:NSMakeRange(offset,line.location-offset)]];offset=NSMaxRange(line);}
@@ -330,8 +342,10 @@ std::int32_t prepareInsertion(NSString* layout){
     NSDictionary* target=opening[@"target"];
     if(opening[@"insertionMode"]&&target){
         if(![target[@"identity"] isEqual:document[@"identity"]])return -3;
+        if([document[@"scope"] isEqual:@"insertion"]&&![document[@"anchorIndex"] isEqual:target[@"index"]])return -3;
         document[@"insertionAfter"]=@{@"index":target[@"index"],@"nativeSha256":target[@"nativeSha256"]};
-    }
+    }else if([document[@"scope"] isEqual:@"insertion"]&&[document[@"anchorIndex"] integerValue]!=-1)return -3;
+    [document removeObjectForKey:@"anchorIndex"];
     NSString* settings=[[NSString alloc] initWithData:inputFile(directory,@"ribbon-settings.txt") encoding:NSUTF8StringEncoding];
     NSArray<NSString*>* lines=[settings componentsSeparatedByString:@"\n"];
     NSDictionary* options=@{@"mode":layout,@"numberFormat":lines.count>0?lines[0]:@"(#E1)",@"chapter":@(lines.count>1?[lines[1] integerValue]:1),@"section":@(lines.count>2?[lines[2] integerValue]:1),@"equation":@(lines.count>3?[lines[3] integerValue]:1),@"contextEstablished":@(lines.count<=5||[lines[4] isEqual:@"1"])};
@@ -390,6 +404,8 @@ std::int32_t captureDocument(){
     const CFAbsoluteTime decodeStarted=CFAbsoluteTimeGetCurrent();
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
     NSString* text=documentCaptureText(data);
+    const BOOL insertionPart=[text hasPrefix:@"ELIPART1\n"];
+    if(insertionPart){NSArray* lines=[text componentsSeparatedByString:@"\n"];if(lines.count<2||[lines[1] intValue]!=EquationLabInsertionDocumentRequestToken()){clearDocumentParts();return -3;}}
     if([text hasPrefix:@"ELPART1\n"]){NSArray* lines=[text componentsSeparatedByString:@"\n"];if(lines.count<2||[lines[1] intValue]!=MathTypeBridgeDocumentCaptureRequestToken()){clearDocumentParts();return -3;}}
     BOOL selectionBound=NO;NSDictionary* context=decodeDocumentContext(text,&selectionBound);
     if([context[@"partPending"] boolValue]){
@@ -399,6 +415,8 @@ std::int32_t captureDocument(){
     }
     const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();
     if(!context)return -3;
+    if(insertionPart){captureTiming={};return EquationLabFinishInsertionDocumentCapture(context);}
+    if([context[@"scope"] isEqual:@"insertion"])return -3;
     std::int32_t preCaptured=EquationLabCapturePreCapturedDocumentContext(context);
     if(preCaptured<0){captureTiming={};return -4;}
     if(preCaptured==0){installDocumentContext(context,selectionBound);EquationLabDocumentContextDidCapture();}
@@ -568,6 +586,8 @@ RIBBON_EXPORT(MathTypeBridgeRibbonSpacing,openTool(@"spacing"))
 RIBBON_EXPORT(MathTypeBridgeRibbonNumbering,openTool(@"numbering"))
 RIBBON_EXPORT(MathTypeBridgeNumberingPrompt,validHost()?bridge_probe::numbering_prompt::show(bridge_probe::numbering_prompt::request([[NSString alloc] initWithData:inputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-numbering-prompt.txt") encoding:NSUTF8StringEncoding])):-1)
 RIBBON_EXPORT(MathTypeBridgeNumberingPromptNextChar,validHost()?bridge_probe::numbering_prompt::nextCharacter():-1)
+RIBBON_EXPORT(MathTypeBridgeReferencePicker,validHost()?bridge_probe::reference_picker::show(bridge_probe::reference_picker::request([[NSString alloc] initWithData:inputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-reference-picker.txt") encoding:NSUTF8StringEncoding])):-1)
+RIBBON_EXPORT(MathTypeBridgeReferencePickerNextChar,validHost()?bridge_probe::reference_picker::nextCharacter():-1)
 RIBBON_EXPORT(MathTypeBridgeRibbonExport,openTool(@"export"))
 RIBBON_EXPORT(MathTypeBridgeRibbonHelp,openTool(@"help"))
 RIBBON_EXPORT(MathTypeBridgeRibbonCapabilities,openTool(@"capabilities"))
@@ -583,6 +603,10 @@ RIBBON_EXPORT(MathTypeBridgeFinishInsertion,([&](){EquationLabFinishWordInsertio
 RIBBON_EXPORT(MathTypeBridgeFailInsertion,([&](){EquationLabFinishWordInsertion(false);return 0;})())
 RIBBON_EXPORT(MathTypeBridgeUncertainInsertion,([&](){EquationLabFinishWordInsertionUncertain();return 0;})())
 RIBBON_EXPORT(MathTypeBridgeInsertionError,EquationLabWordInsertionError())
+RIBBON_EXPORT(MathTypeBridgeInsertionProgressiveSupport,1)
+RIBBON_EXPORT(MathTypeBridgeTakeInsertionDocumentRequest,EquationLabTakeInsertionDocumentRequest())
+RIBBON_EXPORT(MathTypeBridgeInsertionDocumentRequestToken,EquationLabInsertionDocumentRequestToken())
+RIBBON_EXPORT(MathTypeBridgeFailInsertionDocumentCapture,([&](){EquationLabFailInsertionDocumentCapture();clearDocumentParts();return 0;})())
 RIBBON_EXPORT(MathTypeBridgeTakeInsertion,([&](){
     if(!validHost())return -1;
     EquationLabWordHostDidPoll();
@@ -649,4 +673,5 @@ RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestNoDocument,finishCurrentWor
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestFailed,finishCurrentWordDocumentRequest(@"failed"))
 
 RIBBON_EXPORT(MathTypeBridgeQueueDocumentChunk,([&](){if(!validHost())return -1;const auto token=MathTypeBridgeDocumentCaptureRequestToken();if(token<=0){clearDocumentParts();return -2;}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(MathTypeBridgeDocumentCaptureRequestToken()==token)EquationLabWakeWordHost();});return 0;})())
+RIBBON_EXPORT(MathTypeBridgeQueueInsertionDocumentChunk,([&](){if(!validHost())return -1;const auto token=EquationLabInsertionDocumentRequestToken();if(token<=0){clearDocumentParts();return -2;}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(EquationLabInsertionDocumentRequestToken()==token)EquationLabWakeWordHost();});return 0;})())
 RIBBON_EXPORT(MathTypeBridgeCanReadDocumentChunk,([&](){if(!validHost())return 0;const double idle=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState,kCGAnyInputEventType);return NSRunningApplication.currentApplication.isActive&&idle>=0&&idle<0.6?0:1;})())

@@ -448,7 +448,7 @@ test('Legacy MathType numbering visits nested code fields and preserves macrobut
 test('large unsaved enrichment yields between bound main-story ranges and pauses for foreground Word',async()=>{
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const start=source.indexOf('Private Sub ELContinueDocumentChunks()'),chunk=source.slice(start,source.indexOf('End Sub',start));
- assert.match(chunk,/MathTypeBridgeDocumentCaptureRequestToken"\) <> token/);
+ assert.match(chunk,/ELDocumentChunkRequestToken\(\) <> token/);
  assert.match(chunk,/KnownDocumentIdentity\(mChunkDocument\) <> mChunkIdentity/);
  assert.match(chunk,/mChunkDocument\.Content\.Text <> mChunkText/);
  assert.match(chunk,/mChunkDocument\.Content\.End <> mChunkEnd/);

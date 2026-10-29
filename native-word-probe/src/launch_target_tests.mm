@@ -6,6 +6,9 @@
 
 namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; BOOL emulateDeferredReopen=NO; NSString* reopenedDocumentIdentity=@"process:77"; }
 void EquationLabDiscardDocumentParts(){}
+// This launcher fixture owns edit sessions only. The document request manager
+// also checks insertion ownership; insertion lifecycle has its own runner.
+std::int32_t EquationLabWordInsertionActive(){return 0;}
 NSDictionary* EquationLabCapturedDocumentContext(){return fixtureDocumentContext;}
 BOOL EquationLabDocumentContextIsPendingSelection(NSDictionary* context){return context&&fixtureSelectionPending&&context==fixtureDocumentContext;}
 void EquationLabConsumeDocumentSelection(NSDictionary* context){if(EquationLabDocumentContextIsPendingSelection(context)){fixtureDocumentContext=nil;fixtureSelectionPending=NO;EquationLabDocumentContextDidClearSelection();}}

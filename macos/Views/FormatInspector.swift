@@ -122,6 +122,23 @@ struct FormatInspector: View {
                 }
             }
             Divider()
+            InspectorSection("文档检查与批量处理") {
+                Button(bridge.language.usesEnglish ? "Check numbering and references…" : "检查编号与引用…") { bridge.invoke("nativeDocumentAudit") }
+                Menu(bridge.language.usesEnglish ? "Apply current formula style…" : "应用当前公式样式…") {
+                    Button(bridge.language.usesEnglish ? "Load document preset into draft" : "将文档预设载入当前草稿") { bridge.invoke("nativeUseDocumentTypography") }
+                    Button(bridge.language.usesEnglish ? "Current equation" : "当前公式") { bridge.invoke("nativeDocumentTypographyPlan", argument: "current") }
+                    Button(bridge.language.usesEnglish ? "All equations in a copy" : "全文公式（另存副本）") { bridge.invoke("nativeDocumentTypographyPlan", argument: "all") }
+                    Button(bridge.language.usesEnglish ? "Store document preset in a copy" : "保存文档预设（另存副本）") { bridge.invoke("nativeDocumentTypographyPlan", argument: "future") }
+                }
+                Menu(bridge.language.usesEnglish ? "Apply numbering format to a copy…" : "将编号格式应用到副本…") {
+                    Button(bridge.language.usesEnglish ? "Current equation" : "当前公式") { bridge.invoke("nativeDocumentNumberingPlan", argument: "current") }
+                    Button(bridge.language.usesEnglish ? "Existing numbered equations" : "全部已有编号") { bridge.invoke("nativeDocumentNumberingPlan", argument: "all") }
+                    Button(bridge.language.usesEnglish ? "Future equations only" : "仅后续新增公式") { bridge.invoke("nativeDocumentNumberingPlan", argument: "future") }
+                }
+                Text(bridge.language.usesEnglish ? "Checks use the loaded snapshot. Batch changes are previewed and saved to a new copy." : "检查已载入的文档快照；批量修改先预检，再另存副本。")
+                    .font(.caption2).foregroundStyle(.secondary)
+            }.controlSize(.small).disabled(bridge.state.busy || bridge.state.wordDocumentLoading || bridge.state.wordDocumentUnavailable || bridge.state.documentPath.isEmpty || bridge.state.wordOutcomeUnknown)
+            Divider()
             InspectorSection("复制与导出") {
                 Button { bridge.action("click", ["id": "copy-latex"]) } label: { Label(bridge.t("复制 LaTeX"), systemImage: "doc.on.doc") }
                     .disabled(bridge.state.busy || bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)

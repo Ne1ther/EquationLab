@@ -1,5 +1,5 @@
 {
-  "version": "0.6.9",
-  "zh": "现在可以直接从 App 选择 Word 文档并插入公式，支持行内、居中和左右编号。编辑已有公式时，新公式放在它的段落之后；独立草稿会带入所选文档的光标位置。编号格式、章和节与 Word 共用，连续插入可接着生成 (1.1)、(1.2)。切换文档和取消插入会保护草稿，来源关闭后清理旧列表并阻止写入。也整理了文档选择器和 Word 功能区图标。已在 Word 16.114.1 验证四种插入、多文档、取消和原公式数据保留；私人测试材料不随包发布。",
-  "en": "Insert equations directly from the app into a selected Word document, with inline, centered, or left/right numbered placement. New equations go after the paragraph of the equation being edited, or at the selected document’s Word cursor when using a standalone draft. Number formats, chapters, and sections share Word’s state, so consecutive insertions continue as (1.1), (1.2). Drafts are protected during switching and cancellation; closing the source clears stale rows and blocks writes. The document selector and Word ribbon artwork have also been refined. Word 16.114.1 checks cover all four insertion modes, multiple documents, cancellation, and unchanged original Native data. Private test materials are not distributed."
+  "version": "0.6.10",
+  "zh": "新增文档编号与引用检查、引用搜索，以及字体、字号、间距和编号的批量副本处理。长文档先打开当前公式，其余列表与预览分批补齐；侧栏增量更新，编辑和预览任务优先响应。Word 引用选择器可以按编号或附近文字搜索，插入后继续在原位置编辑。新增连接诊断，修复同路径升级后的服务记录，并整理了文档选择框的图标、文件名和箭头对齐。",
+  "en": "Adds document numbering and reference checks, searchable equation references, and batch copy tools for fonts, sizes, spacing, and numbering. Long documents open the selected equation first while the remaining list and previews load in stages. Incremental sidebar updates keep editing and preview work responsive. The Word reference picker searches equation numbers and nearby text, then inserts at the retained cursor. Also adds connection diagnostics, repairs service receipts after an in-place upgrade, and aligns the document selector icon, filename, and arrow."
 }

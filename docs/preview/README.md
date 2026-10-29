@@ -1,16 +1,10 @@
 # 实际截图
 
-![0.6.5 工作台](workbench-0.6.5.png)
+![Equation Lab 工作台](workbench-0.6.10.png)
 
-0.6.5 build84 的实际工作台与已打开 Word 文档菜单。
+文档选择、公式列表、编辑画布与 Word 排版预览。右侧检查器集中调整样式、间距和文档设置。
 
-Actual workbench and open Word document menu in 0.6.5 build84.
-
-当前版本是 0.6.9 build94，新增 App 中的 Word 插入入口，并调整了文档选择器；这里保留较早版本的真实截图。长文档测试材料保留在本地，这里不展示私人文档。
-
-The current release is 0.6.9 build94. It adds insertion into Word from the app and refines the document selector; these actual screenshots are from earlier versions. Private long-document test material is kept locally and is not shown here.
-
-![已打开的 Word 文档](word-document-selector-0.6.5.png)
+The workbench brings together document selection, equation browsing, editing, and Word layout previews. The inspector groups typography, spacing, and document tools.
 
 [30 公式 Word 演示](../examples/equation-lab-30-formulas.docx) · [PDF](../examples/equation-lab-30-formulas.pdf)
 
@@ -20,4 +14,8 @@ The current release is 0.6.9 build94. It adds insertion into Word from the app a
 
 ![字母库](letter-library.png)
 
-These are actual app screenshots and the Word demo exported from Word. The demo contains thirty editable equations across three sections.
+## 较早版本
+
+![0.6.5 工作台](workbench-0.6.5.png)
+
+![0.6.5 文档菜单](word-document-selector-0.6.5.png)

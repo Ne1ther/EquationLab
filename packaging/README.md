@@ -3,9 +3,9 @@
 版本与运行时配置在 `packaging/release.json`。先执行 `npm ci`，使用现有脚本构建：
 
 ```sh
-EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="$PWD/.local/vendor-artifacts/build90-numbering-v34" \
+EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="/path/to/accepted-native-artifacts" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --app-only --output dist/0.6.7-build90
+./scripts/package_release.sh --app-only --output dist/0.6.10-build98
 ```
 
 版本和构建号默认读取配置；输出目录须为空。本地功能迭代用 `./scripts/build_and_run.sh --word-test run`，不运行安装器。
@@ -22,4 +22,4 @@ Word 模板须在真实 Word 中导入全部模块、编译、保存，并通过
 
 源码导出使用 `node packaging/export-source.mjs --review --output dist/source-review`，输出目录须不存在。主仓库保留源码、文档和演示，安装包放 GitHub Releases。
 
-只从构建清单复制运行所需的源码、依赖和资源。`evidence/`、`research/`、`.local/` 和 `output/` 里的私有文档、测试副本、截图和记录不进入安装包或源码导出。发布前检查包内清单与待提交文件，不上传个人文档或本地路径。当前构建使用 ad-hoc 签名，未完成 Developer ID 签名或 Apple 公证；签名更新清单用于验证更新来源，不代表 Apple 公证。
+只从构建清单复制运行所需的源码、依赖和资源。`evidence/`、`research/`、`.local/` 和 `output/` 里的私有文档、测试副本、截图和记录不进入安装包或源码导出。发布前检查包内清单与待提交文件，不上传个人文档或本地路径。App 使用 ad-hoc 代码签名，更新清单使用 Ed25519 签名。

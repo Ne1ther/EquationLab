@@ -11,6 +11,10 @@ import {readEqp,writeEqp} from './eqp.mjs';
 import {readTypography} from './typography-native.mjs';
 import {previewNumberFormat} from './layout.mjs';
 import {checkedWordNumbering} from './word-numbering.mjs';
+import {createRenderScheduler} from './render-scheduler.mjs';
+import {auditDocx,getReferenceTargets} from './document-audit.mjs';
+import {preflightTypography,applyTypography,readTypographyPreset,readTypographyPresetFromPackage} from './document-typography.mjs';
+import {preflightNumbering,applyNumbering} from './document-numbering-plan.mjs';
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
 // Word stages immutable snapshots. Parse each snapshot once, including while
@@ -24,7 +28,7 @@ async function readDocument(path){
  const bytes=await readFile(path),key=hash(bytes);
  let entry=documentCache.get(key);
  if(!entry){
-  entry={bytes:bytes.length,parsed:inspectDocx(bytes)};documentCache.set(key,entry);documentBytes+=entry.bytes;
+  entry={bytes:bytes.length,parsed:inspectDocx(bytes).then(async document=>({...document,typographyPreset:await readTypographyPresetFromPackage(document).catch(()=>null)}))};documentCache.set(key,entry);documentBytes+=entry.bytes;
   try{await entry.parsed;}catch(error){documentCache.delete(key);documentBytes-=entry.bytes;throw error;}
  }
  documentFiles.delete(path);documentFiles.set(path,{identity,key});
@@ -52,6 +56,15 @@ async function wordSession(path,payload){
 function checkedWordSource(session,ticket){
  if(session.ticket!==ticket||typeof session.path!=='string'||typeof session.native!=='string'||typeof session.session!=='string')throw Error('Word 会话源数据无效');
 }
+async function checkedDocumentToolsInput(payload){
+ if(typeof payload.input!=='string'||!payload.input)throw Error('请选择文档');
+ const input=await realpath(payload.input);
+ if(payload.ticket!==undefined){
+  const session=await wordSession('native-read',{ticket:payload.ticket});checkedWordSource(session,payload.ticket);
+  if(!session.document||session.document.scope||session.document.identity!==payload.documentIdentity||session.document.snapshot!==payload.documentSnapshot||await realpath(session.document.path)!==input)throw Error('Word 文档快照已变化或尚未载入完整，请重新读取');
+ }
+ return input;
+}
 async function readWordSession(ticket){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}}),insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
@@ -62,7 +75,7 @@ async function readWordSession(ticket){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...session.document?.scope==='selection'?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -111,6 +124,17 @@ async function insertWordEquation(payload){
 
 export async function desktopRequest(request) {
  const {action,payload={}}=request;
+ if(action==='documentAudit')return auditDocx(await checkedDocumentToolsInput(payload));
+ if(action==='documentReferenceTargets')return getReferenceTargets(await auditDocx(await checkedDocumentToolsInput(payload)),{query:payload.query});
+ if(action==='documentTypographyPreset')return {preset:await readTypographyPreset(await checkedDocumentToolsInput(payload))};
+ if(action==='documentTypographyPreflight')return preflightTypography(await checkedDocumentToolsInput(payload),payload.options);
+ if(action==='documentNumberingPreflight')return preflightNumbering(await checkedDocumentToolsInput(payload),payload.options);
+ if(action==='documentTypographyApply'||action==='documentNumberingApply'){
+  const input=await checkedDocumentToolsInput(payload);
+  if(typeof payload.output!=='string'||!payload.output)throw Error('请选择新的副本文件');
+  const result=await (action==='documentTypographyApply'?applyTypography:applyNumbering)(input,payload.plan,{output:payload.output});
+  return result.report;
+ }
  if(action==='wordDocumentOpen')return nativeWordRequest('native-document-request',payload);
  if(action==='wordDocumentStatus')return nativeWordRequest('native-document-status',payload);
  if(action==='wordDocumentCancel')return nativeWordRequest('native-document-cancel',payload);
@@ -147,8 +171,8 @@ export async function desktopRequest(request) {
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
   const session=await wordSession('native-read',{ticket:payload.ticket});
   if(payload.documentIdentity!==undefined&&payload.documentIdentity!==session.document?.identity||payload.documentSnapshot!==undefined&&payload.documentSnapshot!==session.document?.snapshot)throw Error('Word thumbnail snapshot is no longer current');
-  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices}});
-  return {images:result.objects.filter(o=>payload.indices.includes(o.index)).map(o=>({index:o.index,image:o.image}))};
+  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices,onlyIndices:payload.indices}});
+  return {images:result.objects.map(o=>({index:o.index,image:o.image}))};
  }
  if(action==='wordSessionCancel')return wordSession('native-cancel',{ticket:payload.ticket});
  if(action==='wordSessionStatus')return wordSession('native-status',{ticket:payload.ticket});
@@ -190,7 +214,7 @@ export async function desktopRequest(request) {
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
  if(action==='inspect') {
-  const {objects,zip,numberFormat,numberingRevision}=await readDocument(payload.path);
+  const {objects,zip,numberFormat,numberingRevision,typographyPreset}=await readDocument(payload.path);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
@@ -205,7 +229,12 @@ export async function desktopRequest(request) {
    });
    thumbnailQueue=pending.catch(()=>{});thumbnails.set(o.nativeSha256,pending);return pending;
   };
-  const entries=await Promise.all(objects.map(async o=>{
+  let chosen=objects;
+  if(payload.onlyIndices!==undefined){
+   if(!Array.isArray(payload.onlyIndices)||payload.onlyIndices.length>4||payload.onlyIndices.some(i=>!Number.isInteger(i)||i<0||!objects[i]))throw Error('Invalid thumbnail indices');
+   chosen=[...new Set(payload.onlyIndices)].map(index=>objects[index]);
+  }
+  const entries=await Promise.all(chosen.map(async o=>{
    let image=null;
    if(o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath)&&zip.file(o.imagePath))image=`data:image/${o.imagePath.toLowerCase().endsWith('.png')?'png':o.imagePath.toLowerCase().endsWith('.gif')?'gif':'jpeg'};base64,${await zip.file(o.imagePath).async('base64')}`;
    // Word's cached OLE image can be tiny or retain an old layout. Supported
@@ -216,7 +245,7 @@ export async function desktopRequest(request) {
    }
    return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
   }));
-  return {path:payload.path,objects:entries,documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision};
+  return {path:payload.path,objects:entries,documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
  }
  if(action==='export') {
   if(!Array.isArray(payload.equations)||payload.equations.length<1||payload.equations.length>500)throw Error('需要 1–500 条公式');
@@ -261,7 +290,7 @@ export async function desktopRequest(request) {
 
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
-  let rendering=warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n'));
+  const rendering=createRenderScheduler(warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n')));
   const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
@@ -271,11 +300,13 @@ if(await isMainModule(import.meta.url)){
    let id,request;const start=performance.now();
    try{if(Buffer.byteLength(line)>5_000_000)throw Error('请求过大');request=JSON.parse(line);id=request.id;if(typeof id!=='string'||id.length>100)throw Error('无效的请求标识');}
    catch(error){process.stdout.write(JSON.stringify({id,ok:false,error:error.message,elapsedMs:performance.now()-start})+'\n');continue;}
-   const run=async()=>{let result;try{result={ok:true,data:await desktopRequest(request)};}catch(error){result={ok:false,error:error.message};}process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start})+'\n');};
+   const run=async()=>{try{return {ok:true,data:await desktopRequest(request)};}catch(error){return {ok:false,error:error.message};}};
    // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
    // Rendering and filesystem mutations retain their original serial order.
-   const task=control.has(request.action)?run():rendering.then(run);
-   if(!control.has(request.action))rendering=task.catch(()=>{});
+   const isPreview=['validate','editPreview'].includes(request.action);
+   const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
+   const execution=control.has(request.action)?run():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key});
+   const task=execution.then(result=>{if(result.superseded)result={ok:false,cancelled:true,superseded:true};process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start})+'\n');});
    inflight.add(task);task.finally(()=>inflight.delete(task));
   }
   await Promise.all(inflight);

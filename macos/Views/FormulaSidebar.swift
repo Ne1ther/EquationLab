@@ -30,10 +30,7 @@ struct FormulaSidebar: View {
                 Text(bridge.t("收藏")).tag(true)
             }.pickerStyle(.segmented).labelsHidden().padding(14)
             if !showingFavorites {
-                HStack(alignment: .top, spacing: 10) {
-                    OfficeProductLabel(bridge: bridge, wordOnly: true, showsTitle: false)
-                        .frame(width: 24, height: 24)
-                    VStack(alignment: .leading, spacing: 5) {
+                VStack(alignment: .leading, spacing: 5) {
                         Menu {
                             if bridge.state.openWordDocuments.isEmpty {
                                 Text(bridge.t(bridge.state.wordWorkspaceConnected ? "没有打开的 Word 文档" : "尚未连接 Word"))
@@ -61,14 +58,29 @@ struct FormulaSidebar: View {
                                 bridge.invoke("nativeRefreshWordDocumentList")
                             }
                         } label: {
-                            Text(bridge.state.documentName)
-                                .font(.headline.weight(.semibold))
-                                .lineLimit(2)
-                                .truncationMode(.middle)
-                                .frame(maxWidth: .infinity, minHeight: 24, alignment: .leading)
-                                .contentShape(Rectangle())
+                            HStack(alignment: .center, spacing: 10) {
+                                OfficeProductLabel(bridge: bridge, wordOnly: true, showsTitle: false)
+                                    .frame(width: 24, height: 24)
+                                Text(bridge.state.documentName)
+                                    .font(.headline.weight(.semibold))
+                                    .lineLimit(2)
+                                    .truncationMode(.middle)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                            }
+                            .padding(.trailing, 20)
+                            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .menuStyle(.borderlessButton)
+                        .menuIndicator(.hidden)
+                        .overlay(alignment: .trailing) {
+                            Image(systemName: "chevron.down")
+                                .font(.system(size: 11, weight: .semibold))
+                                .foregroundStyle(.secondary)
+                                .padding(.trailing, 4)
+                                .allowsHitTesting(false)
+                                .accessibilityHidden(true)
+                        }
                         .help(bridge.state.documentName)
                         .accessibilityLabel(bridge.t("切换 Word 文档"))
                         .accessibilityValue(bridge.state.documentName)
@@ -79,7 +91,6 @@ struct FormulaSidebar: View {
                                 .labelStyle(.titleAndIcon)
                                 .accessibilityLabel(bridge.t("文档连接已结束，草稿已保留。"))
                         }
-                    }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
@@ -159,8 +170,11 @@ struct FormulaSidebar: View {
                         .buttonStyle(.plain)
                         .disabled(selectionUnavailable)
                         .background {
+                            let thumbnailDocument = bridge.state.documentPath
                             FormulaThumbnailVisibility(key: "\(bridge.state.documentPath):\(item.id)", enabled: !showingFavorites && bridge.wordSessionActive && item.image == nil && !item.readOnly) {
-                                bridge.invoke("nativeRequestWordThumbnail", argument: item.id)
+                                thumbnailVisibility(item.id, document: thumbnailDocument, visible: true)
+                            } onHidden: {
+                                thumbnailVisibility(item.id, document: thumbnailDocument, visible: false)
                             }
                         }
                         .listRowBackground(!showingFavorites && bridge.state.selected == item.id ? Color.accentColor.opacity(0.16) : Color.clear)
@@ -218,5 +232,10 @@ struct FormulaSidebar: View {
             .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown).padding(.horizontal, 12)
             .modifier(WorkbenchFooter())
         }
+    }
+    private func thumbnailVisibility(_ index: Int, document: String, visible: Bool) {
+        guard let data = try? JSONSerialization.data(withJSONObject: ["index": index, "path": document, "visible": visible]),
+              let argument = String(data: data, encoding: .utf8) else { return }
+        bridge.invoke("nativeWordThumbnailVisibility", argument: argument)
     }
 }

@@ -1017,26 +1017,118 @@ Private Sub InsertPreparedFragment(ByVal tool As String)
     UpdateNumbers
 End Sub
 
+Private Function ReferenceDisplayText(ByVal value As String) As String
+    Dim i As Long
+    For i = 0 To 31
+        value = Replace(value, Chr$(i), " ")
+    Next
+    value = Replace(value, ChrW$(127), " ")
+    ReferenceDisplayText = Trim$(value)
+End Function
+
+Private Function ChooseReference(ByVal request As String) As String
+    Dim status As Long, unit As Long, i As Long, value As String
+    ELWriteUtf8 WorkDirectory() & "ribbon-reference-picker.txt", request
+    status = EquationLabNativeCommand("MathTypeBridgeReferencePicker")
+    On Error Resume Next
+    Kill WorkDirectory() & "ribbon-reference-picker.txt"
+    On Error GoTo 0
+    If status = 1 Then Exit Function
+    If status <> 0 Then Err.Raise vbObjectError + 7355, "Equation Lab", "The reference picker is unavailable or its target list is invalid. Update the Word component and restart Word."
+    For i = 1 To 41
+        unit = EquationLabNativeCommand("MathTypeBridgeReferencePickerNextChar")
+        If unit = 0 Then Exit For
+        If unit < 32 Or unit > 127 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Invalid reference picker response."
+        value = value & Chr$(unit)
+    Next
+    If i > 41 Or Len(value) = 0 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Invalid reference picker response."
+    ChooseReference = value
+End Function
+
 Private Sub InsertReference()
+    Static showing As Boolean
+    If showing Then Err.Raise vbObjectError + 7353, "Equation Lab", "A reference selection is already open."
     RequireDocument
     If Selection.Start <> Selection.End Then Err.Raise vbObjectError + 7353, "Equation Lab", "Place an empty cursor before inserting a reference."
-    Dim bookmark As Bookmark, list As String, answer As String, field As Field, names As Collection, index As Long
-    Set names = New Collection
-    For Each bookmark In ActiveDocument.Bookmarks
-        If Left$(bookmark.Name, 3) = "EL_" Then
-            names.Add bookmark.Name
-            list = list & CStr(names.Count) & ".  " & bookmark.Range.Text & vbCrLf
+    If EquationLabNativeCommand("MathTypeBridgeInsertionActive") <> 0 Or EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7353, "Equation Lab", "Finish or cancel the active equation before inserting a reference."
+    Dim Doc As Document, candidate As Document, target As Range, selectedNumber As Range, context As Range
+    Dim bookmark As Bookmark, list As String, answer As String, field As Field, i As Long, index As Long
+    Dim names As Collection, anchors As Collection, starts As Collection, ends As Collection, originalTexts As Collection
+    Dim originalStart As Long, originalEnd As Long, beforeLength As Long, title As String, nearby As String, isOpen As Boolean
+    Dim oldShowHidden As Boolean, visibilityChanged As Boolean, undoRecord As UndoRecord, customUndo As Boolean, changed As Boolean
+    Set Doc = Selection.Document
+    Set target = Selection.Range.Duplicate
+    originalStart = target.Start: originalEnd = target.End
+    If Doc.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7353, "Equation Lab", "This document is protected."
+    On Error GoTo Failed
+    showing = True
+    Set names = New Collection: Set anchors = New Collection
+    Set starts = New Collection: Set ends = New Collection: Set originalTexts = New Collection
+    oldShowHidden = Doc.Bookmarks.ShowHidden
+    Doc.Bookmarks.ShowHidden = True: visibilityChanged = True
+    For Each bookmark In Doc.Bookmarks
+        If Left$(bookmark.Name, 3) = "EL_" And bookmark.Range.StoryType = wdMainTextStory Then
+            If names.Count >= 2000 Then Err.Raise vbObjectError + 7353, "Equation Lab", "This document has too many reference targets for one selection."
+            Set selectedNumber = bookmark.Range.Duplicate
+            title = ReferenceDisplayText(selectedNumber.Text)
+            If Len(title) = 0 Or Len(title) > 128 Then Err.Raise vbObjectError + 7353, "Equation Lab", "An equation reference target has invalid number text."
+            Set context = selectedNumber.Paragraphs(1).Range.Duplicate
+            context.SetRange IIf(context.Start > 180, context.Start - 180, 0), selectedNumber.Start
+            nearby = ReferenceDisplayText(Right$(context.Text, 180))
+            names.Add bookmark.Name: anchors.Add selectedNumber
+            starts.Add selectedNumber.Start: ends.Add selectedNumber.End: originalTexts.Add selectedNumber.Text
+            list = list & CStr(names.Count) & vbTab & bookmark.Name & vbTab & title & vbTab & nearby & vbLf
         End If
     Next
-    If list = "" Then MsgBox "No Equation Lab numbers are available for reference.", vbInformation, "Equation Lab": Exit Sub
-    answer = InputBox(list & vbCrLf & "Enter the number of the reference target.", "Equation Lab", "1")
-    If answer = "" Then Exit Sub
-    If Not IsNumeric(answer) Then Exit Sub
-    If CDbl(answer) <> Fix(CDbl(answer)) Or CDbl(answer) < 1 Or CDbl(answer) > names.Count Then Exit Sub
-    answer = names(CLng(answer))
-    If Not ActiveDocument.Bookmarks.Exists(answer) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The Equation Lab reference target is unavailable."
-    Set field = ActiveDocument.Fields.Add(Range:=Selection.Range, Type:=wdFieldRef, Text:=answer & " \h", PreserveFormatting:=True)
+    Doc.Bookmarks.ShowHidden = oldShowHidden: visibilityChanged = False
+    If names.Count = 0 Then
+        MsgBox "No Equation Lab numbers are available for reference.", vbInformation, "Equation Lab"
+        GoTo Done
+    End If
+    answer = ChooseReference("ELREF1" & vbLf & CStr(names.Count) & vbLf & list)
+    If answer = "" Then GoTo Done
+    For i = 1 To names.Count
+        If StrComp(CStr(names(i)), answer, vbBinaryCompare) = 0 Then index = i: Exit For
+    Next
+    If index = 0 Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference was not in the captured target list."
+    For Each candidate In Application.Documents
+        If candidate Is Doc Then isOpen = True: Exit For
+    Next
+    If Not isOpen Then Err.Raise vbObjectError + 7354, "Equation Lab", "The original Word document has closed."
+    If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7354, "Equation Lab", "The original document is no longer writable."
+    If Not (Selection.Document Is Doc) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The active document changed; no reference was inserted."
+    If target.Start <> originalStart Or target.End <> originalEnd Or Selection.Start <> originalStart Or Selection.End <> originalEnd Or Selection.Range.StoryType <> wdMainTextStory Then Err.Raise vbObjectError + 7354, "Equation Lab", "The insertion cursor changed; no reference was inserted."
+    If Not Doc.Bookmarks.Exists(answer) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target has disappeared."
+    Set selectedNumber = Doc.Bookmarks(answer).Range.Duplicate
+    Set context = anchors(index)
+    If selectedNumber.StoryType <> wdMainTextStory Or selectedNumber.Start <> CLng(starts(index)) Or selectedNumber.End <> CLng(ends(index)) Or context.Start <> selectedNumber.Start Or context.End <> selectedNumber.End Or selectedNumber.Text <> CStr(originalTexts(index)) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target changed; no reference was inserted."
+    If target.Start >= selectedNumber.Start And target.Start < selectedNumber.End Then Err.Raise vbObjectError + 7354, "Equation Lab", "Place the cursor outside the target equation number."
+    Set undoRecord = Application.UndoRecord
+    If undoRecord.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7354, "Equation Lab", "Another Word edit is in progress."
+    beforeLength = Doc.Content.End
+    undoRecord.StartCustomRecord "Equation Lab equation reference": customUndo = True
+    Set field = Doc.Fields.Add(Range:=target, Type:=wdFieldRef, Text:=answer & " \h", PreserveFormatting:=True)
+    changed = True
     field.Update
+    NumberingChanged Doc
+    ELInvalidateDocumentSnapshot
+    undoRecord.EndCustomRecord: customUndo = False
+Done:
+    showing = False
+    Exit Sub
+Failed:
+    Dim failureNumber As Long, failureDescription As String
+    failureNumber = Err.Number: failureDescription = Err.Description
+    On Error Resume Next
+    If visibilityChanged Then Doc.Bookmarks.ShowHidden = oldShowHidden
+    If customUndo Then
+        undoRecord.EndCustomRecord
+        If changed Or Doc.Content.End <> beforeLength Then Doc.Undo
+    End If
+    Kill WorkDirectory() & "ribbon-reference-picker.txt"
+    showing = False
+    On Error GoTo 0
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 ' Shared by the Ribbon and Word's assignable macro commands.

@@ -17,6 +17,11 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         }
     }
     private let engine = EquationEngine()
+    var wordPluginDiagnosticInput: [String: Any] = [:]
+    @Published var copyingWordDiagnostics = false
+    @Published var showDocumentTools = false
+    @Published var documentToolKind = "audit"
+    @Published var documentToolResult: [String: Any] = [:]
     @Published var showLetterLibrary = false
     @Published var showFeatureLibrary = false
     @Published var showMatrixBuilder = false
@@ -316,6 +321,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         deliveringWordTicket = ticket
         wordOpenStarted = CFAbsoluteTimeGetCurrent()
         recordWindowEvent("word_delivery_begin", reason: "word-activation")
+        recordWordConnectionOperation(kind: "open", stage: "editor-launch", state: "not-observed", editorAccepted: false)
         let requestID = wordDocumentRequestIDs.removeValue(forKey: ticket)
         var arguments: [String: Any] = ["ticket": ticket]
         arguments["documentRequestId"] = requestID.map { $0 as Any } ?? NSNull()
@@ -333,6 +339,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
                 reveal = true
                 if let started = self.wordOpenStarted {
                     let elapsed = (CFAbsoluteTimeGetCurrent() - started) * 1000
+                    self.recordWordConnectionOperation(kind: "open", stage: "editor-accepted", state: "editing", elapsedMs: elapsed, editorAccepted: true)
                     EditorLifecycleLog.logger.info("word_editor_ready ms=\(elapsed, format: .fixed(precision: 1))")
                 }
             } else if case .failure(let error) = result {
@@ -479,11 +486,17 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if action == "workbenchState" {
             guard let payload = body["payload"] as? [String: Any] else { return }
             do { var next = state; try next.apply(payload); state = next }
-            catch { state.message = "工作台状态读取失败：\(error.localizedDescription)"; state.messageError = true }
+            catch { invoke("nativeResetSidebar"); state.message = "工作台状态读取失败：\(error.localizedDescription)"; state.messageError = true }
             return
         }
         guard let id = body["id"] as? String else { return }
         var payload = body["payload"] as? [String: Any] ?? [:]
+        if action == "documentToolsResult" {
+            documentToolKind = payload["kind"] as? String ?? "audit"
+            documentToolResult = payload["result"] as? [String: Any] ?? [:]
+            showDocumentTools = true
+            reply(id, ["ok": true, "data": [:]]); return
+        }
         if action == "state" {
             if updateWordSessionState(payload) { returnToWord(hideEditor: payload["wordSessionNavigating"] as? Bool != true) }
             reply(id, ["ok": true, "data": [:]]); return
@@ -527,7 +540,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             guard panel.runModal() == .OK, let url = panel.url else { reply(id, ["ok": false, "cancelled": true]); return }
             payload["output"] = url.path
         }
-        if action == "export" || action == "edit" || action == "arrange" {
+        if action == "export" || action == "edit" || action == "arrange" || action == "documentTypographyApply" || action == "documentNumberingApply" {
             let panel = NSSavePanel(); panel.allowedContentTypes = [UTType(filenameExtension: "docx")!]
             panel.nameFieldStringValue = language.usesEnglish ? (action == "export" ? "MathType equation.docx" : action == "arrange" ? "Equations arranged-copy.docx" : "Equations edited-copy.docx") : (action == "export" ? "MathType原生公式.docx" : action == "arrange" ? "公式已编排-副本.docx" : "公式已编辑-副本.docx")
             panel.message = t("保存含原生 MathType 对象的 Word 文档")
@@ -546,8 +559,14 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private func run(_ id: String, action: String, payload: [String: Any], copyPNG: Bool = false) {
         guard let root = Bundle.main.resourceURL?.appendingPathComponent("engine"),
               let node = bundledNodeURL() else { reply(id, ["ok": false, "error": "找不到本地公式引擎"]); return }
+        let operationStarted = CFAbsoluteTimeGetCurrent()
         engine.request(id: id, action: action, payload: payload, node: node, root: root) { [weak self] result in
             DispatchQueue.main.async {
+                if ["wordSessionInsert", "wordSessionSave", "wordSessionStatus", "wordSessionCancel"].contains(action), result["ok"] as? Bool == true {
+                    let data = result["data"] as? [String: Any] ?? [:]
+                    let receipt = data["state"] as? String ?? (action == "wordSessionCancel" ? "cancelled" : "queued")
+                    self?.recordWordConnectionOperation(kind: action == "wordSessionInsert" ? "insert" : action == "wordSessionCancel" ? "cancel" : "save", stage: action == "wordSessionStatus" ? "word-confirmation" : "save-request", state: receipt, elapsedMs: (CFAbsoluteTimeGetCurrent() - operationStarted) * 1000, receiptObserved: action == "wordSessionStatus")
+                }
                 if copyPNG, let data = result["data"] as? [String: Any], let png = data["png"] as? String, let bytes = Data(base64Encoded: png) {
                     NSPasteboard.general.clearContents(); NSPasteboard.general.setData(bytes, forType: .png)
                     self?.reply(id, ["ok": true, "data": ["copied": true]])

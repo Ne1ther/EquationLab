@@ -72,6 +72,7 @@ function request(operation,body){
  if(!body||typeof body!=='object'||Array.isArray(body))throw Error('Invalid native session request');
  body={...body};
  for(const key of ['document','target','layout','numbering'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
+ if(body.document?.insertionAfter&&typeof body.document.insertionAfter==='object')body.document.insertionAfter={...body.document.insertionAfter};
  if(body.numbering?.context&&typeof body.numbering.context==='object')body.numbering.context={...body.numbering.context};
  const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
@@ -183,20 +184,21 @@ async function stage(entry){
 
 async function documentContext(value,native,insertion=false){
  if(value===undefined)return null;
- if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['ooxml','encoding','index','name','identity','snapshot','count','scope','insertionAfter'].includes(k))||value.scope!==undefined&&value.scope!=='selection'||value.encoding!==undefined&&!['deflate-base64','docx-base64','parts-deflate-base64'].includes(value.encoding)||typeof value.ooxml!=='string'||value.ooxml.length>(value.encoding?4*Math.ceil(MAX_COMPRESSED_CONTEXT/3):30_000_000)||!Number.isInteger(value.index)||value.index<(insertion?-1:0)||value.index>10000||typeof value.name!=='string'||value.name.length>512||value.count!==undefined&&(!Number.isSafeInteger(value.count)||value.count<0||value.count>10000))throw Error('Invalid Word document context');
+ if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['ooxml','encoding','index','name','identity','snapshot','count','scope','insertionAfter'].includes(k))||value.scope!==undefined&&!['selection','insertion'].includes(value.scope)||value.encoding!==undefined&&!['deflate-base64','docx-base64','parts-deflate-base64'].includes(value.encoding)||typeof value.ooxml!=='string'||value.ooxml.length>(value.encoding?4*Math.ceil(MAX_COMPRESSED_CONTEXT/3):30_000_000)||!Number.isInteger(value.index)||value.index<(insertion?-1:0)||value.index>10000||typeof value.name!=='string'||value.name.length>512||value.count!==undefined&&(!Number.isSafeInteger(value.count)||value.count<0||value.count>10000))throw Error('Invalid Word document context');
  if(value.identity!==undefined&&(typeof value.identity!=='string'||!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value.identity)))throw Error('Invalid Word document identity');
  if(value.snapshot!==undefined&&!(Number.isSafeInteger(value.snapshot)&&value.snapshot>0)&&!(typeof value.snapshot==='string'&&/^[A-Za-z0-9][A-Za-z0-9._:-]{0,159}$/.test(value.snapshot)))throw Error('Invalid Word document snapshot');
- const partial=value.scope==='selection';
- if(partial&&(insertion||!value.identity||!value.snapshot||!value.count||value.index>=value.count))throw Error('Invalid partial Word document context');
+ const partial=value.scope!==undefined,insertionPartial=value.scope==='insertion';
+ if(partial&&(!value.identity||!value.snapshot||!Number.isSafeInteger(value.count)||insertionPartial!==insertion||(!insertionPartial&&(!value.count||value.index>=value.count))||insertionPartial&&value.index!==-1))throw Error('Invalid partial Word document context');
  const cached=await snapshot(value),selected=insertion&&value.index===-1?null:cached.objects[partial?0:value.index];
  if(value.insertionAfter!==undefined){
-  const target=value.insertionAfter,object=cached.objects[target?.index];
-  if(!insertion||!target||Object.keys(target).length!==2||!Number.isInteger(target.index)||target.index<0||!/^[a-f0-9]{64}$/.test(target.nativeSha256||'')||!object?.mainDocument||object.error||object.nativeSha256!==target.nativeSha256)throw Error('Word insertion anchor no longer matches the selected equation');
+  const target=value.insertionAfter,object=cached.objects[insertionPartial?0:target?.index];
+  if(!insertion||!target||Object.keys(target).length!==2||!Number.isInteger(target.index)||target.index<0||target.index>=(value.count??cached.count)||!/^[a-f0-9]{64}$/.test(target.nativeSha256||'')||!object?.mainDocument||object.error||object.nativeSha256!==target.nativeSha256)throw Error('Word insertion anchor no longer matches the selected equation');
  }
- if(partial?(cached.count!==1||cached.objects.length!==1):value.count!==undefined&&value.count!==cached.count)throw Error('Saved Word snapshot equation count does not match the live document');
+ const fragmentCount=insertionPartial?(value.insertionAfter?1:0):1;
+ if(partial?(cached.count!==fragmentCount||cached.objects.length!==fragmentCount):value.count!==undefined&&value.count!==cached.count)throw Error('Saved Word snapshot equation count does not match the live document');
  if(insertion){if(value.index!==-1)throw Error('Invalid insertion document index');}
  else if(!selected||selected.mainDocument!==true||selected.error||selected.nativeSha256!==createHash('sha256').update(native).digest('hex'))throw Error('Word document context does not match the activated equation');
- return {bytes:Buffer.from(cached.bytes),objects:cached.objects,index:partial?0:value.index,position:value.index,partial,loadState:partial?'pending':'available',name:value.name,count:partial?value.count:insertion?cached.objects.length:cached.count,identity:value.identity??null,snapshot:value.snapshot??null,path:null};
+ return {bytes:Buffer.from(cached.bytes),objects:cached.objects,index:partial&&!insertion?0:value.index,position:value.index,partial,scope:value.scope??null,loadState:partial?'pending':'available',name:value.name,count:partial?value.count:cached.count,identity:value.identity??null,snapshot:value.snapshot??null,insertionAfter:value.insertionAfter?{...value.insertionAfter}:null,path:null};
 }
 
 function insertionLayout(value){
@@ -216,7 +218,7 @@ function insertionLayout(value){
 // This status is deliberately limited to protocol state and counters. It has no
 // document title, path, formula bytes or ticket and can be retained in QA logs.
 function contextStatus(document){
- return document?{state:document.partial?'loading':'available',reason:document.partial?'selection-captured':document.identity?'captured':'legacy-capture',identity:document.identity,snapshot:document.snapshot,count:document.count,index:document.position}:{state:'missing',reason:'not-captured',identity:null,snapshot:null,count:0,index:null};
+ return document?{state:document.partial?'loading':'available',reason:document.partial?(document.scope==='insertion'?'insertion-captured':'selection-captured'):document.identity?'captured':'legacy-capture',identity:document.identity,snapshot:document.snapshot,count:document.count,index:document.position}:{state:'missing',reason:'not-captured',identity:null,snapshot:null,count:0,index:null};
 }
 function saveTarget(value,document){
  if(value===undefined)return null;
@@ -311,7 +313,11 @@ export async function nativeSessionOperation(path,body){
    if(!old?.partial||body.session!==entry.session||body.initialSnapshot!==old.snapshot)throw Error('Word document loading request is no longer current');
    if(body.failed===true&&body.document===undefined){old.loadState='failed';entry.documentRequested=false;return {ok:true};}
    if(body.failed!==undefined||!body.document||body.document.scope!==undefined||body.document.identity!==old.identity||body.document.index!==old.position||body.document.snapshot===old.snapshot)throw Error('Word document loading target does not match the editing session');
-   const full=await documentContext(body.document,entry.native);
+   if(entry.insertion){
+    const after=body.document.insertionAfter,previous=old.insertionAfter;
+    if(!!after!==!!previous||previous&&(after.index!==previous.index||after.nativeSha256!==previous.nativeSha256))throw Error('Word insertion loading anchor does not match the editing session');
+   }
+   const full=await documentContext(body.document,entry.native,entry.insertion);
    try{
     if(full.count!==old.count)throw Error('Word document changed while loading the formula list');
     await stage(entry);full.path=join(entry.directory,'document-full.docx');
@@ -323,7 +329,7 @@ export async function nativeSessionOperation(path,body){
   if(operation==='native-read'){
    const path=await stage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(entry.document),...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name,identity:entry.document.identity,snapshot:entry.document.snapshot,...entry.document.partial?{scope:'selection',position:entry.document.position,count:entry.document.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(entry.document),...entry.document?{document:{path:entry.document.path,index:entry.document.index,name:entry.document.name,identity:entry.document.identity,snapshot:entry.document.snapshot,...entry.document.partial?{scope:entry.document.scope,position:entry.document.position,count:entry.document.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
   }
   if(operation==='native-navigate'){
    if(entry.insertion||!entry.document||entry.document.partial||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');

@@ -37,6 +37,8 @@ swift build
 
 ## 验证与发布
 
+分阶段插入、文档编号与引用检查、批量样式、编号作用范围和连接诊断接口见[文档后端工具](document-tools.md)。
+
 ```sh
 npm test
 swift test
@@ -55,5 +57,7 @@ Word 回归覆盖插入、完整公式列表、切换、双击、编辑回存、
 ---
 
 Use the commands above to build and test. Local Word iteration deploys a user-writable App and user-scoped components; reserve Installer for the final installation check. Record the actual running build and component hashes, and check the system's foreground application for focus tests. Native/VBA changes also need compilation and validation inside Word before freezing release inputs.
+
+See [Document backend tools](document-tools.md) for document checks, batch copies, insertion loading, and connection diagnostics.
 
 Clean saved documents use a checked compact ZIP snapshot. Large unsaved documents open the exact equation first, then capture main-story ranges in separate Word callbacks, yielding between batches and deferring while Word receives recent user input. Joining the ranges preserves native data and numbering metadata while isolating relationship names. The source document is never saved, renamed or selected for this capture. Measure first-edit readiness, full-list completion and the longest callback separately; test draft retention, target save-back, cancellation and document closure in real Word.

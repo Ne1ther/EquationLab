@@ -7,14 +7,17 @@ struct FormulaThumbnailVisibility: NSViewRepresentable {
     let key: String
     let enabled: Bool
     let onVisible: () -> Void
+    let onHidden: () -> Void
 
     func makeNSView(context: Context) -> FormulaThumbnailVisibilityView { FormulaThumbnailVisibilityView() }
     func updateNSView(_ view: FormulaThumbnailVisibilityView, context: Context) {
-        if view.key != key { view.key = key; view.requested = false }
+        if view.key != key { view.release(); view.key = key }
         view.enabled = enabled
         view.onVisible = onVisible
+        view.onHidden = onHidden
         view.scheduleCheck()
     }
+    static func dismantleNSView(_ view: FormulaThumbnailVisibilityView, coordinator: ()) { view.release() }
 }
 
 final class FormulaThumbnailVisibilityView: NSView {
@@ -22,6 +25,7 @@ final class FormulaThumbnailVisibilityView: NSView {
     var enabled = false
     var requested = false
     var onVisible: (() -> Void)?
+    var onHidden: (() -> Void)?
     private weak var clip: NSClipView?
     private var observation: NSObjectProtocol?
     private var scheduled = false
@@ -53,10 +57,12 @@ final class FormulaThumbnailVisibilityView: NSView {
         }
     }
     private func checkVisibility() {
-        guard enabled, !requested, window?.isVisible == true, !isHiddenOrHasHiddenAncestor,
-              bounds.width > 0, bounds.height > 0, !visibleRect.isEmpty else { return }
+        guard enabled, window?.isVisible == true, !isHiddenOrHasHiddenAncestor,
+              bounds.width > 0, bounds.height > 0, !visibleRect.isEmpty else { release(); return }
+        guard !requested else { return }
         requested = true
         onVisible?()
     }
+    func release() { if requested { requested = false; onHidden?() } }
     deinit { if let observation { NotificationCenter.default.removeObserver(observation) } }
 }

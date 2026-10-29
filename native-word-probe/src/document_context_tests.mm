@@ -19,6 +19,10 @@ NSData* EquationLabClaimWordInsertion(std::int32_t*){return nil;}
 void EquationLabFinishWordInsertion(bool){}
 void EquationLabFinishWordInsertionUncertain(){}
 std::int32_t EquationLabWordInsertionError(){return 0;}
+std::int32_t EquationLabTakeInsertionDocumentRequest(){return 0;}
+std::int32_t EquationLabInsertionDocumentRequestToken(){return 0;}
+std::int32_t EquationLabFinishInsertionDocumentCapture(NSDictionary*){return -1;}
+void EquationLabFailInsertionDocumentCapture(){}
 namespace bridge_probe {
 void publishWordWorkspace(NSDictionary*,NSArray<NSDictionary*>*){}
 void closeWordWorkspaceIdentity(NSString*){}
@@ -72,6 +76,15 @@ int main(){@autoreleasepool{try{
     check(!decodeDocumentContext([partB stringByReplacingOccurrencesOfString:@"\n2\n7\n" withString:@"\n3\n7\n"]),"different document was mixed into range capture");
     check([decodeDocumentContext(partA)[@"partPending"] boolValue],"new range failed");clearDocumentParts();
     check(!decodeDocumentContext(partB),"cleared capture accepted a late range");
+    NSDictionary* insertionContext=decodeDocumentContext(@"ELINS1\n2\n93\n30\n25\nPartial.docx\n<anchor/>");
+    check([insertionContext[@"scope"] isEqual:@"insertion"]&&[insertionContext[@"index"] intValue]==-1&&[insertionContext[@"anchorIndex"] intValue]==25&&[insertionContext[@"count"] intValue]==30,"partial insertion lost its exact anchor or count");
+    check(decodeDocumentContext(@"ELINS1\n2\n94\n0\n-1\nEmpty.docx\n<empty/>")!=nil,"empty cursor fragment was rejected");
+    check(!decodeDocumentContext(@"ELINS1\n2\n94\n0\n0\nEmpty.docx\n<empty/>"),"out-of-range insertion anchor accepted");
+    check(!decodeDocumentContext(@"ELINS1\n2\n94\n30\n30\nBad.docx\n<anchor/>"),"insertion anchor past document count accepted");
+    check([decodeDocumentContext(@"ELIPART1\n94\n2\n95\n0\n0\n0\n1\nEmpty.docx\n<empty/>")[@"index"] intValue]==-1,"empty-document insertion enrichment was not decoded");
+    NSString* insertionPartA=[partA stringByReplacingOccurrencesOfString:@"ELPART1" withString:@"ELIPART1"];
+    check([decodeDocumentContext(insertionPartA)[@"partPending"] boolValue],"insertion range start failed");
+    check(!decodeDocumentContext(partB),"edit range was mixed into insertion enrichment");
     NSString* requestId=[@"a" stringByPaddingToLength:64 withString:@"a" startingAtIndex:0];
     NSDictionary* request=@{@"requestId":requestId};
     NSArray* requestFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n0\n\n0\n0\n\n",requestId] componentsSeparatedByString:@"\n"];

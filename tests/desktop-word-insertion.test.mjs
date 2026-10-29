@@ -124,6 +124,18 @@ test('Settings-only insertion drafts require confirmation before sidebar switchi
  }
 });
 
+test('partial insertion enrichment changes only document metadata and preserves the typed draft and its settings',async()=>{
+ const editor=createEditor(),c=editor.context;
+ const initial={...insertionDocument,wordTicket:ticket,objects:[],documentLoading:true,documentTotal:3,documentPosition:-1,typographyBaseline:'null'};
+ const full={...insertionDocument,wordTicket:ticket,documentSnapshot:'fresh',documentContext:{count:3},objects:documentObjects.map(o=>({...o,mainDocument:true}))};
+ c.source=initial;c.wordTicket=ticket;c.selected=null;c.mf.value='draft_x^2';c.editingRuler=[{position:320,type:0}];c.validationRunning=null;c.validationPending=false;c.formulaKey=()=>c.mf.value;
+ editor.setTypographyPatch({fullSize:15});editor.element('layout-format').value='(#C1.#E1)';
+ editor.setNativeBehavior(async action=>action==='wordSessionDocument'?{state:'available',document:full}:{});
+ await c.loadWordDocument(ticket,initial);
+ assert.equal(c.source,full);assert.equal(c.selected,null);assert.equal(c.mf.value,'draft_x^2');assert.equal(c.editingRuler[0].position,320);
+ assert.equal(c.window.desktopTypographyPatch().fullSize,15);assert.equal(editor.element('layout-format').value,'(#C1.#E1)');assert.equal(editor.historyResets.length,0);
+});
+
 test('App draft enters a document-bound insertion with text, typography and ruler retained',async()=>{
  const editor=createEditor(),c=editor.context,requestId='9'.repeat(64);
  const prior={...insertionDocument,insertion:false};c.window.wordDocumentWorkspace.accepted(prior);

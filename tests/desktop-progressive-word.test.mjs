@@ -22,13 +22,15 @@ test('A foreign or failed list preserves the partial owner and live draft',async
   await e.context.loadWordDocument(e.context.wordTicket,e.initial);assert.equal(e.context.source,e.initial);assert.equal(e.initial.documentLoadFailed,true);assert.equal(e.context.mf.value,'live draft');assert.equal(e.old.index,0);assert.equal(e.calls.length,0);
  }
 });
-test('A thesis renders only the opening viewport and explicit scroll demand, not every off-screen thumbnail',async()=>{
+test('A thesis renders the selected formula and live scroll demand, dropping pending off-screen thumbnails',async()=>{
  const source={objects:Array.from({length:112},(_,index)=>({index})),activeIndex:14,documentIdentity:'word:42',documentSnapshot:101},batches=[];
- const context=vm.createContext({window:{},source,wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordCommitRunning:null,validationRunning:null,validationPending:false,Set,Number,setTimeout:fn=>queueMicrotask(fn),requestWorkbenchSync(){},native:async(action,payload)=>{batches.push(payload);return {images:payload.indices.map(index=>({index,image:'image-'+index}))};}});
+ const context=vm.createContext({window:{},source,selected:source.objects[14],wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordCommitRunning:null,validationRunning:null,validationPending:false,Set,Number,setTimeout:fn=>queueMicrotask(fn),requestWorkbenchSync(){},native:async(action,payload)=>{batches.push(payload);return {images:payload.indices.map(index=>({index,image:'image-'+index}))};}});
  vm.runInContext(app.slice(app.indexOf('async function loadWordThumbnails('),app.indexOf('async function bindSelectedWordFormula(')),context);
  await context.loadWordThumbnails(context.wordTicket,source);
- assert.deepEqual(batches.flatMap(b=>Array.from(b.indices)),[14,0,1,2,3,4,5,6,7,8,9]);
- assert.equal(source.objects[80].image,undefined);assert.ok(batches.every(b=>b.indices.length<=2&&b.documentIdentity==='word:42'&&b.documentSnapshot===101));
+ assert.deepEqual(batches.flatMap(b=>Array.from(b.indices)),[14]);
+ assert.equal(source.objects[80].image,undefined);assert.ok(batches.every(b=>b.indices.length===1&&b.documentIdentity==='word:42'&&b.documentSnapshot===101));
  await context.loadWordThumbnails(context.wordTicket,source,[80]);assert.equal(source.objects[80].image,'image-80');
  const count=batches.length;await context.loadWordThumbnails(context.wordTicket,source,[80]);assert.equal(batches.length,count);
+ const loading=context.loadWordThumbnails(context.wordTicket,source,[70,81]);context.window.nativeReleaseWordThumbnail(70);await loading;
+ assert.equal(source.objects[70].image,undefined);assert.equal(source.objects[81].image,'image-81');
 });
