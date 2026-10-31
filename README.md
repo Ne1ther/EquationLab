@@ -11,6 +11,10 @@
 
 保存文档，退出 Word 和 Equation Lab，再双击安装包。装好后重开 Word，顶部就有 **Equation Lab**。双击公式进入独立编辑窗口，保存后回到原位置。
 
+[![48 秒常用功能演示](docs/preview/demo-0.6.11.jpg)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
+
+[看 48 秒演示](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)：用真实界面走一遍 Word 编辑、LaTeX、模板、字号、编号和文档切换。无声，带中文字幕。
+
 ## 能做什么
 
 - 选择 Word 文档，浏览、搜索、插入和编辑其中的 MathType 公式。

@@ -11,6 +11,10 @@ For Apple Silicon Macs running macOS 14 or later. The installer includes the app
 
 Save your documents, quit Word and Equation Lab, then open the installer. Reopen Word to find the **Equation Lab** ribbon. Double-click an equation to edit it in a separate window, then save it back in place.
 
+[![48-second feature walkthrough](docs/preview/demo-0.6.11.jpg)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
+
+[Watch the 48-second demo](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4): real app and Word screens showing editing, LaTeX, templates, font size, numbering, and document switching. Silent, with Chinese captions.
+
 ## What it does
 
 - Choose a Word document, then browse, search, insert, and edit its MathType equations.
