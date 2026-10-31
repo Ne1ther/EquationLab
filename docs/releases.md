@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.6.12 · build100
+
+这次调整了安装时的 Office 授权流程。如果 macOS 暂时不允许访问 Word 文件夹，先把 App 装好，再从 App 按提示授权、完成插件安装。App 内的“安装 / 更新 Word 插件”也支持首次安装，不用再打开一次系统安装器。
+
+安装和修复仍按原有记录核对 Word 组件，保留其他加载项。这个版本也包含 0.6.11 的中文组字保护、Word 自动启动和公式编辑修复。
+
+[下载 0.6.12](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.12)
+
+This release improves Office folder consent during installation. If macOS has not granted access to Word's folder, the app installs first and guides you through consent and plugin setup. Install / Update Word plugin now also handles first-time setup from the app, without opening macOS Installer again.
+
+Component ownership checks and other add-ins are preserved. The release includes the Chinese composition, Word startup and formula editing fixes from 0.6.11.
+
 ## 0.6.11 · build99
 
 中文输入是这次的重点。Word 正文、公式画布和 LaTeX 源码区会等组字完成后再同步，长拼音可以继续停留和选词。Word 的启动入口也重新整理，打开 Word 后自动连接公式组件。

@@ -1,12 +1,13 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.6.11（build99）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/Equation-Lab-0.6.11.pkg)**
+**[下载 Equation Lab 0.6.12（build100）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.12/Equation-Lab-0.6.12.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
-3. 重新打开 Word，新建或打开文档，点击顶部的 **Equation Lab**。
+3. 打开 Equation Lab；如果提示访问 Office 文件夹，按提示授权，再点击“安装 / 更新 Word 插件”。
+4. 重新打开 Word，新建或打开文档，点击顶部的 **Equation Lab**。
 
 ## 开始编辑
 
@@ -56,13 +57,14 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.6.11 (build99)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/Equation-Lab-0.6.11.pkg)**
+**[Download Equation Lab 0.6.12 (build100)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.12/Equation-Lab-0.6.12.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
 1. Save your documents and quit Word and Equation Lab.
 2. Open the package and follow the macOS Installer.
-3. Reopen Word, create or open a document, and choose the **Equation Lab** ribbon.
+3. Open Equation Lab. If prompted for Office folder access, grant it and choose **Install / Update Word plugin**.
+4. Reopen Word, create or open a document, and choose the **Equation Lab** ribbon.
 
 ## Start editing
 
