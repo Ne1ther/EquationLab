@@ -91,6 +91,8 @@ test('RPC insertion commits a one-equation DOCX fragment with the exact native a
  const fragment=await inspectDocx(Buffer.from(complete.body.docx,'base64'));
  assert.equal(fragment.objects.length,1);assert.equal(fragment.objects[0].mainDocument,true);assert.equal(fragment.objects[0].nativeSha256,hash(expectedNative));
  assert.deepEqual(fragment.objects[0].ruler,ruler);assert.equal(fragment.objects[0].layout.mode,'numbered-left');
+ assert.equal(fragment.objects[0].layout.numberingFamily,'mathtype','live insertion uses the same counter protocol as Windows MathType');
+ assert.doesNotMatch(await fragment.zip.file('word/document.xml').async('string'),/SEQ (?:EquationLab|ELChapter|ELSection)\b/);
  assert.equal(fragment.objects[0].layout.numberFormat,'[Ch #C1.S #S1.Eq #E1]');assert.equal(fragment.objects[0].layout.numberText,'[Ch 7.S 3.Eq 29]');
  const polled=await operation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
  assert.equal(polled.state,'complete');assert.equal(polled.native,complete.body.native);assert.equal(polled.docx,complete.body.docx);assert.match(Buffer.from(polled.pdf,'base64').subarray(0,9).toString(),/^%PDF-/);assert.ok(polled.width>0&&polled.height>0);

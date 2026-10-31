@@ -27,7 +27,7 @@ test('Custom matrix actions preserve dimensions, fences, partitions and equal-si
  const {context,insertions}=harness();
  await context.window.workbenchAction('matrixInsert',{rows:3,columns:7,environment:'bmatrix',alignment:'r',divider:true,equalColumns:true,equalRows:true});
  const latex=insertions[0].replaceAll('#?','x');
- assert.match(latex,/^\\mtmatrix\{130\}\{129\}\{4\}/);
+ assert.match(latex,/^\\mtmatrix\{130\}\{129\}\{1\}/);
  const result=await desktopRequest({action:'validate',payload:{latex}});assert.ok(result.svg.includes('<svg'));
  const dir=await mkdtemp(join(tmpdir(),'equationlab-matrix-action-'));
  try{await desktopRequest({action:'export',payload:{output:join(dir,'matrix.docx'),equations:[{latex}]}});

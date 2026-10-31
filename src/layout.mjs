@@ -4,6 +4,7 @@ import {DOMParser} from '@xmldom/xmldom';
 const W='http://schemas.openxmlformats.org/wordprocessingml/2006/main';
 const FORMATS={1:'ARABIC',A:'ALPHABETIC',a:'alphabetic',I:'ROMAN',i:'roman'};
 const SEQUENCES={E:'EquationLab',C:'ELChapter',S:'ELSection'};
+const MT_SEQUENCES={E:'MTEqn',C:'MTChap',S:'MTSec'};
 const issuedNames=new Set(),issuedIds=new Set();
 const esc=s=>String(s).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;').replaceAll("'",'&apos;');
 
@@ -79,29 +80,39 @@ export function previewNumberFormat(pattern,{chapter=1,section=1,equation=1}={})
  const values={C:int(chapter,'chapter'),S:int(section,'section'),E:int(equation,'equation')};
  return numberFormat(pattern).map(token=>token.literal??formatNumber(values[token.counter],token.format)).join('');
 }
-function numberRuns(tokens,values,{resetEquation=false}={}){
+function numberRuns(tokens,values,{resetEquation=false,numberingFamily='equationlab'}={}){
  const runs=[],text=[];
  for(const token of tokens){
-  if(token.literal!==undefined){runs.push(textRun(token.literal));text.push(token.literal);continue;}
+  if(token.literal!==undefined){const xml=textRun(token.literal);runs.push(numberingFamily==='mathtype'?xml.replace('<w:t ','<w:instrText ').replace('</w:t>','</w:instrText>'):xml);text.push(token.literal);continue;}
   const {counter,format}=token,cached=formatNumber(values[counter],format);
-  const command=counter==='E'?resetEquation?`\\r ${values.E}`:'\\n':'\\c';
-  runs.push(field(`SEQ ${SEQUENCES[counter]} ${command} \\* ${FORMATS[format]}`,cached));text.push(cached);
+  const command=counter==='E'&&numberingFamily==='equationlab'?resetEquation?`\\r ${values.E}`:'\\n':'\\c';
+  const xml=field(`SEQ ${(numberingFamily==='mathtype'?MT_SEQUENCES:SEQUENCES)[counter]} ${command} \\* ${FORMATS[format]}`,cached);
+  runs.push(numberingFamily==='mathtype'?xml.replaceAll('<w:t ','<w:instrText ').replaceAll('</w:t>','</w:instrText>'):xml);text.push(cached);
  }
  return {xml:runs.join(''),text:text.join('')};
 }
-function anchor(options){
+function anchor(options,numberingFamily='equationlab'){
  const existing=registry(options.existingBookmarks,'existingBookmarks'),existingIds=registry(options.existingBookmarkIds,'existingBookmarkIds');
  const nameExists=name=>existing&&[...existing].some(value=>typeof value==='string'&&value.toLowerCase()===name.toLowerCase());
  const idExists=id=>existingIds&&[...existingIds].some(value=>String(value)===String(id));
  let name=options.bookmarkName;
  if(name!==undefined){validBookmark(name);if(nameExists(name))throw Error(`Bookmark ${name} already exists`);}
- else {do{name='EL_'+randomUUID().replaceAll('-','');}while(issuedNames.has(name.toLowerCase())||nameExists(name));}
+ else {do{name=numberingFamily==='mathtype'?'ZEqnNum'+(100000+randomBytes(4).readUInt32LE(0)%900000):'EL_'+randomUUID().replaceAll('-','');}while(issuedNames.has(name.toLowerCase())||nameExists(name));}
  let id=options.bookmarkId;
  if(id!==undefined){int(id,'bookmarkId',0,2147483647);if(idExists(id))throw Error(`Bookmark id ${id} already exists`);}
  else {do{id=randomBytes(4).readUInt32BE(0)&0x7fffffff;}while(issuedIds.has(id)||idExists(id));}
  return {name,id,commit(){issuedNames.add(name.toLowerCase());issuedIds.add(id);existing?.add(name);existingIds?.add(id);}};
 }
-const LAYOUT_OPTIONS=new Set(['mode','numberFormat','equation','chapter','section','bookmarkName','bookmarkId','widthTwips','style','resetEquation','existingBookmarks','existingBookmarkIds']);
+const LAYOUT_OPTIONS=new Set(['mode','numberFormat','equation','chapter','section','bookmarkName','bookmarkId','widthTwips','style','resetEquation','numberingFamily','existingBookmarks','existingBookmarkIds']);
+
+function checkedFamily(value){if(!['equationlab','mathtype'].includes(value))throw Error('Invalid numbering family');return value;}
+function macroButton(name,contents){return `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> MACROBUTTON ${name} </w:instrText></w:r>${contents}<w:r><w:fldChar w:fldCharType="end"/></w:r>`;}
+function markedNumber(a,tokens,values,options){
+ const number=numberRuns(tokens,values,options),marked=`<w:bookmarkStart w:id="${a.id}" w:name="${a.name}"/>${number.xml}<w:bookmarkEnd w:id="${a.id}"/>`;
+ if(options.numberingFamily!=='mathtype')return {...number,xml:marked};
+ const increment=field(`SEQ MTEqn ${options.resetEquation?`\\r ${values.E}`:'\\n'} \\h`,'',{hidden:true});
+ return {...number,xml:macroButton('MTPlaceRef',increment+marked)};
+}
 
 /** Return a complete paragraph containing the original native equation run.
  * mode: inline | display | numbered-right | numbered-left.
@@ -113,7 +124,8 @@ const LAYOUT_OPTIONS=new Set(['mode','numberFormat','equation','chapter','sectio
  */
 export function equationLayout(runXml,options={}){
  optionsObject(options,LAYOUT_OPTIONS);validateRuns(runXml);
- const {mode='inline',numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1,widthTwips=9026,style='EquationLab',resetEquation=false}=options;
+ const {mode='inline',numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1,widthTwips=9026,style='EquationLab',resetEquation=false,numberingFamily='equationlab'}=options;
+ checkedFamily(numberingFamily);
  if(!['inline','display','numbered-right','numbered-left'].includes(mode))throw Error('Invalid equation layout mode');
  int(equation,'equation');int(chapter,'chapter');int(section,'section');int(widthTwips,'widthTwips',1440,31680);boolean(resetEquation,'resetEquation');
  if(typeof style!=='string'||!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(style))throw Error('Invalid paragraph style id');
@@ -124,40 +136,41 @@ export function equationLayout(runXml,options={}){
  const tabs=numbered?`<w:tabs><w:tab w:val="center" w:pos="${center}"/><w:tab w:val="right" w:pos="${widthTwips}"/></w:tabs>`:'';
  const props=`<w:pPr><w:pStyle w:val="${esc(style)}"/><w:keepNext w:val="0"/><w:keepLines/>${tabs}<w:spacing w:before="${spaced?120:0}" w:after="${spaced?120:0}"/><w:jc w:val="${mode==='display'?'center':'left'}"/></w:pPr>`;
  if(!numbered)return {xml:`<w:p>${props}${runXml}</w:p>`,bookmarkName:null,bookmarkId:null,numberText:null};
- const a=anchor(options),number=numberRuns(tokens,{E:equation,C:chapter,S:section},{resetEquation});
- const marked=`<w:bookmarkStart w:id="${a.id}" w:name="${a.name}"/>${number.xml}<w:bookmarkEnd w:id="${a.id}"/>`,tab='<w:r><w:tab/></w:r>';
- const contents=mode==='numbered-right'?tab+runXml+tab+marked:marked+tab+runXml;
+ const a=anchor(options,numberingFamily),number=markedNumber(a,tokens,{E:equation,C:chapter,S:section},{resetEquation,numberingFamily}),tab='<w:r><w:tab/></w:r>';
+ const contents=mode==='numbered-right'?tab+runXml+tab+number.xml:number.xml+tab+runXml;
  const xml=`<w:p>${props}${contents}</w:p>`;a.commit();
  return {xml,bookmarkName:a.name,bookmarkId:a.id,numberText:number.text};
 }
 
-/** Inline REF field with a real hyperlink switch. The prefix stays outside the
- * field so updates never replace user-facing prose such as "式 " or "Eq. ". */
+/** Repeat the saved target result without re-evaluating its nested counters at
+ * the reference position. The prefix stays outside the hyperlink field. */
 export function equationReference(bookmarkName,options={}){
  optionsObject(options,new Set(['cachedText','prefix']));validBookmark(bookmarkName);
  const {cachedText='(?)',prefix=''}=options;plainText(cachedText,'cached reference text');plainText(prefix,'reference prefix');
- return (prefix?textRun(prefix):'')+field(`REF ${bookmarkName} \\h`,cachedText);
+ return (prefix?textRun(prefix):'')+field(`REF ${bookmarkName} \\h \\!`,cachedText);
 }
 
 /** A real, independently referenceable Equation Lab number, without an OLE. */
 export function standaloneNumber(options={}){
- optionsObject(options,new Set(['numberFormat','equation','chapter','section','bookmarkName','bookmarkId','existingBookmarks','existingBookmarkIds']));
- const {numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1}=options;
+ optionsObject(options,new Set(['numberFormat','equation','chapter','section','bookmarkName','bookmarkId','numberingFamily','existingBookmarks','existingBookmarkIds']));
+ const {numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1,numberingFamily='equationlab'}=options;checkedFamily(numberingFamily);
  int(equation,'equation');int(chapter,'chapter');int(section,'section');
- const tokens=numberFormat(pattern),number=numberRuns(tokens,{E:equation,C:chapter,S:section}),a=anchor(options);
- const xml=`<w:p><w:pPr><w:pStyle w:val="EquationLab"/><w:jc w:val="right"/></w:pPr><w:bookmarkStart w:id="${a.id}" w:name="${a.name}"/>${number.xml}<w:bookmarkEnd w:id="${a.id}"/></w:p>`;a.commit();
+ const tokens=numberFormat(pattern),a=anchor(options,numberingFamily),number=markedNumber(a,tokens,{E:equation,C:chapter,S:section},{numberingFamily});
+ const xml=`<w:p><w:pPr><w:pStyle w:val="EquationLab"/><w:jc w:val="right"/></w:pPr>${number.xml}</w:p>`;a.commit();
  return {xml,bookmarkName:a.name,bookmarkId:a.id,numberText:number.text};
 }
 
-/** Hidden chapter/section context marker, not a page or section-layout break.
+/** Chapter/section context marker with hidden fields and a real paragraph end.
+ * The 1-point paragraph mark stays visible to Word so deleting the next formula
+ * cannot merge into this marker and remove its reset fields.
  * Place before the first numbered equation and wherever context changes. Reset
  * to zero here makes the following ordinary SEQ EquationLab field display one.
  * Hidden SEQ fields have no \* format switch, which would cancel SEQ's \h.
  */
 export function chapterBreak(options={}){
- optionsObject(options,new Set(['chapter','section','resetEquation']));
- const {chapter=1,section=1,resetEquation=true}=options;int(chapter,'chapter');int(section,'section');boolean(resetEquation,'resetEquation');
+ optionsObject(options,new Set(['chapter','section','resetEquation','numberingFamily']));
+ const {chapter=1,section=1,resetEquation=true,numberingFamily='equationlab'}=options;int(chapter,'chapter');int(section,'section');boolean(resetEquation,'resetEquation');checkedFamily(numberingFamily);
  const hidden={hidden:true};
- const fields=field(`SEQ ELChapter \\r ${chapter} \\h`,String(chapter),hidden)+field(`SEQ ELSection \\r ${section} \\h`,String(section),hidden)+(resetEquation?field('SEQ EquationLab \\r 0 \\h','0',hidden):'');
- return `<w:p><w:pPr><w:keepNext w:val="0"/><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/><w:rPr><w:vanish/><w:sz w:val="2"/><w:specVanish/></w:rPr></w:pPr>${fields}</w:p>`;
+ const sequences=numberingFamily==='mathtype'?MT_SEQUENCES:SEQUENCES,fields=field(`SEQ ${sequences.C} \\r ${chapter} \\h`,String(chapter),hidden)+field(`SEQ ${sequences.S} \\r ${section} \\h`,String(section),hidden)+(resetEquation?field(`SEQ ${sequences.E} \\r 0 \\h`,'0',hidden):'');
+ return `<w:p><w:pPr><w:keepNext w:val="0"/><w:keepLines/><w:spacing w:before="0" w:after="0" w:line="1" w:lineRule="exact"/><w:rPr><w:vanish w:val="0"/><w:sz w:val="2"/><w:specVanish w:val="0"/></w:rPr></w:pPr>${numberingFamily==='mathtype'?macroButton('MTEditEquationSection2',fields):fields}</w:p>`;
 }

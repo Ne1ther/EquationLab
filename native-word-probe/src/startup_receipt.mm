@@ -50,22 +50,23 @@ NSDate* parseDate(NSString* value){
     NSISO8601DateFormatter* formatter=[NSISO8601DateFormatter new];formatter.formatOptions=NSISO8601DateFormatWithInternetDateTime|NSISO8601DateFormatWithFractionalSeconds;
     NSDate* result=[formatter dateFromString:value];if(!result){formatter.formatOptions=NSISO8601DateFormatWithInternetDateTime;result=[formatter dateFromString:value];}return result;
 }
-bool atomicReceipt(int startup,NSData* data){
+bool atomicReceipt(int startup,NSData* data,bool automatic){
     if(mkdirat(startup,".EquationLab",0700)&&errno!=EEXIST)return false;
     Descriptor directory(openat(startup,".EquationLab",O_RDONLY|O_DIRECTORY|O_CLOEXEC|O_NOFOLLOW));struct stat st{};
     if(directory.value<0||fstat(directory.value,&st)||!S_ISDIR(st.st_mode)||st.st_uid!=geteuid())return false;
     if(fchmod(directory.value,0700))return false;
-    if(fstatat(directory.value,"native-startup-receipt.json",&st,AT_SYMLINK_NOFOLLOW)==0&&!S_ISREG(st.st_mode))return false;
-    NSString* temporary=[NSString stringWithFormat:@".native-startup-receipt.%@.tmp",NSUUID.UUID.UUIDString];
+    const char* name=automatic?"native-startup-receipt.json":"native-connection-receipt.json";
+    if(fstatat(directory.value,name,&st,AT_SYMLINK_NOFOLLOW)==0&&!S_ISREG(st.st_mode))return false;
+    NSString* temporary=[NSString stringWithFormat:@".native-%@-receipt.%@.tmp",automatic?@"startup":@"connection",NSUUID.UUID.UUIDString];
     Descriptor file(openat(directory.value,temporary.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600));if(file.value<0)return false;
     bool success=fchmod(file.value,0600)==0;auto* bytes=static_cast<const unsigned char*>(data.bytes);std::size_t at=0;
     while(success&&at<data.length){auto n=write(file.value,bytes+at,data.length-at);if(n<0&&errno==EINTR)continue;if(n<=0){success=false;break;}at+=static_cast<std::size_t>(n);}
     if(success)success=fsync(file.value)==0;
-    if(success)success=renameat(directory.value,temporary.fileSystemRepresentation,directory.value,"native-startup-receipt.json")==0;
+    if(success)success=renameat(directory.value,temporary.fileSystemRepresentation,directory.value,name)==0;
     if(!success)unlinkat(directory.value,temporary.fileSystemRepresentation,0);
     return success;
 }
-std::int32_t writeForEnvironment(const Environment& env){
+std::int32_t writeForEnvironment(const Environment& env,bool automatic=true){
     if(!env.wordHost)return WrongHost;if(!env.mainThread)return WrongThread;if(env.registrationState!=1)return NotRegistered;
     if(!text(env.helperExecutable,4096)||env.wordPID<=0||!text(env.wordVersion,64)||!env.now)return InvalidEnvironment;
     NSURL* executable=[[NSURL fileURLWithPath:env.helperExecutable] URLByResolvingSymlinksInPath];
@@ -85,19 +86,23 @@ std::int32_t writeForEnvironment(const Environment& env){
     NSString* binaryHash=macOSFD.value>=0?sha256(boundedFile(macOSFD.value,"MathTypeBridgeProbe",64*1024*1024)):nil;
     if(!templateHash||![templateHash isEqual:context[@"templateSha256"]]||!binaryHash)return ArtifactMismatch;
     NSISO8601DateFormatter* formatter=[NSISO8601DateFormatter new];formatter.formatOptions=NSISO8601DateFormatWithInternetDateTime|NSISO8601DateFormatWithFractionalSeconds;
-    NSDictionary* receipt=@{@"schema":@"equationlab.word-native-startup-receipt.v1",@"entryPoint":@"AutoExec",@"installId":context[@"installId"],@"templateBuildId":context[@"templateBuildId"],@"helperVersion":info[@"CFBundleShortVersionString"],@"templateSha256":templateHash,@"helperPath":executable.path,@"helperSha256":binaryHash,@"wordPID":@(env.wordPID),@"wordVersion":env.wordVersion,@"registrationResult":@0,@"registrationState":@1,@"registeredCLSIDs":@[@"0002CE03-0000-0000-C000-000000000046",@"0002CE03-0000-0000-C000-000000000056"],@"timestamp":[formatter stringFromDate:env.now]};
+    NSDictionary* receipt=@{@"schema":@"equationlab.word-native-startup-receipt.v1",@"entryPoint":automatic?@"AutoExec":@"LazyConnect",@"installId":context[@"installId"],@"templateBuildId":context[@"templateBuildId"],@"helperVersion":info[@"CFBundleShortVersionString"],@"templateSha256":templateHash,@"helperPath":executable.path,@"helperSha256":binaryHash,@"wordPID":@(env.wordPID),@"wordVersion":env.wordVersion,@"registrationResult":@0,@"registrationState":@1,@"registeredCLSIDs":@[@"0002CE03-0000-0000-C000-000000000046",@"0002CE03-0000-0000-C000-000000000056"],@"timestamp":[formatter stringFromDate:env.now]};
     NSData* data=[NSJSONSerialization dataWithJSONObject:receipt options:NSJSONWritingSortedKeys error:nullptr];
-    return data&&atomicReceipt(startupFD.value,data)?0:WriteFailure;
+    return data&&atomicReceipt(startupFD.value,data,automatic)?0:WriteFailure;
 }
 bool inWord(){std::uint32_t n=0;_NSGetExecutablePath(nullptr,&n);std::vector<char> path(n+1);return _NSGetExecutablePath(path.data(),&n)==0&&std::string(path.data()).ends_with("/Contents/MacOS/Microsoft Word");}
 }
 
-extern "C" __attribute__((visibility("default")))
-std::int32_t MathTypeBridgeWriteStartupReceipt(){@autoreleasepool{
+static std::int32_t writeCurrentReceipt(bool automatic){@autoreleasepool{
     if(!startup_receipt::inWord())return startup_receipt::WrongHost;
     if(!NSThread.isMainThread)return startup_receipt::WrongThread;
     const auto state=MathTypeBridgeMathTypeRegistrationState();if(state!=1)return startup_receipt::NotRegistered;
     Dl_info image{};if(!dladdr(reinterpret_cast<void*>(&MathTypeBridgeWriteStartupReceipt),&image)||!image.dli_fname)return startup_receipt::InvalidEnvironment;
     NSString* path=[NSString stringWithUTF8String:image.dli_fname];
-    return startup_receipt::writeForEnvironment({true,true,state,path,static_cast<std::int32_t>(getpid()),[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],NSDate.date});
+    return startup_receipt::writeForEnvironment({true,true,state,path,static_cast<std::int32_t>(getpid()),[NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"],NSDate.date},automatic);
 }}
+
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeWriteStartupReceipt(){return writeCurrentReceipt(true);}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeWriteConnectionReceipt(){return writeCurrentReceipt(false);}

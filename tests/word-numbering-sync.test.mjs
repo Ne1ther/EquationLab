@@ -75,7 +75,18 @@ test('Word numbering dialogs use English native controls while the app keeps loc
  assert.match(prompt,/addButtonWithTitle:@"OK"/);assert.match(prompt,/addButtonWithTitle:@"Cancel"/);assert.match(prompt,/systemFontOfSize/);
  const vba=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
  const numbering=vba.slice(vba.indexOf('Private Function PromptNumberingSettings'),vba.indexOf('Private Sub EncodeTextUtf8'));
- assert.doesNotMatch(numbering,/InputBox\(/);assert.match(numbering,/SavePreferenceForDocument Doc, "EquationLabNumberFormat"/);
+ assert.doesNotMatch(numbering,/InputBox\(/);assert.match(numbering,/SaveSharedNumberFormat Doc/);
+ const shared=vba.slice(vba.indexOf('Private Sub SaveSharedNumberFormat'),vba.indexOf('Private Function SharedContextXML'));
+ assert.match(shared,/SavePreferenceForDocument Doc, "EquationLabNumberFormat", pattern/);assert.match(shared,/CustomDocumentProperties\("MTEquationNumber2"\)\.Value = pattern/);
+});
+
+test('a numbered insertion recalculates the owning document even when MathType wraps its SEQs inside macrobutton code',async()=>{
+ const vba=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const update=vba.slice(vba.indexOf('Private Function ELTryUpdateInsertedNumbers'),vba.indexOf('End Function',vba.indexOf('Private Function ELTryUpdateInsertedNumbers')));
+ const shared=update.slice(update.indexOf('If numberFormat <> "" Then'),update.indexOf('    Else'));
+ assert.match(shared,/ELUpdateNumbersForDocument Doc/);assert.doesNotMatch(shared,/For Each field/);
+ assert.ok(update.indexOf('ELUpdateNumbersForDocument Doc')<update.indexOf('ELAdoptInsertedNumberFormat Doc, numberFormat'));
+ assert.doesNotMatch(update,/ActiveDocument|Selection|\.Select/);
 });
 
 test('the first chapter-numbered insertion establishes real counters even when the preview values were unchanged',async()=>{

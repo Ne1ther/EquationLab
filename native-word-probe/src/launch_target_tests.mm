@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 
-namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; BOOL emulateDeferredReopen=NO; NSString* reopenedDocumentIdentity=@"process:77"; }
+namespace { NSDictionary* fixtureDocumentContext; BOOL fixtureSelectionPending=NO; NSDictionary* fixtureActivationAnchor; NSDictionary* fixturePreCapturedActivation; BOOL emulateDeferredReopen=NO; NSString* reopenedDocumentIdentity=@"process:77"; std::uint64_t fixtureLiveOwner=0; }
 void EquationLabDiscardDocumentParts(){}
 // This launcher fixture owns edit sessions only. The document request manager
 // also checks insertion ownership; insertion lifecycle has its own runner.
@@ -29,7 +29,7 @@ void setEditorHooks(OpenEditor,void*){}
 void setEditorCancelHook(CancelEditor){}
 void setEditorOwnerForgetHook(ForgetEditorOwner){}
 void setEditorOwnerWrittenHook(EditorOwnerWritten){}
-std::uint64_t editObjectIdentity(std::uint64_t){return 0;}
+std::uint64_t editObjectIdentity(std::uint64_t){return fixtureLiveOwner;}
 bool bindEditDocument(std::uint64_t,const char*){return true;}
 std::int32_t diagnosticValue(std::uint32_t){return 0;}
 HResult completeEdit(std::uint64_t session,const std::uint8_t*,std::size_t,bool,bool reopen){
@@ -93,6 +93,12 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
     if([path isEqual:@"/api/native-open"])self.submittedBody=body;
     return nil;
 }
+@end
+
+@interface RetainedOwnerTestTransport : ServiceBodyTestTransport
+@end
+@implementation RetainedOwnerTestTransport
+- (BOOL)canEditRetainedOwner:(ProbeEditState*)state {return retainedOwnerEditingAllowed(true,state.ownerIdentity,bridge_probe::editObjectIdentity(state.sessionId),state.documentRequestId);}
 @end
 
 @interface NumberingReceiptTestTransport : ProbeEditorTransport
@@ -436,6 +442,25 @@ void runPreCapturedActivationCases(){
     check(MathTypeBridgeCaptureWatch()==0,"finished sidebar save kept the callback alive");
     transport=savedTransport;
 }
+void runRetainedOwnerCases(){
+    check(retainedOwnerEditingAllowed(true,42,42,nil),"direct live Word owner was not eligible");
+    check(!retainedOwnerEditingAllowed(false,42,42,nil)&&!retainedOwnerEditingAllowed(true,0,0,nil)&&!retainedOwnerEditingAllowed(true,42,43,nil)&&!retainedOwnerEditingAllowed(true,42,42,@"request"),"foreign/closed/targeted owner acquired direct editing");
+    ProbeEditorTransport* savedTransport=transport;RetainedOwnerTestTransport* client=[RetainedOwnerTestTransport new];transport=client;client.numberingSupportRegistered=YES;client.numberingContextSupportRegistered=YES;
+    std::uint8_t bytes[29]={28};bytes[8]=1;NSData* native=[NSData dataWithBytes:bytes length:sizeof(bytes)];
+    fixtureLiveOwner=42;
+    auto state=[&](std::uint64_t id){ProbeEditState* s=[ProbeEditState new];s.sessionId=id;s.ownerIdentity=42;s.openNative=native;s.activation=++client.activation;s.documentContext=@{@"identity":@"untrusted:1",@"snapshot":@1,@"index":@9};s.bindingContext=s.documentContext;s.activationBinding=s.documentContext;s.preCapturedActivation=YES;s.awaitingDocument=YES;client.edits[@(id)]=s;return s;};
+    ProbeEditState* direct=state(88001);[client captureFailed:direct];
+    check(direct.retainedOwnerOnly&&!direct.awaitingDocument&&!direct.documentContext&&!direct.bindingContext&&!direct.activationBinding,"failed metadata survived in direct OLE editing");
+    check(client.submittedBody[@"native"]&&!client.submittedBody[@"document"]&&!client.submittedBody[@"numberingSupport"]&&!client.submittedBody[@"numberingContextSupport"],"owner-only request retained document-wide write capabilities");
+    check(![client openRetainedOwner:direct],"owner-only fallback repeated");[client cleanup:direct.sessionId];client.submittedBody=nil;
+    ProbeEditState* targeted=state(88002);targeted.documentRequestId=@"explicit-document-request";[client captureFailed:targeted];
+    check(!client.submittedBody&&![client active:targeted],"targeted document request bypassed identity validation");
+    ProbeEditState* closed=state(88003);fixtureLiveOwner=0;[client captureFailed:closed];
+    check(!client.submittedBody&&![client active:closed],"closed OLE owner was reopened");
+    fixtureLiveOwner=42;ProbeEditState* stale=state(88004);++client.activation;
+    check(![client openRetainedOwner:stale]&&!client.submittedBody,"superseded activation opened old owner");[client cleanup:stale.sessionId];
+    fixtureLiveOwner=0;transport=savedTransport;
+}
 void runSelectionSnapshotCases(){
     ProbeEditorTransport* savedTransport=transport;CaptureTestTransport* client=[CaptureTestTransport new];transport=client;
     auto makePending=[&](std::uint64_t id){ProbeEditState* state=[ProbeEditState new];state.sessionId=id;state.ownerIdentity=id;state.openDigest=@"selection-native-sha";state.activation=++client.activation;state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:2];client.edits[@(id)]=state;return state;};
@@ -516,6 +541,7 @@ int main(){@autoreleasepool{
         runDocumentCacheCases();
         runCaptureRequestCases();
         runPreCapturedActivationCases();
+        runRetainedOwnerCases();
         runSelectionSnapshotCases();
         EnrichmentTestTransport* enrichment=[EnrichmentTestTransport new];ProbeEditState* partial=[ProbeEditState new];
         partial.sessionId=99001;partial.ownerIdentity=77;partial.openDigest=@"native-sha";partial.ticket=[@"d" stringByPaddingToLength:64 withString:@"d" startingAtIndex:0];

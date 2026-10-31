@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.10 安装包（build98）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.10/Equation-Lab-0.6.10.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.11 安装包（build99）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/Equation-Lab-0.6.11.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -26,6 +26,8 @@
 在右侧 **文档 → Word 编排** 调整编号格式、章和节，再点“更新公式”应用到当前公式，并作为后续新增编号的默认设置。要集中整理已有编号，打开 **文档检查与批量处理**，选择当前公式、全部已有编号或仅后续新增公式，预览后保存副本。旧 MathType 公式的编号在 Word 功能区中调整；“更新编号”会重算公式序号和交叉引用。
 
 同一面板还能搜索编号和引用、查看断开的引用，并把当前公式的字体、字号和间距应用到文档副本。副本工具会列出修改结果；保存后在 Word 中打开新文件，更新编号与引用即可继续编辑。[查看文档工具用法](docs/document-tools.md)
+
+Word 正文与公式编辑区会等中文组字完成后再同步预览。手动输入公式时，可以查看当前结构位置并调整求和上下标的位置。
 
 默认每天检查一次更新，有新版时会在工具栏显示更新按钮。也可在 **Equation Lab → 检查更新…** 中手动检查、设置自动下载。连接遇到问题时，可在 **Office 插件**面板检查状态并复制连接诊断。
 

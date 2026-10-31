@@ -28,10 +28,10 @@ Private mPhase As String
 Public Sub ELConnectNativeAtStartup()
     If mAttempted Then Exit Sub
     mAttempted = True
-    ConnectDynamicBridge
+    ConnectDynamicBridge True
 End Sub
 
-Private Sub ConnectDynamicBridge()
+Private Sub ConnectDynamicBridge(Optional ByVal fromAutoExec As Boolean = False)
     On Error GoTo Failed
     mConnected = False
     mBindingError = 0
@@ -41,6 +41,7 @@ Private Sub ConnectDynamicBridge()
     Dim libraryPath As String
     Dim bytes() As Byte
     Dim receiptFunction As LongPtr
+    Dim receiptName As String
     mPhase = "startup-path"
     startup = Options.DefaultFilePath(wdStartupPath)
     ' Current target is modern Word with POSIX Startup paths. An unknown HFS
@@ -72,10 +73,15 @@ Private Sub ConnectDynamicBridge()
         If mNativeResult = 0 Then mConnected = (CallOwnInt32("MathTypeBridgeMathTypeRegistrationState") = 1)
     End If
     If mConnected Then
-        mPhase = "startup-receipt"
-        ' Optional stable zero-argument ABI for the upcoming native receipt
-        ' implementation. A missing receipt never proves installer verification.
-        receiptFunction = FindSymbol(mNativeHandle, "MathTypeBridgeWriteStartupReceipt")
+        mPhase = "connection-receipt"
+        ' Manual connection must never create or overwrite automatic-startup
+        ' evidence. A missing optional receipt is not startup verification.
+        If fromAutoExec Then
+            receiptName = "MathTypeBridgeWriteStartupReceipt"
+        Else
+            receiptName = "MathTypeBridgeWriteConnectionReceipt"
+        End If
+        receiptFunction = FindSymbol(mNativeHandle, receiptName)
         If receiptFunction <> 0 Then mReceiptResult = InvokeInt32(receiptFunction)
         mPhase = "registered"
     End If
@@ -85,12 +91,12 @@ Private Sub ConnectDynamicBridge()
     mNativeResult = -1
     mPhase = "unsupported-host"
 #End If
-    Debug.Print "Equation Lab startup phase="; mPhase; "; native="; mNativeResult; "; receipt="; mReceiptResult; "; connected="; mConnected
+    Debug.Print "Equation Lab connection phase="; mPhase; "; native="; mNativeResult; "; receipt="; mReceiptResult; "; connected="; mConnected
     Exit Sub
 Failed:
     mBindingError = Err.Number
     mConnected = False
-    Debug.Print "Equation Lab startup phase="; mPhase; "; binding="; mBindingError
+    Debug.Print "Equation Lab connection phase="; mPhase; "; binding="; mBindingError
 End Sub
 
 #If Mac And VBA7 Then
@@ -177,7 +183,7 @@ End Sub
 Public Sub ELShowNativeConnectionStatus()
     MsgBox "Connected: " & CStr(mConnected) & vbCrLf & _
         "Phase: " & mPhase & vbCrLf & "Native result: " & CStr(mNativeResult) & vbCrLf & _
-        "Startup receipt: " & CStr(mReceiptResult) & vbCrLf & "VBA binding error: " & CStr(mBindingError), _
+        "Connection receipt: " & CStr(mReceiptResult) & vbCrLf & "VBA binding error: " & CStr(mBindingError), _
         IIf(mConnected, vbInformation, vbExclamation), "Equation Lab"
 End Sub
 

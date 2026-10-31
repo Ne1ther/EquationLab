@@ -20,6 +20,7 @@ import {legacyOutline} from './legacy-glyphs.mjs';
 
 const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);
 const {mtExtraOperators={}}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
+const symbolAngleOutlines=Object.freeze({0x2329:0x3008,0x232a:0x3009,0x27e8:0x3008,0x27e9:0x3009});
 new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elrows:'PileRows',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
  const variant=parser.GetArgument(name),size=Number(parser.GetArgument(name)),code=Number.parseInt(parser.GetArgument(name),16),color=parser.GetArgument(name);
  if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>0x10ffff||code>=0xd800&&code<=0xdfff||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
@@ -34,9 +35,16 @@ new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'M
 },Metadata(parser,name){
  const kind=Number(parser.GetArgument(name)),flags=Number(parser.GetArgument(name)),node=parser.ParseArg(name);
  if(!Number.isInteger(kind)||!Number.isInteger(flags)||flags<0||flags>65535)throw Error('Invalid native layout metadata');
+ if(kind===102){
+  // ParBoxClass 67aca0 fits the body when 67b240 finds a noncentral
+  // matrix/pile baseline. Apply this only to this fence pair; nested
+  // fences retain their own native decision.
+  let row;node.walkTree(n=>{if(!row&&['mrow','inferredMrow'].includes(n.kind)&&n.childNodes.some(c=>c.kind==='mo'&&c.attributes.get('fence')))row=n;});
+  if(row)for(const child of row.childNodes)if(child.kind==='mo'&&child.attributes.get('fence'))child.setProperty('elFenceFitBody',true);
+ }
  const targetKind=kind===100||kind===101?'mtable':kind===11?'mfrac':null;let target;
  node.walkTree(n=>{if(!target&&(n.kind===targetKind||(kind>=24&&kind<=34||kind===200)&&['mover','munder'].includes(n.kind)))target=n;});
- if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));}if(kind===101){target.setProperty('elPile',true);const h=flags&15,v=flags>>4;if([1,2,3].includes(h))target.attributes.set('columnalign',{1:'left',2:'center',3:'right'}[h]);if(v===1||v===3)target.attributes.set('align',v===1?'baseline 1':'baseline -1');}if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);if(kind===200)target.attributes.set(target.kind==='munder'?'accentunder':'accent',true);}
+ if(target){if(kind===100){target.attributes.set('equalcolumns',!!(flags&1));target.attributes.set('equalrows',!!(flags&2));const v=flags>>4,rows=target.childNodes.length;target.attributes.set('align',v===0?'baseline 1':v===2?'baseline -1':v===1?(rows%2&&rows<=3?'baseline '+Math.ceil(rows/2):'axis'):'top');}if(kind===101){target.setProperty('elPile',true);const h=flags&15,v=flags>>4;if([1,2,3].includes(h))target.attributes.set('columnalign',{1:'left',2:'center',3:'right'}[h]);target.attributes.set('align',v===0?'baseline 1':v===2?'baseline -1':v===1?(target.childNodes.length%2?'baseline '+Math.ceil(target.childNodes.length/2):'axis'):'top');}if(kind===11)target.setProperty('elSmallFraction',!!(flags&1));if(kind>=31&&kind<=34)target.setProperty('elNativeWideMark',true);if(kind===200)target.attributes.set(target.kind==='munder'?'accentunder':'accent',true);}
  parser.Push(node);
 },Bar(parser,name){const under=Number(parser.GetArgument(name)),count=Number(parser.GetArgument(name));if(![0,1].includes(under)||![1,2].includes(count))throw Error('Invalid native bar');const node=parser.create('node','mrow',[parser.create('node','TeXAtom',[parser.ParseArg(name)])]);node.setProperty('elNativeBar',{under,count});parser.Push(node);
 },StretchIntegral(parser,name){const flags=Number(parser.GetArgument(name)),ratio=Number(parser.GetArgument(name)),operatorRatio=Number(parser.GetArgument(name));if(!Number.isInteger(flags)||flags<1||flags>0x17f||!(flags&3)||!Number.isFinite(ratio)||ratio<=0||!Number.isFinite(operatorRatio)||operatorRatio<=0)throw Error('Invalid integral layout');const children=Array.from({length:3},()=>parser.create('node','TeXAtom',[parser.ParseArg(name)]));for(let i=0;i<(flags&3);i++)children.push(parser.create('node','TeXAtom',[flags&256?parser.create('token','mo',{stretchy:true,largeop:false,mathsize:operatorRatio+'em'},'\u222b'):parser.ParseArg(name)]));const node=parser.create('node','mrow',children);node.setProperty('elStretchIntegral',flags);node.setProperty('elNativeBoxRatio',ratio);node.setProperty('elOperatorRatio',operatorRatio);parser.Push(node);
@@ -125,7 +133,7 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  const prefs=containsPreferences(parsed.records)?readTypography(ole):null;
  let full=prefs?pointValue(prefs.sizes[0],12):undefined;
  if(prefs&&(full<2||full>127))throw Error('预览支持 2–127 pt 的完整字号');
- const sizes=prefs?[...prefs.sizes,...prefs.extraSizes].map(d=>pointValue(d,full)):[],fonts=[],styles=[],states=new Map(),layoutSizes=new Map(),colors=[prefs?'#000000':undefined];
+ const sizes=prefs?[...prefs.sizes,...prefs.extraSizes].map(d=>pointValue(d,full)):[],fonts=[],styles=[],states=new Map(),layoutSizes=new Map(),layoutColors=new Map(),colors=[prefs?'#000000':undefined];
  const compoundDecorations=new Set();function compounds(nodes){for(const n of nodes){if(n.type===3&&n.selector===15){const decor=(n.children??[]).filter(c=>c.type===2);if(n.variation&256||decor.length>1)for(const c of decor)if(c.typeface===11||c.typeface===22)compoundDecorations.add(c.start);}if(n.children)compounds(n.children);}}compounds(parsed.records);
  let size=sizes[0],color=colors[0];
  function walk(nodes){for(const n of nodes){
@@ -148,6 +156,7 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
    colors.push('#'+components.map(v=>Math.round(v*255/1000).toString(16).padStart(2,'0')).join(''));
   }else if(n.type===15){color=colors[n.color];if(!color)throw Error('Missing explicit native color definition '+n.color);}
   if([1,2,3,4,5].includes(n.type))layoutSizes.set(n.start,size/full);
+  if([1,2,3,4,5,6].includes(n.type))layoutColors.set(n.start,color);
   if(n.type===2&&!compoundDecorations.has(n.start)&&n.typeface!==22&&!(n.typeface===23&&n.code===9&&n.fontPosition===9)){
    const definition=n.typeface<0?styles[-n.typeface-1]:prefs?.styles[n.typeface-1];
    if(!definition)throw Error('Missing native font style for typeface '+n.typeface);
@@ -172,20 +181,44 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
   // Old Equation Lab objects also used ASCII '-' in Symbol; render it as a
   // mathematical minus without changing stored data or text hyphens.
   const symbol=state.font.toLowerCase()==='symbol',symbolStar=symbol&&n.code===0x2a;
+  // The macOS Symbol cmap exposes its own angleleft/angleright outlines at
+  // U+3008/3009, not the old MathType U+2329/232A or modern math U+27E8/27E9.
+  // These are the same named Symbol glyphs (not a CJK-font substitution).
+  // Resolve only the outline lookup; the source MTCode and font position stay
+  // intact for no-op saves and character-only edits.
+  const symbolAngle=symbol?symbolAngleOutlines[n.code]:undefined;
   const alias=legacyOutline(n.code,state.font),eastAsianMath=n.typeface===12&&[0x2223].includes(n.code),missing=n.code===0xf700,useSTIX=symbolStar||alias!==null||eastAsianMath||missing;
-  const code=missing?0x25a1:alias??(symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code),fontName=useSTIX?'STIX Two Math':state.font,fontStyle=state.style;
+  const code=missing?0x25a1:alias??symbolAngle??(symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code),fontName=useSTIX?'STIX Two Math':state.font,fontStyle=state.style;
   const key=fontName+'\0'+fontStyle;let index=faceIds.get(key);
   if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:fontName,style:fontStyle,characters:[]});}
   if(!faces[index].characters.includes(code))faces[index].characters.push(code);
   return `\\elglyph{el${index}}{${state.size/full}}{${code.toString(16)}}{${state.color}}`;
  };
- const latex=oleRenderLatex(ole,glyphToken,{
+ const layoutCallbacks={
   embellishment:(n,latex)=>[14,15,19,20,25,26,27,28,30,31,32,36,37].includes(n.embellishment)?`\\elmeta{200}{${n.embellishment}}{${latex}}`:latex,
-  template:(n,latex)=>{if(n.selector===10)return `\\elroot{${layoutSizes.get(n.start)??1}}{${latex}}`;if([12,13].includes(n.selector)){for(let i=0;i<1+n.variation;i++)latex=latex.replace(/^\\(?:overline|underline)\{([\s\S]*)\}$/,'$1');return `\\elbar{${n.selector===12?1:0}}{${1+n.variation}}{${latex}}`;}if(n.selector>=31&&n.selector<=34)return `\\elmeta{${n.selector}}{${n.variation}}{${latex}}`;if(n.selector===15&&latex.startsWith('\\elStretchIntegral')){const glyphs=n.children.filter(c=>c.type===2&&c.code===0x222b),operatorRatio=layoutSizes.get(glyphs[0]?.start)??layoutSizes.get(n.start)??1;return latex.replace(/^(\\elStretchIntegral\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}{${operatorRatio}}`)+(n.variation&256?'':glyphs.map(g=>`{${glyphToken(g,'')}}`).join(''));}if(n.selector===14&&latex.startsWith('\\elDoubleArrow'))return latex.replace(/^(\\elDoubleArrow\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}`);if(n.selector===8)return `\\elwhite{${n.variation}}{${latex.replace(/^\\left(?:⟦|\.)/,'').replace(/\\right(?:⟧|\.)$/,'')}}`;if(n.selector!==11)return latex;if(n.variation&2){const gap=prefs?.spaces[14];if(gap&&!gap.unsupported)latex=latex.replaceAll('\\!',`\\kern{${nativeDimension32(gap,Math.trunc(full*32))/(32*full)}em}`);}return `\\elmeta{11}{${n.variation}}{${latex}}`;},
-  matrix:(n,latex)=>`\\elmeta{100}{${(n.hjust&128?1:0)|(n.vjust&128?2:0)}}{${latex}}`,
+  template:(n,latex)=>{
+   if(n.selector<=7||n.selector===9){
+    const body=n.children.find(c=>c.type===1||c.type===4),alignment=body?.type===4?body.valign:body?.children?.find(c=>c.type===5)?.valign??1;
+    if(n.templateOptions===1||alignment!==1)return `\\elmeta{102}{1}{${latex}}`;
+   }
+   if(n.selector===10)return `\\elroot{${layoutSizes.get(n.start)??1}}{${latex}}`;if([12,13].includes(n.selector)){for(let i=0;i<1+n.variation;i++)latex=latex.replace(/^\\(?:overline|underline)\{([\s\S]*)\}$/,'$1');return `\\elbar{${n.selector===12?1:0}}{${1+n.variation}}{${latex}}`;}if(n.selector>=31&&n.selector<=34)return `\\elmeta{${n.selector}}{${n.variation}}{${latex}}`;if(n.selector===15&&latex.startsWith('\\elStretchIntegral')){const glyphs=n.children.filter(c=>c.type===2&&c.code===0x222b),operatorRatio=layoutSizes.get(glyphs[0]?.start)??layoutSizes.get(n.start)??1;return latex.replace(/^(\\elStretchIntegral\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}{${operatorRatio}}`)+(n.variation&256?'':glyphs.map(g=>`{${glyphToken(g,'')}}`).join(''));}if(n.selector===14&&latex.startsWith('\\elDoubleArrow'))return latex.replace(/^(\\elDoubleArrow\{\d+\})/,`$1{${layoutSizes.get(n.start)??1}}`);if(n.selector===8)return `\\elwhite{${n.variation}}{${latex.replace(/^\\left(?:⟦|\.)/,'').replace(/\\right(?:⟧|\.)$/,'')}}`;if(n.selector!==11)return latex;if(n.variation&2){const gap=prefs?.spaces[14];if(gap&&!gap.unsupported)latex=latex.replaceAll('\\!',`\\kern{${nativeDimension32(gap,Math.trunc(full*32))/(32*full)}em}`);}return `\\elmeta{11}{${n.variation}}{${latex}}`;},
+  matrix:(n,latex)=>`\\elmeta{100}{${(n.hjust&128?1:0)|(n.vjust&128?2:0)|(n.valign<<4)}}{${latex}}`,
   pile:(n,latex)=>`\\elmeta{101}{${n.halign|(n.valign<<4)}}{${latex}}`,
   line:(n,latex,ctx)=>{const parts=latex.split('\\elTab{}');if(parts.length===1)return latex;const tabs=ctx.currentRuler?.tabs??[];return `\\elruler{${tabs.map(t=>t.position??t.offset).join(',')}}{${tabs.map(t=>t.type).join(',')}}{${parts.length}}${parts.map(p=>`{${p}}`).join('')}`;}
- });
+ };
+ // COLOR state belongs to the complete native box as well as its CHARs.
+ // Keeping it only on glyph tokens made radicals, fraction rules, fences,
+ // accents and drawn integrals turn black in SVG/PDF despite red native data.
+ for(const key of ['template','matrix','pile','embellishment']){
+  const callback=layoutCallbacks[key];
+  layoutCallbacks[key]=(n,...args)=>{
+   const latex=callback(n,...args),color=layoutColors.get(n.start);
+   // Postfix sub/superscript records attach to the preceding atom. Wrapping
+   // just _{...}/^{...} would detach them; their glyphs carry their own color.
+   return color&&!(key==='template'&&[27,28,29].includes(n.selector))?'\\textcolor{'+color+'}{'+latex+'}':latex;
+  };
+ }
+ const latex=oleRenderLatex(ole,glyphToken,layoutCallbacks);
  const usedFaceCount=faces.length;
  // Function Full space advance drives the recovered token-gap arithmetic.
  // Request that face even when the formula contains only Variable glyphs.

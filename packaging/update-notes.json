@@ -1,5 +1,5 @@
 {
-  "version": "0.6.10",
-  "zh": "新增文档编号与引用检查、引用搜索，以及字体、字号、间距和编号的批量副本处理。长文档先打开当前公式，其余列表与预览分批补齐；侧栏增量更新，编辑和预览任务优先响应。Word 引用选择器可以按编号或附近文字搜索，插入后继续在原位置编辑。新增连接诊断，修复同路径升级后的服务记录，并整理了文档选择框的图标、文件名和箭头对齐。",
-  "en": "Adds document numbering and reference checks, searchable equation references, and batch copy tools for fonts, sizes, spacing, and numbering. Long documents open the selected equation first while the remaining list and previews load in stages. Incremental sidebar updates keep editing and preview work responsive. The Word reference picker searches equation numbers and nearby text, then inserts at the retained cursor. Also adds connection diagnostics, repairs service receipts after an in-place upgrade, and aligns the document selector icon, filename, and arrow."
+  "version": "0.6.11",
+  "zh": "修复 Word 正文和公式编辑区长拼音组字被打断的问题，组字完成后再同步预览。完善 Word 自动加载，以及旧 MathType 公式的编号、章节与交叉引用更新。细化手动编辑的结构提示和求和上下标操作，改善矩阵括号、颜色和中文标注的显示，保留预览面板内容，并调整应用图标留白。",
+  "en": "Fixes interrupted long Pinyin composition in Word and the formula editors by deferring preview synchronization until composition ends. Improves Word startup and legacy MathType numbering, chapters, sections, and references. Refines structure cues and sum limits for manual editing, improves matrix delimiters, colors, and Chinese annotations, retains preview panel content, and adjusts app icon spacing."
 }

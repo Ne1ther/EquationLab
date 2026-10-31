@@ -84,6 +84,12 @@ bool nativeValid(NSData* data) {
     return b[0]==28&&b[1]==0&&size==data.length-28;
 }
 bool inWord(){std::uint32_t n=0;_NSGetExecutablePath(nullptr,&n);std::vector<char> path(n+1);return _NSGetExecutablePath(path.data(),&n)==0&&std::string(path.data()).ends_with("/Contents/MacOS/Microsoft Word");}
+bool retainedOwnerEditingAllowed(bool wordHost,std::uint64_t owner,std::uint64_t liveOwner,NSString* documentRequestId){
+    // A direct OLE verb already supplies the precise live client site. Missing
+    // optional document metadata must not turn that object into a dead image.
+    // Selector/navigation requests still require their document/SHA binding.
+    return wordHost&&owner!=0&&owner==liveOwner&&documentRequestId.length==0;
+}
 bool connectionRefused(NSError* error,unsigned depth=0){
     if(!error||depth>4)return false;
     if([error.domain isEqualToString:NSPOSIXErrorDomain]&&error.code==ECONNREFUSED)return true;
@@ -207,6 +213,7 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) BOOL captureRequested;
 @property(nonatomic) BOOL requiresDocumentCapture;
 @property(nonatomic) BOOL preCapturedActivation;
+@property(nonatomic) BOOL retainedOwnerOnly;
 @property(nonatomic,strong) NSDictionary* activationBinding;
 @property(nonatomic) NSUInteger captureAttempts;
 @property(nonatomic,strong) NSDate* wakeDeadline;
@@ -281,6 +288,8 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic) NSUInteger captureSerial;
 - (void)begin:(std::uint64_t)sessionId native:(NSData*)native;
 - (void)openState:(ProbeEditState*)state;
+- (BOOL)canEditRetainedOwner:(ProbeEditState*)state;
+- (BOOL)openRetainedOwner:(ProbeEditState*)state;
 - (void)applyDeferredReopenTool:(ProbeEditState*)state;
 - (bridge_probe::HResult)completeCancelledState:(ProbeEditState*)state;
 - (void)launchTicket:(ProbeEditState*)state;
@@ -412,8 +421,18 @@ static ProbeEditorTransport* transport=nil;
     state.documentContext=context;state.documentEpoch=self.documentEpoch;state.editGeneration=self.cacheGeneration;state.awaitingDocument=NO;lastCaptureState=CaptureReady;
     if(state.enrichingDocument)[self enrichDocument:state];else [self openState:state];return 0;
 }
+- (BOOL)canEditRetainedOwner:(ProbeEditState*)state {
+    return retainedOwnerEditingAllowed(inWord(),state.ownerIdentity,bridge_probe::editObjectIdentity(state.sessionId),state.documentRequestId);
+}
+- (BOOL)openRetainedOwner:(ProbeEditState*)state {
+    if(![self active:state]||state.activation!=self.activation||state.retainedOwnerOnly||state.ticket||![self canEditRetainedOwner:state]||!nativeValid(state.openNative))return NO;
+    if(self.captureRequest.state==state){self.captureRequest=nil;EquationLabDiscardDocumentParts();}
+    state.retainedOwnerOnly=YES;state.documentContext=nil;state.bindingContext=nil;state.activationBinding=nil;state.deferredReopenTool=nil;
+    state.preCapturedActivation=NO;state.awaitingDocument=NO;state.captureRequested=NO;state.requiresDocumentCapture=NO;state.enrichingDocument=NO;
+    lastCaptureState=CaptureReady;logOpenPhase("retained-owner-ready",state.started);[self openState:state];return YES;
+}
 - (void)captureFailed:(ProbeEditState*)state {
-    if(!state.enrichingDocument){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+    if(!state.enrichingDocument){if([self openRetainedOwner:state])return;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
     // Metadata failure must never cancel an already editable OLE transaction.
     // The user can continue writing or save the original owner immediately.
     state.awaitingDocument=NO;state.captureRequested=NO;state.enrichingDocument=NO;lastCaptureState=CaptureReady;
@@ -440,7 +459,7 @@ static ProbeEditorTransport* transport=nil;
         if(current.enrichingDocument){[self captureFailed:current];return;}
         if(current.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(current.sessionId,nullptr,0,false);return;}
         lastCaptureState=CaptureTimedOut;
-        if(current.requiresDocumentCapture)[self fail:current code:InvalidReply];
+        if(current.requiresDocumentCapture){if(![self openRetainedOwner:current])[self fail:current code:InvalidReply];}
         else{current.awaitingDocument=NO;[self openState:current];}
     });
 }
@@ -514,7 +533,7 @@ static ProbeEditorTransport* transport=nil;
             if(existing.ticket&&!existing.request){existing.pollScheduled=NO;++existing.pollGeneration;[self poll:existing];}
             return;
         }
-        if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:existing code:InvalidReply];return;}
+        if(preCaptureRejected){if([self openRetainedOwner:existing])return;lastCaptureState=CaptureRejected;[self fail:existing code:InvalidReply];return;}
         if(preCaptured){
             NSMutableDictionary* context=[activationHint mutableCopy];[context removeObjectForKey:@"_preCapturedActivation"];
             existing.documentContext=context;existing.preCapturedActivation=YES;existing.awaitingDocument=NO;existing.requiresDocumentCapture=NO;
@@ -547,7 +566,7 @@ static ProbeEditorTransport* transport=nil;
     NSDictionary* handoff=self.reopenToolHandoff;self.reopenToolHandoff=nil;
     if(handoff&&[handoff[@"owner"] unsignedLongLongValue]==state.ownerIdentity)state.deferredReopenTool=handoff;
     state.documentRequestId=documentRequestId;
-    if(preCaptureRejected){lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+    if(preCaptureRejected){if([self openRetainedOwner:state])return;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
     state.activationBinding=activationHint;
     state.preCapturedActivation=preCaptured;
     if(preCaptured){
@@ -557,7 +576,7 @@ static ProbeEditorTransport* transport=nil;
     }
     // ELACT1 is a legacy anchor only: it requests a fresh post-DoVerb ELCTX4.
     state.requiresDocumentCapture=activationHint!=nil||self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil||inWord();
-    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture?10:1];lastCaptureState=CapturePending;
+    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture&&![self canEditRetainedOwner:state]?10:1];lastCaptureState=CapturePending;
     __weak ProbeEditState* weak=state;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
         ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
@@ -679,8 +698,8 @@ static ProbeEditorTransport* transport=nil;
     if(state.activation!=self.activation){lastCaptureState=CaptureSuperseded;bridge_probe::completeEdit(state.sessionId,nullptr,0,false);return;}
     [self applyDeferredReopenTool:state];
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
-    if(self.numberingSupportRegistered)body[@"numberingSupport"]=@YES;
-    if(self.numberingContextSupportRegistered)body[@"numberingContextSupport"]=@YES;
+    if(self.numberingSupportRegistered&&!state.retainedOwnerOnly)body[@"numberingSupport"]=@YES;
+    if(self.numberingContextSupportRegistered&&!state.retainedOwnerOnly)body[@"numberingContextSupport"]=@YES;
     if(state.documentContext){
         // ELCTX4's one-shot token belongs to the Word/native handshake. The
         // service accepts only its public document schema after that check.
@@ -700,7 +719,7 @@ static ProbeEditorTransport* transport=nil;
                 // The service checks the opening Native SHA against this exact
                 // pre-DoVerb document. Never replace a rejected fast-path
                 // candidate with an unrelated post-DoVerb capture.
-                [self fail:current code:InvalidReply];
+                if(![self openRetainedOwner:current])[self fail:current code:InvalidReply];
             }
             else if(current.documentContext&&current.documentDeadline.timeIntervalSinceNow>0){
                 // A previous selection can still be in the capture slot when
@@ -787,6 +806,7 @@ static ProbeEditorTransport* transport=nil;
         if(document)CGPDFDocumentRelease(document);if(provider)CGDataProviderRelease(provider);
         if(!validPdf){[self failResult:current code:InvalidReply];return;}
         id targetValue=json[@"target"],numberingValue=json[@"numbering"];
+        if(current.retainedOwnerOnly&&(numberingValue||targetValue||bridge_probe::editObjectIdentity(current.sessionId)!=current.ownerIdentity)){[self failResult:current code:InvalidReply];return;}
         if(numberingValue){
             if(!self.numberingSupportRegistered||![numberingValue isKindOfClass:NSDictionary.class]||[numberingValue count]!=static_cast<NSUInteger>(numberingValue[@"context"]?3:2)||![numberingValue[@"format"] isKindOfClass:NSString.class]||[numberingValue[@"format"] length]<1||[numberingValue[@"format"] length]>128||![@[@"left",@"right"] containsObject:numberingValue[@"side"]]||[numberingValue[@"format"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){[self failResult:current code:InvalidReply];return;}
         }

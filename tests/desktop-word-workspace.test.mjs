@@ -16,6 +16,15 @@ function setup(){
  const workspace=context.window.createWordDocumentWorkspace(api);return {workspace,api,state,calls,messages,discard:()=>{discard=true;},behavior:fn=>{behavior=fn;}};
 }
 
+test('Automatic metadata sync preserves an exact OLE edit without document metadata',async()=>{
+ const e=setup(),owner={hasDocumentContext:false,activeIndex:0,objects:[{index:0,latex:'x',nativeSha256:digest}]};
+ e.state.source=owner;e.state.wordTicket=ticket;e.workspace.accepted(owner);
+ e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,revision:5,active:{identity:'word:another',name:'B.docx'},documents:[{identity:'word:another',name:'B.docx',readOnly:false}]}:undefined);
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.equal(e.state.source,owner);assert.equal(e.state.wordTicket,ticket);
+ assert.equal(e.calls.some(call=>call.action==='detach'||call.action==='wordDocumentOpen'),false);
+});
+
 test('App insert binds the selected document and carries a standalone draft without clearing it',async()=>{
  for(const mode of ['inline','display','numbered-left','numbered-right']){
   const e=setup(),draft={latex:'x^2+1',ruler:[{position:40,type:0}],typography:{fonts:[{font:'Times New Roman'}]}};

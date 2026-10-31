@@ -12,6 +12,7 @@ import {makeNewOle} from './new-formula.mjs';
 import {equationLayout, equationReference, chapterBreak, standaloneNumber,previewNumberFormat} from './layout.mjs';
 import {readTypography,patchTypography} from './typography-native.mjs';
 import {renderNative,rasterizeNativeSvg} from './font-renderer.mjs';
+import {scanWordNumberingPart} from './document-audit.mjs';
 
 let genericPreviewContext;
 function previewContext(){if(!genericPreviewContext){const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);genericPreviewContext={adaptor,math:mathjax.document('',{InputJax:new TeX({packages:AllPackages}),OutputJax:new SVG({fontCache:'local'})})};}return genericPreviewContext;}
@@ -46,7 +47,8 @@ function objectRun(n,p) {
   return `<w:r><w:rPr><w:position w:val="${-Math.round(p.depth*2)}"/></w:rPr><w:object w:dxaOrig="${Math.round(p.width*20)}" w:dyaOrig="${Math.round(p.height*20)}">${equationPictureShapeType(typeId)}<v:shape id="_x0000_i${1024+n}" type="#${typeId}" style="width:${p.width.toFixed(3)}pt;height:${p.height.toFixed(3)}pt" o:ole=""><v:imagedata r:id="rImg${n}" o:title=""/></v:shape><o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="_x0000_i${1024+n}" DrawAspect="Content" ObjectID="_${1700000000+n}" r:id="rOle${n}"/></w:object></w:r>`;
 }
 
-export async function createDocx(equations,{fragment=false,references=[],initializeContext=true}={}) {
+export async function createDocx(equations,{fragment=false,references=[],initializeContext=true,numberingFamily='equationlab'}={}) {
+  if(!['equationlab','mathtype'].includes(numberingFamily))throw Error('Invalid numbering family');
   if(!Array.isArray(equations)||equations.length>500)throw Error('需要最多 500 条公式');
   const zip = new JSZip(), paragraphs = [], relationships = [], anchors=[];
   let count=0,context=null;
@@ -55,11 +57,12 @@ export async function createDocx(equations,{fragment=false,references=[],initial
     zip.file(`word/embeddings/oleObject${n}.bin`,ole); zip.file(`word/media/image${n}.png`,p.png);
     relationships.push(`<Relationship Id="rOle${n}" Type="${NS.r}/oleObject" Target="embeddings/oleObject${n}.bin"/>`,`<Relationship Id="rImg${n}" Type="${NS.r}/image" Target="media/image${n}.png"/>`);
     if(!fragment || e.label) paragraphs.push(`<w:p><w:r><w:t>${esc(e.label || `Formula ${n}`)}</w:t></w:r></w:p>`);
-    const layout={mode:'inline',...e.layout};
+    const layout={mode:'inline',numberingFamily,...e.layout};
+    if(layout.numberingFamily!==numberingFamily)throw Error('A Word document must use one numbering family');
     if(layout.mode.startsWith('numbered-')) {
       const nextContext=`${layout.chapter??1}:${layout.section??1}`;
       if(context!==nextContext) {
-        if(initializeContext)paragraphs.push(chapterBreak({chapter:layout.chapter??1,section:layout.section??1}));count=0;context=nextContext;
+        if(initializeContext)paragraphs.push(chapterBreak({chapter:layout.chapter??1,section:layout.section??1,numberingFamily:layout.numberingFamily}));count=0;context=nextContext;
       }
       if(layout.resetEquation)count=(layout.equation??1)-1;
       layout.equation=layout.equation??++count;
@@ -74,17 +77,21 @@ export async function createDocx(equations,{fragment=false,references=[],initial
   // replace preferences in its destination document.
   const formats=new Set(equations.filter(e=>e.layout?.mode?.startsWith('numbered-')).map(e=>e.layout.numberFormat??'(#E1)'));
   const numberingFormat=initializeContext&&formats.size===1?[...formats][0]:null;
-  return packageDocument(zip,paragraphs,relationships,{fragment,numberingFormat});
+  return packageDocument(zip,paragraphs,relationships,{fragment,numberingFormat,numberingFamily});
 }
 
-function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFormat=null}={}) {
-  zip.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/></Types>`);
+function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFormat=null,numberingFamily='equationlab'}={}) {
+  zip.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>${numberingFamily==='mathtype'&&numberingFormat!==null?'<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>':''}</Types>`);
   zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/></Relationships>`);
   zip.file('word/styles.xml',`<w:styles xmlns:w="${NS.w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>${equationStyle}</w:styles>`);
   const variables=numberingFormat===null?'':`<w:docVars><w:docVar w:name="EquationLabNumberFormat" w:val="${esc(numberingFormat)}"/></w:docVars>`;
   zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}"><w:updateFields w:val="true"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>${variables}</w:settings>`);
   zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rStyles" Type="${NS.r}/styles" Target="styles.xml"/><Relationship Id="rSettings" Type="${NS.r}/settings" Target="settings.xml"/>${relationships.join('')}</Relationships>`);
   zip.file('word/document.xml',`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`);
+  if(numberingFamily==='mathtype'&&numberingFormat!==null){
+    zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/><Relationship Id="rCustom" Type="${NS.r}/custom-properties" Target="docProps/custom.xml"/></Relationships>`);
+    zip.file('docProps/custom.xml',`<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="MTEquationNumber2"><vt:lpwstr>${esc(numberingFormat)}</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="MTWinEqns"><vt:bool>true</vt:bool></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="MTEquationSection"><vt:lpwstr>1</vt:lpwstr></property></Properties>`);
+  }
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 
@@ -101,7 +108,7 @@ function emptyHiddenShapeRun(run){
 export function referenceDocx(bookmarkName,options={}) {return packageDocument(new JSZip(),[`<w:p>${equationReference(bookmarkName,options)}</w:p>`],[]);}
 export function chapterDocx(options={}) {return packageDocument(new JSZip(),[chapterBreak(options)],[]);}
 export function numberDocx(options={},initializeContext=false) {
- const paragraphs=[];if(initializeContext)paragraphs.push(chapterBreak({chapter:options.chapter??1,section:options.section??1,resetEquation:false}));
+ const paragraphs=[];if(initializeContext)paragraphs.push(chapterBreak({chapter:options.chapter??1,section:options.section??1,resetEquation:false,numberingFamily:options.numberingFamily??'equationlab'}));
  const number=standaloneNumber(options);paragraphs.push(number.xml);
  return packageDocument(new JSZip(),paragraphs,[]);
 }
@@ -122,13 +129,40 @@ function fieldCodes(paragraph){
     if(n.localName==='fldChar'&&['separate','end'].includes(n.getAttributeNS(NS.w,'fldCharType'))&&open){result.push(code);open=false;}
   }return result;
 }
+// Read Word's current content without accepting or rejecting tracked changes.
+// Number bookmarks and complex fields can span multiple insertion wrappers.
+function currentNodes(root){
+ const nodes=[];function visit(node){if(node.nodeType!==1)return;if(node.namespaceURI===NS.w&&['del','moveFrom','rPrChange','pPrChange','sectPrChange'].includes(node.localName))return;nodes.push(node);for(const c of Array.from(node.childNodes))visit(c);}visit(root);return nodes;
+}
+function currentFieldCodes(root){
+ const result=[],stack=[];
+ for(const n of currentNodes(root)){
+  if(n.namespaceURI!==NS.w)continue;
+  if(n.localName==='fldSimple')result.push(n.getAttributeNS(NS.w,'instr'));
+  else if(n.localName==='fldChar'){
+   const kind=n.getAttributeNS(NS.w,'fldCharType');
+   if(kind==='begin')stack.push({code:'',result:false});
+   else if(kind==='separate'&&stack.length){const f=stack.at(-1);result.push(f.code);f.result=true;}
+   else if(kind==='end'&&stack.length){const f=stack.pop();if(!f.result)result.push(f.code);}
+  }else if(n.localName==='instrText'&&stack.length&&!stack.at(-1).result)stack.at(-1).code+=n.textContent;
+ }
+ return result;
+}
+function numberBookmarkNodes(bookmark){
+ let p=bookmark;while(p&&!(p.namespaceURI===NS.w&&p.localName==='p'))p=p.parentNode;
+ if(!p)return [];
+ const nodes=currentNodes(p),start=nodes.indexOf(bookmark),id=bookmark.getAttributeNS(NS.w,'id');
+ const end=nodes.findIndex((n,i)=>i>start&&n.namespaceURI===NS.w&&n.localName==='bookmarkEnd'&&n.getAttributeNS(NS.w,'id')===id);
+ return start>=0&&end>start?nodes.slice(start+1,end):[];
+}
 const counterIndexes=new WeakMap();
 function priorCounters(doc,paragraph){
  if(!counterIndexes.has(doc)){
   const index=new WeakMap(),values={EquationLab:0,ELChapter:null,ELSection:null};
-  for(const p of Array.from(doc.getElementsByTagNameNS(NS.w,'p'))){index.set(p,{...values});for(const code of fieldCodes(p)){
-    const m=/^\s*SEQ (EquationLab|ELChapter|ELSection)\b([\s\S]*)/i.exec(code);if(!m||/\\c\b/.test(m[2]))continue;
-    const reset=/\\r\s+(\d+)/.exec(m[2]);values[m[1]]=reset?Number(reset[1]):(values[m[1]]??0)+1;
+  for(const p of currentNodes(doc.documentElement).filter(n=>n.namespaceURI===NS.w&&n.localName==='p')){index.set(p,{...values});for(const code of currentFieldCodes(p)){
+    const m=/^\s*SEQ (EquationLab|ELChapter|ELSection|MTEqn|MTChap|MTSec)\b([\s\S]*)/i.exec(code);if(!m||/\\c\b/i.test(m[2]))continue;
+    const name={EQUATIONLAB:'EquationLab',ELCHAPTER:'ELChapter',ELSECTION:'ELSection',MTEQN:'EquationLab',MTCHAP:'ELChapter',MTSEC:'ELSection'}[m[1].toUpperCase()];
+    const reset=/\\r\s+(\d+)/i.exec(m[2]);values[name]=reset?Number(reset[1]):(values[name]??0)+1;
   }}counterIndexes.set(doc,index);
  }
  return counterIndexes.get(doc).get(paragraph)??{EquationLab:0,ELChapter:null,ELSection:null};
@@ -136,21 +170,46 @@ function priorCounters(doc,paragraph){
 
 // Reconstruct the format from live fields, not their cached numeric text.
 function bookmarkNumberFormat(bookmark){
-  const counters={EquationLab:'E',ELChapter:'C',ELSection:'S'},formats={ARABIC:'1',ALPHABETIC:'A',alphabetic:'a',ROMAN:'I',roman:'i'};
-  const token=code=>{const m=/^\s*SEQ\s+(EquationLab|ELChapter|ELSection)\b[\s\S]*?\\\*\s+(ARABIC|ALPHABETIC|alphabetic|ROMAN|roman)\b/.exec(code);return m?'#'+counters[m[1]]+formats[m[2]]:null;};
-  let result='',depth=0,code='',failed=false;
-  const visit=node=>{
-    if(node.nodeType!==1)return;
-    if(node.namespaceURI===NS.w){
-      if(node.localName==='fldSimple'){const value=token(node.getAttributeNS(NS.w,'instr'));if(value)result+=value;else failed=true;return;}
-      if(node.localName==='fldChar'){const kind=node.getAttributeNS(NS.w,'fldCharType');if(kind==='begin'){depth++;code='';}else if(kind==='separate'){const value=token(code);if(value)result+=value;else failed=true;}else if(kind==='end')depth--;return;}
-      if(node.localName==='instrText'){code+=node.textContent;return;}
-      if(node.localName==='t'){if(!depth)result+=node.textContent;return;}
-    }
-    for(const child of Array.from(node.childNodes))visit(child);
-  };
-  for(let n=bookmark.nextSibling;n;n=n.nextSibling){if(n.localName==='bookmarkEnd'&&n.getAttributeNS(NS.w,'id')===bookmark.getAttributeNS(NS.w,'id'))break;visit(n);}
-  return !failed&&result.includes('#E')?result:null;
+ const counters={EquationLab:'E',ELChapter:'C',ELSection:'S'},formats={ARABIC:'1',ALPHABETIC:'A',alphabetic:'a',ROMAN:'I',roman:'i'};
+ const token=code=>{const m=/^\s*SEQ\s+(EquationLab|ELChapter|ELSection)\b[\s\S]*?\\\*\s+(ARABIC|ALPHABETIC|alphabetic|ROMAN|roman)\b/.exec(code);return m?'#'+counters[m[1]]+formats[m[2]]:null;};
+ const nodes=numberBookmarkNodes(bookmark);let result='',depth=0,code='',failed=false;
+ for(let i=0;i<nodes.length;i++){
+  const n=nodes[i];if(n.namespaceURI!==NS.w)continue;
+  if(n.localName==='fldSimple'){
+   const value=token(n.getAttributeNS(NS.w,'instr'));if(value)result+=value;else failed=true;
+   while(i+1<nodes.length){let p=nodes[i+1].parentNode;while(p&&p!==n)p=p.parentNode;if(p!==n)break;i++;}continue;
+  }
+  if(n.localName==='fldChar'){const kind=n.getAttributeNS(NS.w,'fldCharType');if(kind==='begin'){if(depth)failed=true;depth++;code='';}else if(kind==='separate'){const value=token(code);if(value)result+=value;else failed=true;}else if(kind==='end'){depth--;if(depth<0)failed=true;}continue;}
+  if(n.localName==='instrText'){code+=n.textContent;continue;}
+  if(n.localName==='t'&&!depth)result+=n.textContent;
+ }
+ return !failed&&!depth&&result.includes('#E')?result:null;
+}
+
+function mathTypeNumberLayout(scan,element){
+ const object=scan.objects.find(item=>item.node===element);if(!object)return null;
+ const candidates=scan.bookmarks.filter(bookmark=>bookmark.end!==null&&bookmark.location.paragraph===object.location.paragraph&&bookmark.endParagraph===object.location.paragraph&&bookmark.numberFormat?.includes('#E')&&!scan.objects.some(o=>o.order>bookmark.start&&o.order<bookmark.end));
+ if(candidates.length>1)return null;
+ let bookmark=candidates[0];
+ if(!bookmark){
+  const envelopes=scan.fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code)&&f.location.paragraph===object.location.paragraph);
+  if(envelopes.length!==1||!envelopes[0].numberFormat?.includes('#E')||scan.objects.filter(o=>o.location.paragraph===object.location.paragraph).length!==1)return null;
+  const envelope=envelopes[0];
+  bookmark={start:envelope.start,end:envelope.end,name:null,numberFormat:envelope.numberFormat,cachedText:envelope.numberCache};
+ }
+ const fields=scan.fields.filter(f=>f.start>bookmark.start&&f.end!==null&&f.end<bookmark.end&&f.instruction.type==='SEQ'&&f.instruction.family==='mathtype');
+ try{previewNumberFormat(bookmark.numberFormat);}catch{return null;}
+ const equation=fields.filter(f=>f.instruction.role==='equation'&&!f.instruction.hidden);
+ if(equation.length!==1||fields.some(f=>f.instruction.unknownSwitches.length||f.reviewState!=='unchanged'))return null;
+ const context={chapter:null,section:null};
+ for(const field of scan.fields){
+  if(field.start>=object.order||field.reviewState!=='unchanged')continue;
+  const parsed=field.instruction;if(parsed.type!=='SEQ'||parsed.family!=='mathtype'||!(parsed.role in context)||parsed.repeat)continue;
+  context[parsed.role]=parsed.unknownSwitches.length?null:parsed.reset??(context[parsed.role]??0)+1;
+ }
+ const cached=equation[0].cachedText.trim();
+ const increments=scan.fields.filter(f=>f.parent===equation[0].parent&&f.instruction.role==='equation'&&f.instruction.hidden&&!f.instruction.repeat);
+ return {bookmarkName:bookmark.name,numberText:bookmark.cachedText,numberFormat:bookmark.numberFormat,numberingFamily:'mathtype',mode:bookmark.start<object.order?'numbered-left':'numbered-right',...context,equation:/^\d+$/.test(cached)&&Number.isSafeInteger(Number(cached))?Number(cached):null,...increments.length===1&&increments[0].instruction.reset!==null?{equationReset:increments[0].instruction.reset}:{}};
 }
 
 export async function inspectDocx(buffer) {
@@ -172,7 +231,8 @@ export async function inspectDocx(buffer) {
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
-  const references=new Map();for(const code of fieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
+  const numberingScan=scanWordNumberingPart(partDoc,part);
+  const references=new Map();for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
   for(const e of Array.from(partDoc.getElementsByTagNameNS(NS.o,'OLEObject'))) {
     const progId = e.getAttribute('ProgID'); if(!['Equation.DSMT4','Equation.3'].includes(progId)) continue;
@@ -184,19 +244,23 @@ export async function inspectDocx(buffer) {
     let latex,previewError;try {latex=oleLatex(ole);}catch(error){previewError=error.message;}
     let paragraph=e;while(paragraph&&!(paragraph.namespaceURI===NS.w&&paragraph.localName==='p'))paragraph=paragraph.parentNode;
     const owned=paragraph?.getElementsByTagNameNS(NS.w,'pStyle')[0]?.getAttributeNS(NS.w,'val')==='EquationLab';
-    const bookmark=owned?Array.from(paragraph.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>/^EL_/.test(b.getAttributeNS(NS.w,'name'))):null;
-    const fields=owned?fieldCodes(paragraph):[];
-    let numberText=null;if(bookmark){numberText='';let within=false;for(const node of Array.from(paragraph.childNodes)){if(node===bookmark){within=true;continue;}if(node.localName==='bookmarkEnd'&&node.getAttributeNS(NS.w,'id')===bookmark.getAttributeNS(NS.w,'id'))break;if(within&&node.nodeType===1)numberText+=Array.from(node.getElementsByTagNameNS(NS.w,'t')).map(n=>n.textContent).join('');}}
+    const visible=paragraph?currentNodes(paragraph):[];
+    const bookmark=owned?visible.find(b=>b.namespaceURI===NS.w&&b.localName==='bookmarkStart'&&/^EL_/.test(b.getAttributeNS(NS.w,'name'))):null;
+    const fields=owned?currentFieldCodes(paragraph):[];
+    const numberText=bookmark?numberBookmarkNodes(bookmark).filter(n=>n.namespaceURI===NS.w&&n.localName==='t').map(n=>n.textContent).join(''):null;
     const context=priorCounters(partDoc,paragraph);
     const layout={owned,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null,numberText,chapter:context.ELChapter,section:context.ELSection};
-    layout.mode=fields.some(code=>/SEQ EquationLab/.test(code))?(Array.from(paragraph.childNodes).indexOf(bookmark)<Array.from(paragraph.childNodes).indexOf(e.parentNode.parentNode)?'numbered-left':'numbered-right'):owned&&paragraph.getElementsByTagNameNS(NS.w,'jc')[0]?.getAttributeNS(NS.w,'val')==='center'?'display':'inline';
+    layout.mode=fields.some(code=>/SEQ EquationLab/.test(code))?(visible.indexOf(bookmark)<visible.indexOf(e)?'numbered-left':'numbered-right'):owned&&paragraph.getElementsByTagNameNS(NS.w,'jc')[0]?.getAttributeNS(NS.w,'val')==='center'?'display':'inline';
     if(!owned)layout.mode='unknown';
     if(bookmark){
       layout.numberFormat=bookmarkNumberFormat(bookmark);
       const code=fields.find(code=>/^\s*SEQ\s+EquationLab\b/i.test(code)&&!/\\c\b/.test(code));
       const reset=code&&/\\r\s+(\d+)/.exec(code);layout.equation=code?(reset?Number(reset[1]):context.EquationLab+1):null;
+      if(reset)layout.equationReset=Number(reset[1]);
       layout.referenceCount=references.get(layout.bookmarkName)??0;
     }
+    const mathTypeLayout=mathTypeNumberLayout(numberingScan,e);
+    if(mathTypeLayout){Object.assign(layout,mathTypeLayout);layout.referenceCount=references.get(layout.bookmarkName)??0;}
     let typography,typographyError;try{typography=readTypography(ole);}catch(error){typographyError=error.message;}
     objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
   }
@@ -210,6 +274,12 @@ export async function inspectDocx(buffer) {
     const variable=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberFormat');
     if(variable){const value=variable.getAttributeNS(NS.w,'val');try{previewNumberFormat(value);numberFormat=value;}catch{/* Unknown document settings never become a write instruction. */}}
   }
+  const legacyNumbers=objects.some(object=>object.layout?.bookmarkName&&object.layout.numberingFamily!=='mathtype');
+  if((numberFormat===null||!legacyNumbers)&&zip.file('docProps/custom.xml')){
+   const custom=parseXml(await zip.file('docProps/custom.xml').async('string'));
+   const property=Array.from(custom.getElementsByTagName('*')).find(n=>n.localName==='property'&&n.getAttribute('name')==='MTEquationNumber2');
+   if(property){const value=property.textContent;try{previewNumberFormat(value);numberFormat=value;}catch{/* Unsupported MathType tokens remain host-owned. */}}
+  }
   return {zip,doc,mainPart,objects,numberFormat,numberingRevision};
 }
 
@@ -221,15 +291,44 @@ export async function replaceDocxEquation(buffer,index,latex,options={}) {
   return updateDocx(buffer,index,ole=>replaceOleLatex(ole,latex),options);
 }
 
+export function sharedNumberRangeNodes(object,paragraph,scan){
+ const bookmark=scan.bookmarks.find(b=>b.name===object.layout.bookmarkName);
+ const envelope=bookmark&&scan.fields.find(f=>f.start<bookmark.start&&f.end>bookmark.end&&/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code));
+ if(!envelope||envelope.locked||envelope.reviewState!=='unchanged'||scan.structural.length)throw Error('编号域结构需要在 Word 中处理');
+ const prefix=envelope.codeParts.filter(p=>p.text!==undefined&&p.position<bookmark.start).map(p=>p.text).join('');
+ const suffix=envelope.codeParts.filter(p=>p.text!==undefined&&p.position>bookmark.end).map(p=>p.text).join('');
+ if(!/^\s*MACROBUTTON\s+MTPlaceRef(?:\s+\\\*\s+(?:MERGEFORMAT|CHARFORMAT))*\s*$/i.test(prefix)||suffix.trim())throw Error('编号域包含自定义文字，请在 Word 中保留处理');
+ const fields=scan.fields.filter(f=>f.start>envelope.start&&f.end<envelope.end),increments=fields.filter(f=>f.start<bookmark.start);
+ if(increments.length!==1||increments[0].instruction.role!=='equation'||!increments[0].instruction.hidden||increments[0].instruction.repeat)throw Error('编号的隐藏计数器不完整');
+ if(fields.some(f=>f.instruction.type!=='SEQ'||f.instruction.family!=='mathtype'||f.instruction.unknownSwitches.length||f.locked||f.reviewState!=='unchanged'||f.start>bookmark.start&&f.end>bookmark.end))throw Error('编号域包含不支持的字段');
+ const bookmarks=scan.bookmarks.filter(b=>b.start>envelope.start&&b.start<envelope.end);
+ if(bookmarks.length!==1||bookmarks[0]!==bookmark)throw Error('编号域包含其他引用书签，请在 Word 中保留处理');
+ let first=envelope.node;while(first&&first.parentNode!==paragraph)first=first.parentNode;
+ if(!first)throw Error('编号域跨越了段落边界');
+ const result=new Set();let depth=0,done=false;
+ for(let node=first;node;node=node.nextSibling){
+  result.add(node);
+  for(const field of currentNodes(node).filter(n=>n.namespaceURI===NS.w&&n.localName==='fldChar')){
+   const kind=field.getAttributeNS(NS.w,'fldCharType');if(kind==='begin')depth++;else if(kind==='end')depth--;
+  }
+  if(depth===0){done=true;break;}
+ }
+ if(!done||result.has(object.element.parentNode.parentNode))throw Error('编号域与公式对象边界重叠');
+ return result;
+}
+
 /** Change standalone equation paragraphs without touching their native OLE bytes.
  * Existing prose, revision markup, custom fields and bookmarks require a host
  * range operation and are rejected here rather than discarded. */
-export async function arrangeDocx(buffer,{indices,layout={}}={}) {
+export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFamily='equationlab'}={}) {
+  if(!['equationlab','mathtype'].includes(defaultNumberingFamily))throw Error('Invalid numbering family');
   const {zip,objects}=await inspectDocx(buffer),targets=indices??objects.map(o=>o.index);
+  const documentFamily=objects.some(o=>o.layout.bookmarkName&&o.layout.numberingFamily!=='mathtype')?'equationlab':objects.some(o=>o.layout.numberingFamily==='mathtype')?'mathtype':defaultNumberingFamily;
   if(!Array.isArray(targets)||!targets.length||new Set(targets).size!==targets.length)throw Error('请选择互不重复的公式');
   const serializer=new XMLSerializer(),changedParts=new Map();
   const existingBookmarks=new Set(),existingBookmarkIds=new Set();
   for(const o of objects)for(const b of Array.from(o.partDoc.getElementsByTagNameNS(NS.w,'bookmarkStart'))){existingBookmarks.add(b.getAttributeNS(NS.w,'name'));existingBookmarkIds.add(b.getAttributeNS(NS.w,'id'));}
+  const numberingScans=new WeakMap();
   let first=true;
   for(const index of [...targets].sort((a,b)=>a-b)) {
     const o=objects[index];if(!o)throw Error('公式不存在');
@@ -239,11 +338,17 @@ export async function arrangeDocx(buffer,{indices,layout={}}={}) {
     if(Array.from(run.childNodes).some(n=>n.nodeType===1&&!['rPr','object'].includes(n.localName)))throw Error('公式与正文处于同一段落，请先在 Word 中分段，以保留正文');
     if(['sectPr','pPrChange','framePr','numPr'].some(tag=>p.getElementsByTagNameNS(NS.w,tag).length))throw Error('段落包含节设置、修订或特殊版式，请在 Word 中单独编排');
     if(p.getElementsByTagNameNS(NS.o,'OLEObject').length!==1)throw Error('一个段落中有多个公式，请在 Word 中分段后编排');
-    const owned=o.layout.owned;
-    if(owned&&fieldCodes(p).some(code=>!/^\s*SEQ (EquationLab|ELChapter|ELSection)\b/.test(code)))throw Error('段落含其他编号域，暂不能替换');
+    const owned=o.layout.owned,shared=o.layout.numberingFamily==='mathtype';
+    let sharedNodes=new Set();
+    if(shared){
+      if(!numberingScans.has(o.partDoc))numberingScans.set(o.partDoc,scanWordNumberingPart(o.partDoc,o.part));
+      sharedNodes=sharedNumberRangeNodes(o,p,numberingScans.get(o.partDoc));
+    }
+    if(owned&&!shared&&fieldCodes(p).some(code=>!/^\s*SEQ (EquationLab|ELChapter|ELSection)\b/.test(code)))throw Error('段落含其他编号域，暂不能替换');
     const allowed=owned?['pPr','r','bookmarkStart','bookmarkEnd','fldSimple']:['pPr','r'];
     let inNumber=false;const hiddenShapes=[];
     for(const node of Array.from(p.childNodes).filter(n=>n.nodeType===1)) {
+      if(sharedNodes.has(node))continue;
       if(node!==run&&emptyHiddenShapeRun(node)){hiddenShapes.push(node);continue;}
       if(node.localName==='bookmarkStart'&&/^EL_/.test(node.getAttributeNS(NS.w,'name')))inNumber=true;
       if(node.namespaceURI!==NS.w||!allowed.includes(node.localName))throw Error('段落包含自定义内容，请在 Word 中选中独立公式');
@@ -254,17 +359,19 @@ export async function arrangeDocx(buffer,{indices,layout={}}={}) {
     }
     let name=o.layout.bookmarkName,id;
     if(name){const b=Array.from(p.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>b.getAttributeNS(NS.w,'name')===name);id=Number(b.getAttributeNS(NS.w,'id'));existingBookmarks.delete(name);existingBookmarkIds.delete(String(id));}
-    const opts={...layout,existingBookmarks,existingBookmarkIds};
+    const opts={numberingFamily:o.layout.bookmarkName?(shared?'mathtype':'equationlab'):documentFamily,...layout,existingBookmarks,existingBookmarkIds};
+    if(o.layout.bookmarkName&&opts.numberingFamily!==(shared?'mathtype':'equationlab'))throw Error('编号计数链需要在 Word 中统一后再更改');
     if(layout.mode?.startsWith('numbered-')){
       counterIndexes.delete(o.partDoc);
       let context=priorCounters(o.partDoc,p);
       if(/#[CS]/.test(layout.numberFormat??'')&&(context.ELChapter===null||context.ELSection===null)){
-        const marker=parseXml(`<root xmlns:w="${NS.w}">${chapterBreak({chapter:layout.chapter??1,section:layout.section??1,resetEquation:false})}</root>`).documentElement.firstChild;
+        const marker=parseXml(`<root xmlns:w="${NS.w}">${chapterBreak({chapter:layout.chapter??1,section:layout.section??1,resetEquation:false,numberingFamily:opts.numberingFamily})}</root>`).documentElement.firstChild;
         p.parentNode.insertBefore(o.partDoc.importNode(marker,true),p);counterIndexes.delete(o.partDoc);context=priorCounters(o.partDoc,p);
       }
-      opts.equation=first&&layout.resetEquation?(layout.equation??1):context.EquationLab+1;
+      const retainedReset=layout.resetEquation!==false&&Number.isSafeInteger(o.layout.equationReset)?o.layout.equationReset:null;
+      opts.equation=first&&layout.resetEquation?(layout.equation??1):retainedReset??context.EquationLab+1;
       opts.chapter=context.ELChapter??layout.chapter??1;opts.section=context.ELSection??layout.section??1;
-      if(name){opts.bookmarkName=name;opts.bookmarkId=id;}opts.resetEquation=first&&!!layout.resetEquation;
+      if(name){opts.bookmarkName=name;opts.bookmarkId=id;}opts.resetEquation=first&&!!layout.resetEquation||retainedReset!==null;
     }
     else if(name)throw Error('此公式已带引用书签；取消编号会使引用失效，请保留编号');
     const result=equationLayout(hiddenShapes.map(n=>serializer.serializeToString(n)).join('')+serializer.serializeToString(run),opts),replacement=parseXml(`<root xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}">${result.xml}</root>`).documentElement.firstChild;

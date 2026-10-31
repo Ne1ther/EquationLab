@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
 import {DOMParser} from '@xmldom/xmldom';
-import {auditDocx,getReferenceTargets} from '../src/document-audit.mjs';
+import {auditDocx,getReferenceTargets,scanWordNumberingPart} from '../src/document-audit.mjs';
 import {inspectDocx,NS} from '../src/document.mjs';
 import {buildDocumentCompatibilityCorpus,mutateDocument,appendXml} from './helpers/document-compat-corpus.mjs';
 
@@ -120,6 +120,29 @@ test('a precise bookmark can contain one hidden increment and its repeated visib
  const audit=await auditDocx(await savedLegacyDisplay({bookmark:true})),targets=audit.targets.filter(t=>t.family==='mathtype');
  assert.equal(targets.length,1);assert.equal(targets[0].bookmark,'EL_CORPUS_1');assert.equal(targets[0].cachedText,'(7.4)');assert.equal(targets[0].referenceable,true);
  assert.equal(targets[0].referenceIds.length,1);assert.equal(getReferenceTargets(audit,{query:'7.4'}).length,1);
+});
+
+test('MathType bookmarks inside macro code and instrText reference results retain their exact saved displays',async()=>{
+ const input=await mutateDocument(await savedLegacyDisplay({bookmark:true}),doc=>{
+  const start=Array.from(doc.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(n=>n.getAttributeNS(NS.w,'name')==='EL_CORPUS_1'),parent=start.parentNode;
+  const end=Array.from(doc.getElementsByTagNameNS(NS.w,'bookmarkEnd')).find(n=>n.getAttributeNS(NS.w,'id')===start.getAttributeNS(NS.w,'id'));
+  const firstVisible=Array.from(parent.childNodes).find(n=>n.localName==='fldSimple');
+  const macroEnd=end.previousSibling;
+  parent.insertBefore(start,firstVisible);parent.insertBefore(end,macroEnd);
+  const macroCode=Array.from(parent.getElementsByTagNameNS(NS.w,'instrText')).find(n=>/^MACROBUTTON MTPlaceRef/.test(n.textContent));macroCode.textContent=macroCode.textContent.replace(/\($/,'');
+  const opening=doc.createElementNS(NS.w,'w:r'),literal=doc.createElementNS(NS.w,'w:instrText');literal.textContent='(';opening.appendChild(literal);parent.insertBefore(opening,start.nextSibling);
+  appendXml(doc,'<w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>REF EL_CORPUS_1 \\* Charformat \\!</w:instrText></w:r><w:r><w:fldChar w:fldCharType="separate"/></w:r><w:r><w:instrText>(7.4)</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p>');
+ });
+ const audit=await auditDocx(input),target=audit.targets.find(t=>t.family==='mathtype');
+ assert.equal(target.cachedText,'(7.4)');assert.equal(target.referenceable,true);assert.equal(target.referenceIds.length,2);
+ assert.equal(audit.references.at(-1).cachedText,'(7.4)');
+ const inspected=await inspectDocx(input);assert.equal(inspected.objects[0].layout.numberFormat,'(#C1.#E1)');assert.equal(inspected.objects[0].layout.numberText,'(7.4)');assert.equal(inspected.objects[0].layout.equation,4);
+ assert.equal(inspected.objects[0].layout.mode,'numbered-right');assert.equal(inspected.objects[0].layout.numberingFamily,'mathtype');
+});
+
+test('a bookmark inside MathType macro code cannot borrow text or fields outside its own bounds',()=>{
+ const doc=new DOMParser().parseFromString(`<w:document xmlns:w="${NS.w}"><w:body><w:p><w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText>MACROBUTTON MTPlaceRef OUTSIDE (</w:instrText></w:r><w:bookmarkStart w:id="4" w:name="ZEqnNum4"/><w:fldSimple w:instr="SEQ MTEqn \\c \\* Arabic"><w:r><w:instrText>9</w:instrText></w:r></w:fldSimple><w:bookmarkEnd w:id="4"/><w:r><w:instrText>) OUTSIDE</w:instrText></w:r><w:r><w:fldChar w:fldCharType="end"/></w:r></w:p></w:body></w:document>`,'application/xml');
+ const bookmark=scanWordNumberingPart(doc,'word/document.xml').bookmarks[0];assert.equal(bookmark.cachedText,'9');assert.equal(bookmark.numberFormat,'#E1');
 });
 
 test('a legacy display longer than the bounded number cache is not exposed as a formula title',async()=>{

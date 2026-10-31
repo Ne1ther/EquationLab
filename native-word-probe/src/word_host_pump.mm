@@ -5,6 +5,16 @@
 
 static constexpr NSTimeInterval kWorkspaceReconciliationInterval=4.0;
 
+static BOOL textClientHasMarkedText(id client){
+    if(![client respondsToSelector:@selector(hasMarkedText)])return NO;
+    return [(id<NSTextInputClient>)client hasMarkedText];
+}
+static BOOL hostHasMarkedText(){
+    if(!NSApp.isActive)return NO;
+    return textClientHasMarkedText(NSTextInputContext.currentInputContext.client)||
+        textClientHasMarkedText(NSApp.keyWindow.firstResponder);
+}
+
 // This is Word's own run-VB-macro event, addressed to this process, never to
 // another application. The names are fixed; document contents cannot name a
 // macro. No activation, interaction, synchronous reply wait or UI scripting.
@@ -24,11 +34,21 @@ static OSStatus sendHostMacro(NSString* macro) {
 
 @interface ELWordHostPump : NSObject
 @property(nonatomic,copy) OSStatus(^send)(NSString*);
+@property(nonatomic,copy) BOOL(^deferMacro)(void);
+@property(nonatomic,copy) BOOL(^periodicWakeAllowed)(void);
 @property(nonatomic) NSUInteger generation;
 @property(nonatomic) NSUInteger attempts;
 @property(nonatomic) BOOL pending;
+@property(nonatomic) BOOL initializationPending;
+@property(nonatomic) BOOL navigationRequested;
+@property(nonatomic) BOOL pollScheduled;
+@property(nonatomic) NSUInteger scheduledPollGeneration;
 @property(nonatomic,strong) dispatch_source_t periodicWakeTimer;
 - (void)wake;
+- (void)initializeWordEvents;
+- (void)requestDispatch;
+- (void)acknowledgeInitialization;
+- (void)schedulePoll;
 - (void)acknowledge;
 - (void)startPeriodicWakeWithInterval:(NSTimeInterval)interval leeway:(NSTimeInterval)leeway;
 @end
@@ -36,8 +56,15 @@ static OSStatus sendHostMacro(NSString* macro) {
 @implementation ELWordHostPump
 - (void)dispatch:(NSUInteger)generation {
     if(!self.pending||self.generation!=generation)return;
+    if(self.deferMacro&&self.deferMacro()){
+        // Do not enter Word's macro handler while its input method owns
+        // marked text. One pending generation survives until composition
+        // ends; periodic ticks neither overlap it nor spend retry attempts.
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,250*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[self dispatch:generation];});
+        return;
+    }
     ++self.attempts;
-    OSStatus status=self.send(@"EquationLabDocumentContext.ELPollNavigation");
+    OSStatus status=self.send(self.initializationPending?@"EquationLabEntryPoints.ELInitializeDocumentEvents":@"EquationLabDocumentContext.ELPollNavigation");
     os_log_info(OS_LOG_DEFAULT,"WordHostPump sent attempt=%lu status=%d",static_cast<unsigned long>(self.attempts),status);
     // The callback acknowledges on entry, including when the event is handled
     // inline. A delayed retry can never consume a newer wake's generation.
@@ -47,12 +74,36 @@ static OSStatus sendHostMacro(NSString* macro) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<int64_t>(delay*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[self dispatch:generation];});
 }
 - (void)wake {
+    self.navigationRequested=YES;[self requestDispatch];
+}
+- (void)initializeWordEvents {
+    self.initializationPending=YES;[self requestDispatch];
+}
+- (void)requestDispatch {
     if(self.pending)return;
     self.pending=YES;self.attempts=0;NSUInteger generation=++self.generation;
     // Leave the active VBA/OLE callback before entering Word's macro handler.
     dispatch_async(dispatch_get_main_queue(),^{[self dispatch:generation];});
 }
-- (void)acknowledge {self.pending=NO;++self.generation;}
+- (void)schedulePoll {
+    if(self.pollScheduled)return;
+    self.pollScheduled=YES;NSUInteger generation=++self.scheduledPollGeneration;
+    __weak ELWordHostPump* weakSelf=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
+        ELWordHostPump* pump=weakSelf;
+        if(!pump||!pump.pollScheduled||pump.scheduledPollGeneration!=generation)return;
+        pump.pollScheduled=NO;[pump wake];
+    });
+}
+- (void)acknowledge {self.pending=NO;self.navigationRequested=NO;++self.generation;self.pollScheduled=NO;++self.scheduledPollGeneration;}
+- (void)acknowledgeInitialization {
+    if(!self.initializationPending)return;
+    BOOL navigate=self.navigationRequested;self.initializationPending=NO;
+    // Initialization did not consume a scheduled navigation poll. Retire
+    // only its own dispatch generation; leave the delayed poll intact.
+    self.pending=NO;self.navigationRequested=NO;++self.generation;
+    if(navigate)[self wake];
+}
 - (void)startPeriodicWakeWithInterval:(NSTimeInterval)interval leeway:(NSTimeInterval)leeway {
     // One process-lifetime timer recovers missed Word events. All work shares
     // wake's pending flag, so a tick cannot overlap or reset an active retry.
@@ -64,7 +115,10 @@ static OSStatus sendHostMacro(NSString* macro) {
     uint64_t tolerance=static_cast<uint64_t>(MAX(0,leeway)*NSEC_PER_SEC);
     dispatch_source_set_timer(timer,dispatch_time(DISPATCH_TIME_NOW,period),period,tolerance);
     __weak ELWordHostPump* weakSelf=self;
-    dispatch_source_set_event_handler(timer,^{[weakSelf wake];});
+    dispatch_source_set_event_handler(timer,^{
+        ELWordHostPump* pump=weakSelf;
+        if(pump&&(!pump.periodicWakeAllowed||pump.periodicWakeAllowed()))[pump wake];
+    });
     dispatch_resume(timer);
 }
 @end
@@ -74,11 +128,16 @@ static BOOL eligibleHost(){return NSThread.isMainThread&&[[NSBundle mainBundle].
 void EquationLabInstallWordHostPump(){
     if(!eligibleHost()||hostPump)return;
     hostPump=[ELWordHostPump new];hostPump.send=^OSStatus(NSString* macro){return sendHostMacro(macro);};
+    hostPump.deferMacro=^BOOL{return hostHasMarkedText();};
+    // Word events already publish foreground document changes. The idle
+    // recovery timer is needed when Equation Lab observes Word in the
+    // background, not while someone is typing in Word. Explicit work still
+    // calls wake immediately and observes the marked-text guard above.
+    hostPump.periodicWakeAllowed=^BOOL{return !NSApp.isActive;};
     [hostPump startPeriodicWakeWithInterval:kWorkspaceReconciliationInterval leeway:0.5];
-    dispatch_async(dispatch_get_main_queue(),^{
-        OSStatus status=sendHostMacro(@"EquationLabEntryPoints.ELInitializeDocumentEvents");
-        os_log_info(OS_LOG_DEFAULT,"WordHostPump initialize status=%d",status);
-    });
+    [hostPump initializeWordEvents];
 }
 void EquationLabWakeWordHost(){if(eligibleHost()){EquationLabInstallWordHostPump();[hostPump wake];}}
+void EquationLabScheduleWordHostPoll(){if(eligibleHost()){EquationLabInstallWordHostPump();[hostPump schedulePoll];}}
 void EquationLabWordHostDidPoll(){if(eligibleHost())[hostPump acknowledge];}
+void EquationLabWordHostDidInitialize(){if(eligibleHost())[hostPump acknowledgeInitialization];}

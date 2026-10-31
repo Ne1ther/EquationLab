@@ -69,6 +69,28 @@ export function validateRibbonAcceptance(oracle){
   if(oracle?.ribbonVerified!==true)throw Error('Require real Word confirmation that the Equation Lab Ribbon tab and permanent open-pane button are visible.');
 }
 
+export function validateStartupSource(source){
+  const sections=source.replace(/\r\n?/g,'\n').split(/(?=^[ \t]*Attribute[ \t]+VB_Name[ \t]*=)/im),modules=new Set(),entries=[];
+  let autoModule=false;
+  for(const section of sections){
+    const module=/^[ \t]*Attribute[ \t]+VB_Name[ \t]*=[ \t]*"([^"]+)"[ \t]*$/im.exec(section)?.[1]??null;
+    if(module){
+      const key=module.toLowerCase();
+      if(modules.has(key))throw Error('Duplicate VBA module in startup source.');
+      modules.add(key);autoModule ||= key==='autoexec';
+    }
+    const code=section.split('\n').filter(line=>!/^\s*(?:'|Rem\s)/i.test(line)).join('\n');
+    for(const match of code.matchAll(/^[ \t]*((?:(?:Public|Private|Friend|Static)[ \t]+)*)Sub[ \t]+(AutoExec|Main)\b([^\n]*)/gim)){
+      const name=match[2].toLowerCase();
+      if(name!=='autoexec'&&module?.toLowerCase()!=='autoexec')continue;
+      if(match[1].trim().toLowerCase()!=='public'||!/^[ \t]*(?:\([ \t]*\))?[ \t]*(?:'.*)?$/.test(match[3])||/^[ \t]*Option[ \t]+Private[ \t]+Module[ \t]*(?:'.*)?$/im.test(code))throw Error('Startup entry must be public and parameterless.');
+      entries.push({module,form:name==='main'?'module-main':'procedure'});
+    }
+  }
+  if(entries.length!==1||autoModule&&entries[0].form!=='module-main')throw Error('Require exactly one discoverable AutoExec entry.');
+  return entries[0];
+}
+
 export async function inspectCompiledTemplate(file) {
   const bytes = await fs.readFile(file), zip = await JSZip.loadAsync(bytes, {checkCRC32: true});
   const types = await zip.file('[Content_Types].xml')?.async('string');
@@ -89,7 +111,8 @@ export async function prepareArtifacts({template, bundle, source, acceptance, ou
   const observed = await inspectCompiledTemplate(template);
   const binding = oracle.binding ?? 'system-fixed';
   if (oracle.schema !== 'equationlab.word-native-loader-acceptance.v1' || oracle.templateSha256 !== observed.sha256 || oracle.sourceSha256 !== sha(originalSource) || !oracle.autoExecColdStartPassed || oracle.architecture !== 'arm64' || !['system-fixed', 'startup-adjacent'].includes(binding) || !(binding === 'system-fixed' ? oracle.fixedPathBound && FIXED_LIBRARIES.includes(oracle.fixedLibraryPath) : oracle.dynamicPathBound)) throw Error('Require matching real Word compilation, path binding and cold AutoExec acceptance, rather than structural ZIP/CFB checks alone.');
-  if (!/^Public Sub AutoExec\(\)/m.test(originalSource) || /\/Users\/|VBProject|VBComponents|EnableEvents|AutomationSecurity|MacScript|AppleScriptTask/.test(originalSource)) throw Error('Unexpected or nonportable automatic loader source.');
+  validateStartupSource(originalSource);
+  if (/\/Users\/|VBProject|VBComponents|EnableEvents|AutomationSecurity|MacScript|AppleScriptTask/.test(originalSource)) throw Error('Unexpected or nonportable automatic loader source.');
   const declarations = [...originalSource.matchAll(/Declare PtrSafe (?:Function|Sub) \w+ Lib "([^"]+)"/g)];
   const allowedLibraries = binding === 'system-fixed' ? [oracle.fixedLibraryPath] : ['/usr/lib/libSystem.B.dylib', '/usr/lib/libffi.dylib'];
   if (!declarations.length || declarations.some(m => !allowedLibraries.includes(m[1]))) throw Error('The compiled source must consistently use the host-accepted loader contract.');

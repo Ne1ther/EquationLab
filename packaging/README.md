@@ -5,7 +5,7 @@
 ```sh
 EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="/path/to/accepted-native-artifacts" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --app-only --output dist/0.6.10-build98
+./scripts/package_release.sh --app-only --output dist/0.6.11-build99
 ```
 
 版本和构建号默认读取配置；输出目录须为空。本地功能迭代用 `./scripts/build_and_run.sh --word-test run`，不运行安装器。
@@ -14,7 +14,9 @@ EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" 
 
 安装包包含 App、独立 Node 运行时、生产依赖、字体、预览资源、Word 模板与辅助组件。运行路径相对 App 定位；无需用户安装开发工具。
 
-Word 模板须在真实 Word 中导入全部模块、编译、保存，并通过冷启动加载检查。`word-native-installer/artifacts.mjs` 按模板、源码、原生组件和验收记录的哈希冻结产物。VBA 导入文件使用 CRLF 行尾；发布时核对所有模块与源码一致，并实际重开 Word 验证入口和文档事件。冻结前还须确认 Equation Lab 顶栏和按钮可用，在验收记录中填写 `ribbonVerified: true`；缺少功能区资源或这项验收时，打包会中止。
+Word 模板在真实 Word 中编译、保存，并通过冷启动加载检查。当前标准模块为 `AutoExec`、`EquationLabEntryPoints`、`EquationLabDynamicStartupLoader`、`EquationLabDocumentContext` 和 `EquationLabRibbon`，另有 `EquationLabWordEvents` 类和模板自带的 `ThisDocument`。启动入口只有 `AutoExec.Main`；目录中的旧 `EquationLabStartupLoader.bas` 是固定路径探针，不导入当前模板。
+
+`word-native-installer/artifacts.mjs` 按模板、源码、原生组件和验收记录的哈希冻结产物。VBA 导入文件使用 CRLF 行尾；发布时核对实际保存的七个模块，并重开 Word 验证入口和文档事件。冻结前还须确认 Equation Lab 顶栏和永久打开面板按钮可见，在验收记录中填写 `ribbonVerified: true`。验收源码只收录模板实际包含的模块。
 
 安装器从 Word 设置中检测 Startup 位置，只管理本产品记录的文件。安装前检查 Word 和 App 已退出；安装后验证用户安装记录、后台服务和新 Word 进程的加载记录。
 

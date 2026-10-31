@@ -25,7 +25,7 @@ function evaluateSequenceDocument(xml){
     if(reset)value=Number(reset[1]);else if(/\\c(?:\s|$)/.test(switches))value=counters.get(name);else value=(counters.get(name)||0)+1;
     assert.notEqual(value,undefined,'chapter/section fields require an earlier marker');counters.set(name,value);
     if(!/\\h(?:\s|$)/.test(switches))visible=String(value);
-   }else{const ref=/^REF ([A-Za-z][A-Za-z0-9_]*) \\h$/.exec(instruction);assert.ok(ref,instruction);visible=bookmarks.get(ref[1]);results.push({reference:ref[1],value:visible});}
+   }else{const ref=/^REF ([A-Za-z][A-Za-z0-9_]*) \\h \\!$/.exec(instruction);assert.ok(ref,instruction);visible=bookmarks.get(ref[1]);results.push({reference:ref[1],value:visible});}
   }else if(n.localName==='r')visible=elements(n,'t').map(t=>t.textContent).join('');
   if(active)marked+=visible;
  }
@@ -69,6 +69,8 @@ test('Chapter markers reset actual Word sequences while keeping marker results h
  assert.deepEqual(f.map(n=>n.instruction),['SEQ ELChapter \\r 3 \\h','SEQ ELSection \\r 2 \\h','SEQ EquationLab \\r 0 \\h']);
  assert.ok(f.every(n=>n.dirty==='true'&&!n.instruction.includes('\\*')),'format switches would cancel the SEQ hidden switch');
  assert.equal(elements(doc,'vanish').length,4);assert.equal(elements(doc,'specVanish').length,4);assert.equal(attr(elements(doc,'spacing')[0],'line'),'1');
+ const mark=elements(doc,'pPr')[0].getElementsByTagNameNS(W,'rPr')[0];
+ for(const name of ['vanish','specVanish'])assert.equal(attr(mark.getElementsByTagNameNS(W,name)[0],'val'),'0','the paragraph end must separate the context from the formula');
  assert.equal(fields(chapterBreak({chapter:3,section:4,resetEquation:false})).length,2);
  const restart=equationLayout(run,{mode:'numbered-right',resetEquation:true,equation:8});assert.match(fields(restart.xml)[0].instruction,/SEQ EquationLab \\r 8 /);
 });
@@ -81,7 +83,7 @@ test('Inserting equations changes live sequence results and references without c
  const evaluated=evaluateSequenceDocument(doc);
  assert.equal(evaluated.bookmarks.get(existing.bookmarkName),'(1.2)');assert.equal(evaluated.bookmarks.get(afterChapter.bookmarkName),'(2.1)');
  assert.deepEqual(evaluated.results,[{reference:'EL_Stable',value:'(1.2)'}]);
- const f=fields(equationReference(existing.bookmarkName,{cachedText:'(1.1)',prefix:'式 '}));assert.equal(f[0].instruction,'REF EL_Stable \\h');assert.equal(f[0].cached,'(1.1)');
+ const f=fields(equationReference(existing.bookmarkName,{cachedText:'(1.1)',prefix:'式 '}));assert.equal(f[0].instruction,'REF EL_Stable \\h \\!');assert.equal(f[0].cached,'(1.1)');
 });
 
 test('Automatic bookmarks are unique; caller registries reject explicit collisions',()=>{
@@ -98,12 +100,12 @@ test('Stable anchor identity can be reused during replacement without encoding i
  const first=equationLayout(run,{mode:'numbered-right',equation:1,bookmarkName:'EL_Physics',bookmarkId:42});
  const replacement=equationLayout(run,{mode:'numbered-left',equation:37,bookmarkName:first.bookmarkName,bookmarkId:first.bookmarkId});
  assert.equal(replacement.bookmarkName,first.bookmarkName);assert.equal(replacement.bookmarkId,first.bookmarkId);assert.equal(replacement.numberText,'(37)');
- assert.equal(fields(equationReference(first.bookmarkName))[0].instruction,'REF EL_Physics \\h');
+ assert.equal(fields(equationReference(first.bookmarkName))[0].instruction,'REF EL_Physics \\h \\!');
 });
 
 test('Text prefixes and number literals are escaped as text, never field instructions',()=>{
  const ref=equationReference('EL_Safe',{cachedText:'<1&2>',prefix:'式 < & "'}),doc=parse(ref);
- assert.equal(doc.documentElement.textContent,'式 < & "<1&2>');assert.equal(fields(ref)[0].instruction,'REF EL_Safe \\h');
+ assert.equal(doc.documentElement.textContent,'式 < & "<1&2>');assert.equal(fields(ref)[0].instruction,'REF EL_Safe \\h \\!');
  const layout=equationLayout(run,{mode:'numbered-right',numberFormat:'< #E1 & >'});assert.equal(layout.numberText,'< 1 & >');assert.equal(fields(layout.xml).length,1);parse(layout.xml);
 });
 
@@ -112,4 +114,23 @@ test('Invalid fields, bookmark names, geometry, options and structural XML are r
  for(const xml of ['', '<w:p>'+run+'</w:p>','<w:tbl/>','<w:r><w:t x=bad>q</w:t></w:r>','<w:r><w:t>x</w:r>','text','<!DOCTYPE foo>'+run,'<w:r><w:bookmarkStart w:id="1" w:name="EL_bad"/></w:r>'])assert.throws(()=>equationLayout(xml),undefined,xml);
  for(const name of ['Bad name','1bad','EL_bad" \\h', 'A'.repeat(41)])assert.throws(()=>equationReference(name));
  assert.throws(()=>equationReference('EL_OK',{suffix:'wrong'}));assert.throws(()=>chapterBreak({chapter:0}));assert.throws(()=>chapterBreak({resetEquation:'no'}));assert.throws(()=>chapterBreak({sectionBreak:true}));
+});
+
+test('Deleting first equations retains independent chapter and section resets in multiple chapters',()=>{
+ const first=equationLayout(run,{mode:'numbered-right',numberFormat:'(#C1.#S1.#E1)',chapter:3,section:2});
+ const next=equationLayout(run,{mode:'numbered-right',numberFormat:'(#C1.#S1.#E1)',chapter:3,section:2,equation:2});
+ const later=equationLayout(run,{mode:'numbered-right',numberFormat:'(#C1.#S1.#E1)',chapter:5,section:1});
+ const last=equationLayout(run,{mode:'numbered-right',numberFormat:'(#C1.#S1.#E1)',chapter:5,section:1,equation:2});
+ const input=chapterBreak({chapter:3,section:2})+first.xml+next.xml+chapterBreak({chapter:5,section:1})+later.xml+last.xml;
+ const deleted=input.replace(first.xml,'').replace(later.xml,'');
+ const calculated=evaluateSequenceDocument(deleted);
+ assert.equal(calculated.bookmarks.get(next.bookmarkName),'(3.2.1)');
+ assert.equal(calculated.bookmarks.get(last.bookmarkName),'(5.1.1)');
+ const ps=elements(parse(deleted),'p');
+ const markers=ps.filter(p=>p.getElementsByTagNameNS(W,'pPr')[0]?.getElementsByTagNameNS(W,'rPr').length);assert.equal(markers.length,2);
+ for(const p of markers){
+  const mark=p.getElementsByTagNameNS(W,'pPr')[0].getElementsByTagNameNS(W,'rPr')[0];
+  assert.equal(attr(mark.getElementsByTagNameNS(W,'vanish')[0],'val'),'0');
+  assert.equal(attr(mark.getElementsByTagNameNS(W,'specVanish')[0],'val'),'0');
+ }
 });

@@ -116,309 +116,159 @@
   "assets": [
     {
       "path": "svg/e2-lab-cream-optical.svg",
-      "sha256": "778aedfbea3a459ac4183e742b5704e362ffda4776beb1ecc6774c864f4fbf23"
+      "sha256": "e5c65421296728f6a27b5245cea194428083c07d34414adef06e534e67678355"
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-16.svg",
-      "sha256": "8a80b402967ac3c780700a475c450891a49059c0b7f45b2c9d8982e4e4bc4ee6",
-      "profile": 16,
-      "pixels": 16
-    },
-    {
-      "path": "png/e2-lab-cream-optical-16.png",
-      "sha256": "6b3ecfb90ea3f0955a7a363c4138868d2d22c11ef2031e3b2d9f37b70e1f9164",
+      "sha256": "8ef717390ae7a63ca0cf6bd29fec222efa93b23706c04143ccfc940ae0183b4b",
       "profile": 16,
       "pixels": 16
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-32.svg",
-      "sha256": "87193c2c59cb6cd1893488c02d3b5e210b8f134cffd883106c37c440489e0579",
-      "profile": 32,
-      "pixels": 32
-    },
-    {
-      "path": "png/e2-lab-cream-optical-32.png",
-      "sha256": "78f815a6c846e10499ddb8b7dbc2ecda7dfedd357894bdc074cf76d0d2106ef7",
+      "sha256": "4a1418a1b9be0b8e476b716ed735f972d425f62cf94dff5a8c9df7f882e4e666",
       "profile": 32,
       "pixels": 32
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-48.svg",
-      "sha256": "e34b50564c1eb6920548098da53baaec740a46a4722a6294be0bab9c98b4879f",
-      "profile": 48,
-      "pixels": 48
-    },
-    {
-      "path": "png/e2-lab-cream-optical-48.png",
-      "sha256": "7920e46023a74b4721fe1be243050056608ed9a0c0bc43c9fe74c28577f83c6c",
+      "sha256": "4ec9f21b2181861f0c28b6f4482f8ee1f9c3441d1130a5bfdf739ba23a56f784",
       "profile": 48,
       "pixels": 48
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-64.svg",
-      "sha256": "82ea6f21a1848ccaf7b2e25ba81c1676450cbe5ffd5465b9d64f77a9fa7f97ca",
-      "profile": 64,
-      "pixels": 64
-    },
-    {
-      "path": "png/e2-lab-cream-optical-64.png",
-      "sha256": "0ac8b61171075173185ee0df2aae45c6f0813871b7cc82810d9d92e66f54479f",
+      "sha256": "788847c57b621bee721d3b8d0c2ddabd406875866f48560007e0a9cb132c2644",
       "profile": 64,
       "pixels": 64
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-80.svg",
-      "sha256": "f90af977fa6978955abbcddc6e0bc02c75d37f07e1c7faa648a3d2fe713037de",
-      "profile": 80,
-      "pixels": 80
-    },
-    {
-      "path": "png/e2-lab-cream-optical-80.png",
-      "sha256": "3e78a33b9e5b8e4b13ff7c9dc59a90020c8b0e7350005987ef8021ff228012fb",
+      "sha256": "ea4d5734162e60f23f66789fe0e90c43f17b8c6c855bdc59cbe76eed13ed1fdc",
       "profile": 80,
       "pixels": 80
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-128.svg",
-      "sha256": "1a26734f57dba881c078634496e6c205f157d0f6b98e47b885b80f9a1f4015e4",
-      "profile": 128,
-      "pixels": 128
-    },
-    {
-      "path": "png/e2-lab-cream-optical-128.png",
-      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
+      "sha256": "86d75a87f8f5263c87c8b5650e14f4388c4cb86914c761deaef6ca24fefdc585",
       "profile": 128,
       "pixels": 128
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-256.svg",
-      "sha256": "50c309df0a2f3be0f71867d8a58bf416f4707c6535e6bcc18a79d48a20fa4603",
-      "profile": 256,
-      "pixels": 256
-    },
-    {
-      "path": "png/e2-lab-cream-optical-256.png",
-      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "sha256": "cc6ed8f45c012364a1fccce3cffe492735ecd37cb377482ee954bf61b4b74d37",
       "profile": 256,
       "pixels": 256
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-512.svg",
-      "sha256": "79f12849b650193f2e7356735c21a25255a78e30204cac1ad3bed88bce1ee328",
-      "profile": 512,
-      "pixels": 512
-    },
-    {
-      "path": "png/e2-lab-cream-optical-512.png",
-      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "sha256": "ad6fc19104494911eb966a09366233e88602b5b76d590a09595e87fc6bb10934",
       "profile": 512,
       "pixels": 512
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-1024.svg",
-      "sha256": "778aedfbea3a459ac4183e742b5704e362ffda4776beb1ecc6774c864f4fbf23",
-      "profile": 1024,
-      "pixels": 1024
-    },
-    {
-      "path": "png/e2-lab-cream-optical-1024.png",
-      "sha256": "c2f6f62e5a5c7988e346a711e8ce61499813d41e69ba3a98a2d41a9c7aef55be",
+      "sha256": "e5c65421296728f6a27b5245cea194428083c07d34414adef06e534e67678355",
       "profile": 1024,
       "pixels": 1024
     },
     {
       "path": "svg/optical/e2-lab-cream-optical-2048.svg",
-      "sha256": "a57d2758831c45ac4b6dc8c10404cf0b1fdcdd961df6ccb1be0d5145e841f223",
+      "sha256": "1cfbb407e24bf5cc97d2f9e4324695bafe55d71648e62d9f7307eb41225c0654",
       "profile": 2048,
       "pixels": 2048
     },
     {
-      "path": "png/e2-lab-cream-optical-2048.png",
-      "sha256": "514db8ece8bd47c75920c92d56d5bf6fd3e070ccd4dae6f5dbf8cf4f9c320198",
-      "profile": 2048,
-      "pixels": 2048
-    },
-    {
-      "path": "png/e2-lab-cream-optical-16@2x.png",
-      "sha256": "318ac15ada7923c1a9a4246611602c8204924d253c5fc36045f5520f5260e030",
-      "profile": 16,
-      "pixels": 32,
-      "scale": 2
-    },
-    {
-      "path": "png/e2-lab-cream-optical-32@2x.png",
-      "sha256": "6d3358ed85942524d94cb52afd8072a19d63ecbadf13421fba91265159c00b40",
-      "profile": 32,
-      "pixels": 64,
-      "scale": 2
-    },
-    {
-      "path": "png/e2-lab-cream-optical-48@2x.png",
-      "sha256": "2434b516076cca40c04ac2e25394678f5c99c14d5cec3e118efb3d1d0bee069c",
-      "profile": 48,
-      "pixels": 96,
-      "scale": 2
-    },
-    {
-      "path": "png/e2-lab-cream-optical-64@2x.png",
-      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
-      "profile": 64,
-      "pixels": 128,
-      "scale": 2
-    },
-    {
-      "path": "png/e2-lab-cream-optical-128@2x.png",
-      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
-      "profile": 128,
-      "pixels": 256,
-      "scale": 2
+      "path": "png/e2-lab-cream-optical-1024.png",
+      "sha256": "5335d631e1b7a47aa5ef8223b4d18494296ac7ea1ae6e1c58be2b3da4a253733",
+      "profile": 1024,
+      "pixels": 1024
     },
     {
       "path": "EquationLab.iconset/icon_16x16.png",
-      "sha256": "6b3ecfb90ea3f0955a7a363c4138868d2d22c11ef2031e3b2d9f37b70e1f9164",
+      "sha256": "29530245e85730f8d86c9b39ce20cf39b04406056135f1c955aa7e99d5c23eec",
       "profile": 16,
       "pixels": 16,
       "scale": 1
     },
     {
       "path": "EquationLab.iconset/icon_16x16@2x.png",
-      "sha256": "318ac15ada7923c1a9a4246611602c8204924d253c5fc36045f5520f5260e030",
+      "sha256": "e94affe3ea0d5c877595224da64556a4f0ea2caa571982be545a0d5ceafa71f0",
       "profile": 16,
       "pixels": 32,
       "scale": 2
     },
     {
       "path": "EquationLab.iconset/icon_32x32.png",
-      "sha256": "78f815a6c846e10499ddb8b7dbc2ecda7dfedd357894bdc074cf76d0d2106ef7",
+      "sha256": "69e9a65ea5c30a56ccf0034309264c8bec044e215b9ea752bb863229a4d3f0b0",
       "profile": 32,
       "pixels": 32,
       "scale": 1
     },
     {
       "path": "EquationLab.iconset/icon_32x32@2x.png",
-      "sha256": "6d3358ed85942524d94cb52afd8072a19d63ecbadf13421fba91265159c00b40",
+      "sha256": "42ab920b40a89db73cac007998ca715e63a81b176abf7358e591818cbcb1b122",
       "profile": 32,
       "pixels": 64,
       "scale": 2
     },
     {
       "path": "EquationLab.iconset/icon_128x128.png",
-      "sha256": "9c782afb3a7b3264427d96ba4f70fef85dccdffa51b5da74f55ee005a6517178",
+      "sha256": "e9f95e91df8dd1de077a031f4e6cb03d561f62070eb88dab94bdbc799ce79175",
       "profile": 128,
       "pixels": 128,
       "scale": 1
     },
     {
       "path": "EquationLab.iconset/icon_128x128@2x.png",
-      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "sha256": "c8819dbf033f7bc7784b6b974d9d635a14601414a521f63c30a26678c6379a06",
       "profile": 128,
       "pixels": 256,
       "scale": 2
     },
     {
       "path": "EquationLab.iconset/icon_256x256.png",
-      "sha256": "498c03c7d0b62da603e0915d067ff4af2c6369861e9afef2004580a05e71ebf7",
+      "sha256": "c8819dbf033f7bc7784b6b974d9d635a14601414a521f63c30a26678c6379a06",
       "profile": 256,
       "pixels": 256,
       "scale": 1
     },
     {
       "path": "EquationLab.iconset/icon_256x256@2x.png",
-      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "sha256": "8feb9e24a5856b0c336b019c9149ea6da9de324fad61ecb672765e446d4be3cb",
       "profile": 256,
       "pixels": 512,
       "scale": 2
     },
     {
       "path": "EquationLab.iconset/icon_512x512.png",
-      "sha256": "7e8eb1f78edfcc3429156c99737ff39b2330e305e433f52fd14c9cee7ae7c8c2",
+      "sha256": "8feb9e24a5856b0c336b019c9149ea6da9de324fad61ecb672765e446d4be3cb",
       "profile": 512,
       "pixels": 512,
       "scale": 1
     },
     {
       "path": "EquationLab.iconset/icon_512x512@2x.png",
-      "sha256": "c2f6f62e5a5c7988e346a711e8ce61499813d41e69ba3a98a2d41a9c7aef55be",
+      "sha256": "5335d631e1b7a47aa5ef8223b4d18494296ac7ea1ae6e1c58be2b3da4a253733",
       "profile": 512,
       "pixels": 1024,
       "scale": 2
     },
     {
       "path": "EquationLab.icns",
-      "sha256": "563b5e856f66869f7cc0f62f1a9ca042a8b91d859114e5d3972bcfbdcb6e12ae"
-    },
-    {
-      "path": "comparison/v5-16.png",
-      "sha256": "f254c832c50b6ca0ad073e3dc4153aa8ab01ce0cb53d079416dbef2420b2b841",
-      "pixels": 16,
-      "reference": "../v5/png/e2-lab-orange-paper-16.png"
-    },
-    {
-      "path": "comparison/v5-16@2x.png",
-      "sha256": "c62151b45f0b24072b1362b0511cba932b3a8082f1dbe1d8e94c8970ffcbdd89",
-      "pixels": 32,
-      "reference": "../v5/png/e2-lab-orange-paper-32.png"
-    },
-    {
-      "path": "comparison/v5-32.png",
-      "sha256": "c62151b45f0b24072b1362b0511cba932b3a8082f1dbe1d8e94c8970ffcbdd89",
-      "pixels": 32,
-      "reference": "../v5/png/e2-lab-orange-paper-32.png"
-    },
-    {
-      "path": "comparison/v5-32@2x.png",
-      "sha256": "530f7a2c722b46e83e4c6c195a36d352f54cc2c5fe781c6dff2768dc2e50a5dd",
-      "pixels": 64,
-      "reference": "../v5/png/e2-lab-orange-paper-64.png"
-    },
-    {
-      "path": "comparison/v5-48.png",
-      "sha256": "add9377ff22cfedc87bb5e44665bbb002c2e12fa41361c528cd49c7dc520a094",
-      "pixels": 48,
-      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
-    },
-    {
-      "path": "comparison/v5-48@2x.png",
-      "sha256": "725100cf94100464397f49d3f9fe913b8a9d43bf78855e45e428eb0d5ccf28d2",
-      "pixels": 96,
-      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
-    },
-    {
-      "path": "comparison/v5-64.png",
-      "sha256": "530f7a2c722b46e83e4c6c195a36d352f54cc2c5fe781c6dff2768dc2e50a5dd",
-      "pixels": 64,
-      "reference": "../v5/png/e2-lab-orange-paper-64.png"
-    },
-    {
-      "path": "comparison/v5-64@2x.png",
-      "sha256": "3b44b21a4ec3070f8f3004d8ec076c753d4416b8bfb2a2edc735814dbffbf333",
-      "pixels": 128,
-      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
-    },
-    {
-      "path": "comparison/v5-128.png",
-      "sha256": "3b44b21a4ec3070f8f3004d8ec076c753d4416b8bfb2a2edc735814dbffbf333",
-      "pixels": 128,
-      "reference": "../v5/png/e2-lab-orange-paper-1024.png"
-    },
-    {
-      "path": "comparison/v5-128@2x.png",
-      "sha256": "9ffb52ac44d3925cab8d42f113454a81a96feebedd9406a7d69fd656e755526d",
-      "pixels": 256,
-      "reference": "../v5/png/e2-lab-orange-paper-256.png"
-    },
-    {
-      "path": "comparison/v5-v6-actual-size-light-dark.png",
-      "sha256": "8ca8a194743d3ad6149f9486c3f448f69ed23fc59af961e1ee081b0728dd6cc5",
-      "pixels": [
-        1120,
-        840
-      ]
-    },
-    {
-      "path": "preview.html",
-      "sha256": "6596896c8d6ef12a278e77ecf42e2f08d97abde16346a92da8f1bc597c667b9a"
+      "sha256": "94ba8eddf18d340d538cb5cbd35483bbf73815a89c911280763722b2e75fab55"
     }
   ],
-  "actualInstalledIconChanged": false
+  "actualInstalledIconChanged": false,
+  "canvasNormalization": {
+    "canvasPixels": 1024,
+    "previousTilePixels": 892,
+    "tilePixels": 824,
+    "scale": 0.9237668161434978,
+    "center": [
+      512,
+      512
+    ],
+    "outlinePathsPreserved": true
+  }
 }

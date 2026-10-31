@@ -27,6 +27,8 @@ const editorMacros={
 mf.macros={...mf.macros,...window.prepareEquationMacros({...editorMacros,...window.equationCatalogMacros})};
 window.installEquationMacroEditing(mf);
 const pending=new Map();let sequence=0,revision=0,timer,valid=false,busy=false,source=null,selected=null,mode='rebuild';
+const editorCompositions=new Set();let compositionCommitTimer,compositionCommitPending=false;
+window.editorIsComposing=()=>editorCompositions.size>0||compositionCommitPending;
 var editorViewport;
 window.sidebarPublisher=window.createSidebarPublisher?.();
 let wordTicket=null,wordSaveQueued=false,wordOutcomeUnknown=false,wordNavigating=false,wordNavigationTimer;const idleWaiters=new Set();
@@ -67,10 +69,10 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
  },
  empty:()=>{if(!wordTicket)resetNewFormula();},
  captureInsertionDraft:()=>({latex:mf.value,ruler:editingRuler,typography:window.desktopTypographySnapshot?.()??window.desktopTypographyPatch?.()}),
- state:()=>({source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordSaveInFlight,outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'}),
+ state:()=>({source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordSaveInFlight||!!window.editorIsComposing?.(),outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'}),
  changed:()=>{renderObjects();controls();},
  detach:async({preserveDraft=false}={})=>{
-  if(busy||wordSaveQueued||wordOutcomeUnknown||window.wordSaveInFlight)return false;
+  if(busy||wordSaveQueued||wordOutcomeUnknown||window.wordSaveInFlight||window.editorIsComposing?.())return false;
   const ticket=wordTicket;if(!ticket&&!source)return true;window.wordDocumentWorkspace?.remember(source);
   const generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;
   // Closing the owning Word document can dispose its ticket before the
@@ -107,8 +109,8 @@ function status(title,detail,error=false,bytes='',warning=false){$('status-title
 // click can wait for that check, but may never submit the previous preferences.
 let validationRunning=null,validationRequested=false,validationPending=false,validatedFormulaKey=null;
 function formulaKey(){return JSON.stringify([mf.value,editingRuler,source?.path??null,selected?.index??null,selected?.nativeSha256??null,selected?.error??null,mode,[...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])]);}
-function exportAvailable(){return valid||validationPending&&validatedFormulaKey!==null&&formulaKey()===validatedFormulaKey;}
-function controls(){const unavailableBinding=wordSourceUnavailable(),blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending||unavailableBinding||!exportAvailable();for(const id of ['export','save-edit','copy-png'])$(id).disabled=blocked;$('arrange-source').disabled=blocked;$('word-session-save').disabled=blocked||wordOutcomeUnknown;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending;window.syncWordEditorControls?.();requestWorkbenchSync();}
+function exportAvailable(){return !window.editorIsComposing?.()&&(valid||validationPending&&validatedFormulaKey!==null&&formulaKey()===validatedFormulaKey);}
+function controls(){const unavailableBinding=wordSourceUnavailable(),blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending||unavailableBinding||!exportAvailable();for(const id of ['export','save-edit','copy-png'])$(id).disabled=blocked;$('arrange-source').disabled=blocked;$('word-session-save').disabled=blocked||wordOutcomeUnknown;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending;window.syncWordEditorControls?.();window.editorStructure?.refresh();requestWorkbenchSync();}
 window.syncWordEditorControls=()=>{
  const english=!!window.workbenchEnglish,blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending,unavailable=wordSourceUnavailable();
  const cancel=english?(wordOutcomeUnknown?'Close':'Cancel'):(wordOutcomeUnknown?'关闭':'取消');
@@ -119,9 +121,15 @@ window.syncWordEditorControls=()=>{
  for(const [id,label] of [['word-session-cancel',cancel],['word-session-save',save]]){$(id).textContent=label;$(id).setAttribute('aria-label',label);}
  for(const id of ['mode-rebuild','mode-characters'])$(id).disabled=blocked||unavailable||!selected||wordOutcomeUnknown;
 };
-async function ensureValid(){clearTimeout(timer);if(!valid)await validate();if(!valid)throw Error('请先完成原生数据检查');}
+async function ensureValid(){if(window.editorIsComposing?.())throw Error('请先完成输入法组字');clearTimeout(timer);if(!valid)await validate();if(!valid)throw Error('请先完成原生数据检查');}
+function showUnavailableFormula(){
+ clearTimeout(timer);revision++;validationRequested=false;validationPending=false;validatedFormulaKey=null;valid=false;
+ mf.value='';mf.readOnly=true;$('latex').value='';$('latex').readOnly=true;
+ window.desktopFontPreview?.(null);editorViewport?.refresh();status('当前公式只读',selected.error,true);controls();
+}
 async function validate(){
- if(wordNavigating)return;
+ if(wordNavigating||window.editorIsComposing?.())return;
+ if(selected?.error){showUnavailableFormula();return;}
  validationRequested=true;validationPending=true;
  if(validationRunning)return validationRunning;
  validationRunning=(async()=>{
@@ -139,11 +147,35 @@ async function validate(){
  })();
  try{await validationRunning;}finally{validationRunning=null;}
 }
-function changed(scheduleValidation=true){window.syncEquationMacros(mf);recordEditorHistory();editorViewport?.refresh();clearTimeout(timer);revision++;$('latex').value=mf.value;valid=false;validationPending=true;controls();status('正在检查原生数据…','检查通过后即可导出 MathType 对象。');if(scheduleValidation)timer=setTimeout(validate,90);}
-mf.addEventListener('input',changed);$('latex').addEventListener('input',()=>{mf.value=$('latex').value;changed();});
+function changed(scheduleValidation=true){if(window.editorIsComposing?.())return;window.syncEquationMacros(mf);recordEditorHistory();editorViewport?.refresh();clearTimeout(timer);revision++;$('latex').value=mf.value;valid=false;validationPending=true;controls();status('正在检查原生数据…','检查通过后即可导出 MathType 对象。');if(scheduleValidation)timer=setTimeout(validate,90);}
+function beginEditorComposition(target){
+ editorCompositions.add(target);compositionCommitPending=false;clearTimeout(timer);clearTimeout(compositionCommitTimer);
+ // Invalidate in-flight previews without rewriting either editor, macros,
+ // selection, or history while the input method owns its marked text.
+ revision++;validationRequested=false;validationPending=true;valid=false;controls();
+}
+function commitEditorInput(target){
+ clearTimeout(compositionCommitTimer);compositionCommitPending=false;if(editorCompositions.size)return;
+ if(target===$('latex'))mf.value=target.value;
+ changed();
+}
+for(const target of [mf,$('latex')]){
+ target.addEventListener('compositionstart',()=>beginEditorComposition(target));
+ target.addEventListener('compositionend',()=>{
+  editorCompositions.delete(target);
+  // WebKit may deliver the final input after compositionend. Let that input
+  // commit, or handle cancelled/unchanged compositions on the next task.
+  clearTimeout(compositionCommitTimer);compositionCommitPending=true;compositionCommitTimer=setTimeout(()=>commitEditorInput(target),0);
+ });
+ target.addEventListener('input',(event={})=>{
+  if(event.isComposing){if(!editorCompositions.has(target))beginEditorComposition(target);return;}
+  if(editorCompositions.size)return;
+  commitEditorInput(target);
+ });
+}
 const groups={
 '常用结构':[['a/b','\\frac{#0}{#?}','分式'],['xⁿ','#0^{#?}','上标'],['xᵢ','#0_{#?}','下标'],['√x','\\sqrt{#0}','根号'],['ⁿ√x','\\sqrt[#?]{#0}','n次根'],['(x)','\\left(#0\\right)','圆括号'],['[x]','\\left[#0\\right]','方括号'],['{x}','\\left\\{#0\\right\\}','花括号'],['|x|','\\left|#0\\right|','绝对值'],['a/b','\\tfrac{#0}{#?}','小分式'],['a/b','\\sfrac{#0}{#?}','斜分式'],['xᵢⁿ','#0_{#?}^{#?}','上下标'],['⟨x⟩','\\left\\langle #0\\right\\rangle','尖括号'],['‖x‖','\\left\\|#0\\right\\|','范数'],['⌊x⌋','\\left\\lfloor #0\\right\\rfloor','向下取整'],['⌈x⌉','\\left\\lceil #0\\right\\rceil','向上取整']],
-'积分与求和':[['∫','\\int_{#?}^{#?}#0','积分'],['∬','\\iint_{#?}^{#?}#0','二重积分'],['∑','\\sum_{i=1}^{n}#0','求和'],['∏','\\prod_{i=1}^{n}#0','乘积'],['lim','\\lim_{x\\to 0}#0','极限'],['∫','\\int #0','不定积分'],['∭','\\iiint_{#?}^{#?}#0','三重积分'],['∮','\\oint_{#?}#0','围道积分'],['∐','\\coprod_{i=1}^{n}#0','余积'],['⋃','\\bigcup_{i=1}^{n}#0','大并集'],['⋂','\\bigcap_{i=1}^{n}#0','大交集'],['limsup','\\limsup_{n\\to\\infty}#0','上极限']],
+'积分与求和':[['∫','\\int_{#?}^{#?}#0','积分'],['∬','\\iint_{#?}^{#?}#0','二重积分'],['∑','\\sum_{i=1}^{n}#0','求和'],['∏','\\prod_{i=1}^{n}#0','乘积'],['lim','\\lim_{x\\to 0}#0','极限'],['∫','\\int #0','不定积分'],['∭','\\iiint_{#?}^{#?}#0','三重积分'],['∮','\\oint_{#?}#0','围道积分'],['∐','\\coprod_{i=1}^{n}#0','余积'],['⋃','\\bigcup_{i=1}^{n}#0','大并集'],['⋂','\\bigcap_{i=1}^{n}#0','大交集'],['limsup','\\limsup_{n\\to\\infty}#0','上极限'],['∑','\\sum\\limits_{#?}^{#?}#0','求和 · 上下限'],['∑','\\sum\\nolimits_{#?}^{#?}#0','求和 · 右侧上下限']],
 '矩阵':[['[aᵢⱼ]','\\begin{bmatrix}#?&#?\\\\#?&#?\\end{bmatrix}','2×2'],['(aᵢⱼ)','\\begin{pmatrix}#?&#?\\\\#?&#?\\end{pmatrix}','圆括号'],['|A|','\\begin{vmatrix}#?&#?\\\\#?&#?\\end{vmatrix}','行列式'],['{x','\\begin{cases}#?&#?\\\\#?&#?\\end{cases}','分段'],['a = b','\\begin{aligned}#?&=#?\\\\#?&=#?\\end{aligned}','对齐'],['[aᵢⱼ]','\\begin{bmatrix}#?&#?&#?\\\\#?&#?&#?\\\\#?&#?&#?\\end{bmatrix}','3×3'],['aᵢⱼ','\\begin{matrix}#?&#?\\\\#?&#?\\end{matrix}','无括号'],['{aᵢⱼ}','\\begin{Bmatrix}#?&#?\\\\#?&#?\\end{Bmatrix}','花括号'],['‖A‖','\\begin{Vmatrix}#?&#?\\\\#?&#?\\end{Vmatrix}','双竖线'],['[aᵢ]','\\begin{bmatrix}#?\\\\#?\\\\#?\\end{bmatrix}','列向量'],['[aⱼ]','\\begin{bmatrix}#?&#?&#?\\end{bmatrix}','行向量'],['[A|b]','\\left[\\begin{array}{cc|c}#?&#?&#?\\\\#?&#?&#?\\end{array}\\right]','增广矩阵']],
 '希腊字母':[['α','\\alpha'],['β','\\beta'],['γ','\\gamma'],['δ','\\delta'],['θ','\\theta'],['λ','\\lambda'],['μ','\\mu'],['π','\\pi'],['ρ','\\rho'],['σ','\\sigma'],['φ','\\varphi'],['ω','\\omega'],['Δ','\\Delta'],['Ω','\\Omega']],
 '运算与关系':[['±','\\pm'],['×','\\times'],['⋅','\\cdot'],['≤','\\leq'],['≥','\\geq'],['≠','\\neq'],['≈','\\approx'],['∈','\\in'],['∞','\\infty'],['∂','\\partial'],['∇','\\nabla'],['→','\\to'],['÷','\\div'],['⩽','\\leqslant'],['⩾','\\geqslant'],['∉','\\notin'],['⊆','\\subseteq'],['∩','\\cap'],['∪','\\cup'],['⇒','\\Rightarrow']],
@@ -165,7 +197,7 @@ window.nativeNew=()=>busy?false:wordTicket?window.wordDocumentWorkspace?.newForm
 window.nativeInsertWord=mode=>window.wordDocumentWorkspace?.insert(mode);
 window.nativeOpen=()=>perform(async()=>{if(wordTicket)throw Error('请先保存或取消当前 Word 编辑会话');const r=await native('open');if(!r){message('');return;}source=r;message('已读取 '+r.objects.length+' 个 MathType 对象');renderObjects();$('subtitle').textContent=r.path;if(r.objects.length)selectObject(0);else message('这个文档未找到 MathType OLE 公式。Word 自带公式和纯图片不在此列表。');});
 function renderObjects(invalidate=true){if(invalidate)window.sidebarPublisher?.invalidate(window.wordDocumentWorkspace?.visibleSource(source)??source);return syncSidebar();}
-function selectObject(index,{scheduleValidation=true}={}){selected=source.objects[index];if(!selected)return;loadObjectLayout(selected);mode='rebuild';$('title').textContent='编辑文档中的公式';$('eyebrow').textContent='LEGACY MATHTYPE';$('source-panel').hidden=false;$('save-edit').hidden=false;$('arrange-source').hidden=false;$('source-class').textContent=selected.progId;mf.value=selected.latex||'';window.syncEquationMacros(mf);selected.editorBaseline=mf.value;editingRuler=selected.ruler??undefined;window.resetEditorHistory?.();window.desktopTypographyLoad?.(selected.typography);renderModes();const sidebarSync=renderObjects(false);$('original-preview').replaceChildren();if(selected.image){const image=document.createElement('img');image.src=selected.image;image.alt='原文档中的公式预览';$('original-preview').append(image);}if(selected.error){status('当前公式只读',selected.error,true);valid=false;controls();}else changed(scheduleValidation);return sidebarSync;}
+function selectObject(index,{scheduleValidation=true}={}){selected=source.objects[index];if(!selected)return;loadObjectLayout(selected);mode='rebuild';$('title').textContent='编辑文档中的公式';$('eyebrow').textContent='LEGACY MATHTYPE';$('source-panel').hidden=false;$('save-edit').hidden=false;$('arrange-source').hidden=false;$('source-class').textContent=selected.progId;mf.value=selected.error?'':selected.latex||'';window.syncEquationMacros(mf);selected.editorBaseline=mf.value;editingRuler=selected.ruler??undefined;window.resetEditorHistory?.();window.desktopTypographyLoad?.(selected.typography);renderModes();const sidebarSync=renderObjects(false);$('original-preview').replaceChildren();if(selected.image){const image=document.createElement('img');image.src=selected.image;image.alt='原文档中的公式预览';$('original-preview').append(image);}if(selected.error)showUnavailableFormula();else changed(scheduleValidation);return sidebarSync;}
 function renderModes(){mf.readOnly=mode==='characters'||!!selected?.error;$('latex').readOnly=mode==='characters'||!!selected?.error;for(const b of $('palette').querySelectorAll('button'))b.disabled=mode==='characters'||!!selected?.error;$('mode-characters').classList.toggle('selected',mode==='characters');$('mode-rebuild').classList.toggle('selected',mode==='rebuild');$('character-editor').hidden=mode!=='characters';$('character-editor').replaceChildren();$('mode-note').textContent=mode==='characters'?'只修改字符字节，保留原生结构、样式和伴随数据。支持数字、英文字母及已确认编码的希腊字母。':'可编辑分式、根式和上下标等结构；修改结构可能重新排布局部样式。只替换字符时可用“保留结构”。';for(const c of (selected?.characters||[]).filter(c=>c.editable)){const label=document.createElement('label');label.textContent=c.char+' →';const input=document.createElement('input');input.value=c.char;input.maxLength=1;input.dataset.offset=c.offset;input.setAttribute('aria-label',`替换字符 ${c.char}，位置 ${c.offset}`);input.disabled=c.editable!==true||!!selected.error;if(c.editReason)input.title=c.editReason;input.oninput=previewCharacterEdit;label.append(input);$('character-editor').append(label);}if(selected?.error){mf.readOnly=true;valid=false;}if(window.workbenchEnglish!==undefined)window.setWorkbenchLanguage?.(window.workbenchEnglish?'en':'zh-Hans');}
 async function previewCharacterEdit(){if(window.wordDocumentWorkspace?.wordDocumentUnavailable)return;const rev=++revision;valid=false;validationPending=true;controls();const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));try{const r=await native('editPreview',{input:source.path,index:selected.index,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});if(rev!==revision)return;mf.value=r.latex;$('latex').value=r.latex;window.desktopFontPreview?.(r.svg);valid=true;validationPending=false;validatedFormulaKey=formulaKey();status(r.warnings?.length?'原公式含未映射字符':'原生字符修改检查通过',r.warnings?.length?r.warnings.join(' '):'保存时只替换对应字符字节，原公式结构和样式保留。',false,'',!!r.warnings?.length);}catch(e){if(rev!==revision)return;validationPending=false;validatedFormulaKey=null;status('字符暂不能这样替换',e.message,true);}controls();}
 $('mode-characters').onclick=()=>{if(!selected)return;mode='characters';mf.value=selected.latex||'';renderModes();changed();};$('mode-rebuild').onclick=()=>{if(!selected)return;mode='rebuild';renderModes();changed();};
@@ -408,6 +440,7 @@ async function waitForWordSave(){
  }
 }
 function wordSessionChanged(){
+ if(window.editorIsComposing?.())return true;
  if(source?.insertion){
   const initial=source.insertionLayout??{},layout=wordLayout();
   return !!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'||
@@ -539,12 +572,16 @@ window.workbenchAction=async(action,payload={})=>{
   if(!Number.isInteger(rows)||!Number.isInteger(columns)||rows<1||columns<1||rows>31||columns>31||!['matrix','pmatrix','bmatrix','Bmatrix','vmatrix','Vmatrix'].includes(environment)||!['l','c','r'].includes(alignment))throw Error('矩阵尺寸须为1至31，且使用有效的括号和对齐方式');
   const cells=Array.from({length:rows},()=>Array(columns).fill('#?').join('&')).join('\\\\');
   let latex;if(alignment==='c'&&!divider)latex='\\begin{'+environment+'}'+cells+'\\end{'+environment+'}';else{const spec=Array(columns).fill(alignment);if(divider&&columns>1)spec[columns-1]='|'+spec[columns-1];latex='\\begin{array}{'+spec.join('')+'}'+cells+'\\end{array}';const fences={pmatrix:['(',')'],bmatrix:['[',']'],Bmatrix:['\\{','\\}'],vmatrix:['|','|'],Vmatrix:['\\|','\\|']};if(fences[environment])latex='\\left'+fences[environment][0]+latex+'\\right'+fences[environment][1];}
-  if(payload.equalColumns||payload.equalRows)latex='\\mtmatrix{'+(['l','c','r'].indexOf(alignment)+(payload.equalColumns?128:0))+'}{'+(1+(payload.equalRows?128:0))+'}{4}{'+latex+'}';
+  if(payload.equalColumns||payload.equalRows)latex='\\mtmatrix{'+(['l','c','r'].indexOf(alignment)+(payload.equalColumns?128:0))+'}{'+(1+(payload.equalRows?128:0))+'}{1}{'+latex+'}';
   mf.focus();mf.insert(latex,{selectionMode:'placeholder'});changed();
  }else if(action==='ruler'){
   if(mf.readOnly)return false;if(!Array.isArray(payload.tabs)||payload.tabs.length>100||payload.tabs.some(t=>!Number.isInteger(t.position)||t.position<0||t.position>32767||!Number.isInteger(t.type)||t.type<0||t.type>4)||new Set(payload.tabs.map(t=>t.position)).size!==payload.tabs.length)throw Error('无效的制表位');editingRuler=payload.tabs.map(t=>({...t})).sort((a,b)=>a.position-b.position);changed();
  }else if(action==='editorCommand'){
   if(payload.command==='undo')editorUndo();else if(payload.command==='redo')editorUndo(true);else{const allowed=['cutToClipboard','copyToClipboard','pasteFromClipboard','selectAll','addRowBefore','addRowAfter','addColumnBefore','addColumnAfter','removeRow','removeColumn','insertTab'];if(!allowed.includes(payload.command))throw Error('未知的编辑命令');if(mf.readOnly&&payload.command!=='copyToClipboard'&&payload.command!=='selectAll')return false;mf.focus();if(payload.command==='insertTab')mf.insert('\\eltab ',{selectionMode:'after'});else{const matrix=matrixContext();if(['addRowBefore','addRowAfter','addColumnBefore','addColumnAfter','removeRow','removeColumn'].includes(payload.command)){if(!matrix)throw Error('请先把光标放在矩阵单元格内');if(payload.command.startsWith('addRow')&&matrix.rows>=31||payload.command.startsWith('addColumn')&&matrix.columns>=31)throw Error('原版矩阵每维最多31');if(payload.command==='removeRow'&&matrix.rows<=1||payload.command==='removeColumn'&&matrix.columns<=1)throw Error('矩阵至少保留一行一列');}mf.executeCommand(payload.command);}if(!['copyToClipboard','selectAll'].includes(payload.command))changed();}
+ }else if(action==='operatorLimits'){
+  if(mf.readOnly)return false;if(!window.setEquationOperatorLimits(mf,payload.placement))return false;changed();
+ }else if(action==='editorStructure'){
+  if(!['exit','select'].includes(payload.command))throw Error('未知的结构命令');if(mf.readOnly&&payload.command==='exit')return false;window.navigateEquationStructure(mf,payload.command);
  }else if(action==='insertLetter'){
   if(mf.readOnly)return false;
   if(typeof payload.latex!=='string'||payload.latex.length>64)throw Error('无效的字母');
@@ -557,7 +594,7 @@ window.workbenchAction=async(action,payload={})=>{
  }else if(action==='arrangeAll'){
   $('arrange-all').checked=!!payload.value;
  }else if(action==='language'){
-  window.setWorkbenchLanguage?.(payload.value);
+  window.setWorkbenchLanguage?.(payload.value);window.editorStructure?.refresh();
  }else if(action==='zoom'){
   const value=Number(payload.value);if(![0,50,75,100,125,150,200,250,300].includes(value))throw Error('未知缩放比例');
   workbenchZoom=value;editorViewport.refresh();
@@ -567,7 +604,7 @@ window.workbenchAction=async(action,payload={})=>{
 document.body.classList.add('workbench-canvas');
 $('word-preview').append($('desktop-font-preview'));
 document.querySelector('.editor-card').prepend($('source-panel'));
-$('latex-details').querySelector('summary').append($('copy-latex'));
+$('latex-details').querySelector('.preview-panel-header').append($('copy-latex'));
 $('copy-latex').setAttribute('aria-label','复制 LaTeX');
 $('word-preview-zoom').addEventListener('click',event=>event.stopPropagation());
 $('word-preview-zoom').addEventListener('change',event=>document.documentElement.style.setProperty('--word-preview-scale',event.target.value));
@@ -582,3 +619,4 @@ mf.addEventListener('keydown',event=>{if((event.metaKey||event.ctrlKey)&&event.k
 window.resetEditorHistory();
 
 mf.addEventListener('selection-change',requestWorkbenchSync);
+window.editorStructure=window.installEquationStructureControls(mf,{onChange:changed,onSelection:requestWorkbenchSync});

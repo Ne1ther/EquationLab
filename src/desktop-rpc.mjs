@@ -116,7 +116,7 @@ async function insertWordEquation(payload){
   ole=applyRuler(base,{ruler:payload.ruler});if(ole!==base)base.fill(0);
   native=inspectOle(ole).native;
   const pdf=await nativePdf(ole);
-  docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:changedContext});
+  docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:changedContext,numberingFamily:'mathtype'});
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:native.toString('base64'),...pdf,docx:docx.toString('base64')});
   return {...result,insertion:true,acknowledgement:session.acknowledgement===true};
  }finally{native?.fill(0);docx?.fill(0);ole.fill(0);if(ole!==base)base.fill(0);}
@@ -255,7 +255,7 @@ export async function desktopRequest(request) {
    if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');
    equations[0].ole=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,equations[0].latex);
   }
-  const bytes=await createDocx(equations,{fragment:payload.fragment??true});
+  const bytes=await createDocx(equations,{fragment:payload.fragment??true,numberingFamily:'mathtype'});
   await writeFile(payload.output,bytes); return {path:payload.output,bytes:bytes.length};
  }
  if(action==='editPreview') {
@@ -276,7 +276,11 @@ export async function desktopRequest(request) {
  if(action==='arrange') {
   const input=await realpath(payload.input),output=await realpath(payload.output).catch(()=>resolve(payload.output));
   if(input===output)throw Error('请另存为副本，保留原始 Word 文档');
-  const bytes=await arrangeDocx(await readFile(input),{indices:payload.indices,layout:payload.layout});
+  let bytes=await arrangeDocx(await readFile(input),{indices:payload.indices,layout:payload.layout,defaultNumberingFamily:'mathtype'});
+  if(payload.layout?.mode?.startsWith('numbered-')&&payload.layout.numberFormat){
+   const plan=await preflightNumbering(bytes,{scope:'future',numberFormat:payload.layout.numberFormat});
+   bytes=(await applyNumbering(bytes,plan)).buffer;
+  }
   await writeFile(output,bytes);return {path:output,bytes:bytes.length};
  }
  if(action==='preview') {

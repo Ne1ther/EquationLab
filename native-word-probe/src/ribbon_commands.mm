@@ -634,6 +634,8 @@ RIBBON_EXPORT(MathTypeBridgeNewDocumentToken,EquationLabNewDocumentToken())
 RIBBON_EXPORT(MathTypeBridgeTakeNavigation,([](){auto target=navigationTarget;navigationTarget=0;return target;})())
 RIBBON_EXPORT(MathTypeBridgeClearWordWorkspace,([&](){if(!validHost())return -1;bridge_probe::publishWordWorkspace(nil,@[]);return 0;})())
 RIBBON_EXPORT(MathTypeBridgeQueueWorkspaceRefresh,([&](){if(!validHost())return -1;EquationLabWakeWordHost();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeScheduleWordHostPoll,([&](){if(!validHost())return -1;EquationLabScheduleWordHostPoll();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeWordHostInitialized,([&](){if(!validHost())return -1;EquationLabWordHostDidInitialize();return 0;})())
 RIBBON_EXPORT(MathTypeBridgePublishWordWorkspace,([&](){
     if(!validHost())return -1;
     NSData* data=inputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"active-document.txt");

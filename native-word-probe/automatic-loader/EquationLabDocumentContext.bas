@@ -799,9 +799,11 @@ Failed:
 End Sub
 
 Private Sub SchedulePoll()
-    If mPollScheduled Then Exit Sub
-    Application.OnTime When:=Now + TimeSerial(0, 0, 1), Name:="EquationLabDocumentContext.ELPollNavigation"
-    mPollScheduled = True
+    ' Native scheduling observes marked text before entering Word's macro
+    ' handler. OnTime would bypass that protection and interrupt composition.
+    ' Native owns coalescing. A lost callback must not leave this VBA hint
+    ' blocking a later request after native retries have been exhausted.
+    mPollScheduled = (EquationLabNativeCommand("MathTypeBridgeScheduleWordHostPoll") = 0)
 End Sub
 
 Private Sub ClearInsertion()
@@ -844,14 +846,21 @@ Private Function ELTryUpdateInsertedNumbers(ByVal Doc As Document, ByVal inserti
     insertedEnd = insertionStart + Doc.Content.End - beforeEnd
     If insertedEnd <= insertionStart Then Exit Function
     Set inserted = Doc.Range(insertionStart, insertedEnd)
-    For Each field In inserted.Fields
-        code = UCase$(Trim$(field.Code.Text))
-        If Left$(code, 15) = "SEQ EQUATIONLAB" Then
-            EquationLabRibbon.ELUpdateNumbersForDocument Doc
-            If numberFormat = "" Then EquationLabRibbon.ELRememberInsertedNumberFormat Doc, inserted
-            Exit For
-        End If
-    Next
+    If numberFormat <> "" Then
+        ' Shared MathType counters live inside MTPlaceRef's code. A scan of
+        ' top-level inserted fields sees the macrobutton, not its nested SEQs.
+        ' Recalculate the owning document before acknowledging this insertion.
+        EquationLabRibbon.ELUpdateNumbersForDocument Doc
+    Else
+        For Each field In inserted.Fields
+            code = UCase$(Trim$(field.Code.Text))
+            If Left$(code, 15) = "SEQ EQUATIONLAB" Then
+                EquationLabRibbon.ELUpdateNumbersForDocument Doc
+                EquationLabRibbon.ELRememberInsertedNumberFormat Doc, inserted
+                Exit For
+            End If
+        Next
+    End If
     If numberFormat <> "" Then EquationLabRibbon.ELAdoptInsertedNumberFormat Doc, numberFormat
     ELTryUpdateInsertedNumbers = True
     Exit Function

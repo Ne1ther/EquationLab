@@ -1,15 +1,16 @@
 import {open,unlink,realpath} from 'node:fs/promises';
 import {resolve,posix} from 'node:path';
 import {XMLSerializer} from '@xmldom/xmldom';
-import {inspectDocx,NS,hash} from './document.mjs';
+import {inspectDocx,NS,hash,sharedNumberRangeNodes} from './document.mjs';
 import {previewNumberFormat} from './layout.mjs';
-import {readDocxInput,parseDocxXml,resolveDocxPart} from './document-audit.mjs';
+import {readDocxInput,parseDocxXml,resolveDocxPart,scanWordNumberingPart} from './document-audit.mjs';
 
 const PLAN='equationlab.document-numbering-plan.v1';
 const DEFAULT='EquationLabNumberFormat';
 const FORMAT={1:'ARABIC',A:'ALPHABETIC',a:'alphabetic',I:'ROMAN',i:'roman'};
-const COUNTER={EquationLab:'E',ELChapter:'C',ELSection:'S'};
+const COUNTER={EquationLab:'E',ELChapter:'C',ELSection:'S',MTEqn:'E',MTChap:'C',MTSec:'S'};
 const NAME={E:'EquationLab',C:'ELChapter',S:'ELSection'};
+const SHARED_NAME={E:'MTEqn',C:'MTChap',S:'MTSec'};
 const serializer=new XMLSerializer();
 const canonical=value=>Array.isArray(value)?value.map(canonical):value&&typeof value==='object'?Object.fromEntries(Object.keys(value).sort().map(key=>[key,canonical(value[key])])):value;
 const stable=value=>JSON.stringify(canonical(value));
@@ -42,7 +43,7 @@ function numeric(text,format){
  return n;
 }
 function sequence(code,cached){
- const match=/^\s*SEQ\s+(EquationLab|ELChapter|ELSection)\b([\s\S]*)$/i.exec(code);
+ const match=/^\s*SEQ\s+(EquationLab|ELChapter|ELSection|MTEqn|MTChap|MTSec)\b([\s\S]*)$/i.exec(code);
  if(!match)throw Error('The number contains an unknown field');
  const name=Object.keys(COUNTER).find(key=>key.toLowerCase()===match[1].toLowerCase()),parts=match[2].match(/\S+/g)??[];
  let format='ARABIC',mode=null,numericFormats=0;
@@ -77,8 +78,10 @@ function prepare(object,pattern){
  const end=ends[0],nodes=[];let n=start.nextSibling;
  for(;n&&n!==end;n=n.nextSibling)nodes.push(n);
  if(n!==end)throw Error('The numbering bookmark is reversed');
+ const shared=object.layout.numberingFamily==='mathtype',envelope=shared?sharedNumberRangeNodes(object,p,scanWordNumberingPart(object.partDoc,object.part)):new Set();
  const region=new Set(nodes);
  for(const node of children(p)){
+  if(envelope.has(node))continue;
   if(region.has(node)||node===start||node===end||node===run||node.localName==='pPr')continue;
   if(node.namespaceURI!==NS.w||node.localName!=='r'||children(node).some(c=>!['rPr','tab','t'].includes(c.localName)||c.namespaceURI!==NS.w)||descendants(node,'t').some(t=>t.textContent.trim()))throw Error('Equation and prose or custom content share the paragraph');
  }
@@ -104,7 +107,10 @@ function prepare(object,pattern){
    else if(kind==='end'){if(!current||current.mode!=='result')throw Error('Malformed number field');fields.push(sequence(current.code,current.text));current=null;}
    else throw Error('Unknown field delimiter');return;
   }
-  if(node.localName==='instrText'){if(!current||current.mode!=='code')throw Error('Unbound number instruction');current.code+=node.textContent;return;}
+  if(node.localName==='instrText'){
+   if(shared&&current?.mode!=='code'){if(current)current.text+=node.textContent;textStyle(node);return;}
+   if(!current||current.mode!=='code')throw Error('Unbound number instruction');current.code+=node.textContent;return;
+  }
   if(node.localName==='t'){if(current?.mode==='code')throw Error('Malformed number field');if(current)current.text+=node.textContent;textStyle(node);return;}
   for(const child of Array.from(node.childNodes))visit(child,inSimple);
  };
@@ -118,10 +124,10 @@ function prepare(object,pattern){
  for(const token of wanted)if(token.counter&&(!Number.isSafeInteger(values[token.counter])||values[token.counter]<1||values[token.counter]>32767))throw Error('Chapter or section context has not been established');
  const numberText=previewNumberFormat(pattern,{chapter:values.C??1,section:values.S??1,equation:values.E});
  const doc=p.ownerDocument,rPr=styles[0]?parseDocxXml(`<w:root xmlns:w="${NS.w}">${styles[0]}</w:root>`).documentElement.firstChild:null;
- const textRun=text=>{const r=doc.createElementNS(NS.w,'w:r');if(rPr)r.appendChild(doc.importNode(rPr,true));const t=doc.createElementNS(NS.w,'w:t');t.setAttribute('xml:space','preserve');t.appendChild(doc.createTextNode(text));r.appendChild(t);return r;};
+ const textRun=text=>{const r=doc.createElementNS(NS.w,'w:r');if(rPr)r.appendChild(doc.importNode(rPr,true));const t=doc.createElementNS(NS.w,shared?'w:instrText':'w:t');t.setAttribute('xml:space','preserve');t.appendChild(doc.createTextNode(text));r.appendChild(t);return r;};
  const replacements=wanted.map(token=>{
   if(token.text!==undefined)return textRun(token.text);
-  const old=byCounter.get(token.counter),base=old?.code??`SEQ ${NAME[token.counter]} \\c`;
+  const old=byCounter.get(token.counter),base=old?.code??`SEQ ${(shared?SHARED_NAME:NAME)[token.counter]} \\c`;
   const code=base.replace(/\s+\\\*\s+(?:ARABIC|ALPHABETIC|alphabetic|ROMAN|roman)\b/g,'').trim()+` \\* ${FORMAT[token.format]}`;
   const field=doc.createElementNS(NS.w,'w:fldSimple');field.setAttributeNS(NS.w,'w:instr',code);field.setAttributeNS(NS.w,'w:dirty','true');
   field.appendChild(textRun(previewNumberFormat('#E'+token.format,{equation:values[token.counter]})));return field;
@@ -179,8 +185,8 @@ async function makePlan(bytes,options){
   catch(error){target.reason=error.message;}
   targets.push(target);
  }
- const documentDefaultChanged=normalized.updateFuture&&settings.node?.getAttributeNS(NS.w,'val')!==normalized.numberFormat;
- const plan={schema:PLAN,sourceSha256:hash(bytes),options:normalized,targets,documentDefaultChanged,summary:{selected:targets.length,ready:targets.filter(t=>t.status==='ready').length,unchanged:targets.filter(t=>t.status==='unchanged').length,skipped:targets.filter(t=>t.status==='skipped').length},requiresWordFieldUpdate:prepared.size>0,limits:{existingNumbers:'safe-equationlab-bookmarks-only',liveWordMutation:false,hostVerified:false}};
+ const documentDefaultChanged=normalized.updateFuture&&(settings.node?.getAttributeNS(NS.w,'val')!==normalized.numberFormat||document.numberFormat!==normalized.numberFormat);
+ const plan={schema:PLAN,sourceSha256:hash(bytes),options:normalized,targets,documentDefaultChanged,summary:{selected:targets.length,ready:targets.filter(t=>t.status==='ready').length,unchanged:targets.filter(t=>t.status==='unchanged').length,skipped:targets.filter(t=>t.status==='skipped').length},requiresWordFieldUpdate:prepared.size>0,limits:{existingNumbers:'bounded-equationlab-or-shared-bookmarks',liveWordMutation:false,hostVerified:false}};
  plan.planSha256=hash(stable(plan));return {plan,document,prepared,settings};
 }
 /** Read-only, deterministic plan for the exact source bytes. */
@@ -203,6 +209,36 @@ function writeSettings(document,info,pattern){
  if(!info.related){
   const ids=new Set(children(info.rels.documentElement).map(n=>n.getAttribute('Id')));let i=1;while(ids.has('rELNumbering'+i))i++;
   const rel=info.rels.createElementNS(NS.rels,'Relationship');rel.setAttribute('Id','rELNumbering'+i);rel.setAttribute('Type',NS.r+'/settings');rel.setAttribute('Target',posix.relative(posix.dirname(document.mainPart),info.path));info.rels.documentElement.appendChild(rel);document.zip.file(info.relPart,serializer.serializeToString(info.rels));
+ }
+}
+async function writeSharedDefault(document,pattern){
+ if(document.objects.some(o=>o.layout.bookmarkName&&o.layout.numberingFamily!=='mathtype'))return;
+ const type=NS.r+'/custom-properties',rootEntry=document.zip.file('_rels/.rels');
+ if(!rootEntry)throw Error('DOCX package relationships are missing');
+ const rels=parseDocxXml(await rootEntry.async('string')),matches=children(rels.documentElement).filter(n=>n.getAttribute('Type')===type);
+ if(matches.length>1||matches[0]?.getAttribute('TargetMode')==='External')throw Error('Ambiguous custom-properties relationship');
+ const path=matches.length?resolveDocxPart(matches[0].getAttribute('Target'),'_root.xml'):'docProps/custom.xml',entry=document.zip.file(path);
+ if(matches.length&&!entry||!matches.length&&entry)throw Error('Custom properties do not match their relationship');
+ const C='http://schemas.openxmlformats.org/officeDocument/2006/custom-properties',V='http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes';
+ const doc=entry?parseDocxXml(await entry.async('string')):parseDocxXml(`<Properties xmlns="${C}" xmlns:vt="${V}"/>`);
+ if(doc.documentElement.namespaceURI!==C)throw Error('Invalid custom-properties part');
+ const properties=children(doc.documentElement),existing=properties.filter(n=>n.getAttribute('name')==='MTEquationNumber2');
+ if(existing.length>1)throw Error('Duplicate MathType numbering defaults');
+ const property=existing[0]??doc.createElementNS(C,'property');
+ if(!existing.length){
+  const ids=new Set(properties.map(p=>p.getAttribute('pid')));let id=2;while(ids.has(String(id)))id++;
+  property.setAttribute('fmtid','{D5CDD505-2E9C-101B-9397-08002B2CF9AE}');property.setAttribute('pid',String(id));property.setAttribute('name','MTEquationNumber2');doc.documentElement.appendChild(property);
+ }
+ for(const child of Array.from(property.childNodes))property.removeChild(child);
+ const value=doc.createElementNS(V,'vt:lpwstr');value.appendChild(doc.createTextNode(pattern));property.appendChild(value);document.zip.file(path,serializer.serializeToString(doc));
+ if(!matches.length){
+  const ids=new Set(children(rels.documentElement).map(n=>n.getAttribute('Id')));let i=1;while(ids.has('rELCustom'+i))i++;
+  const rel=rels.createElementNS(NS.rels,'Relationship');rel.setAttribute('Id','rELCustom'+i);rel.setAttribute('Type',type);rel.setAttribute('Target',path);rels.documentElement.appendChild(rel);document.zip.file('_rels/.rels',serializer.serializeToString(rels));
+  const typesEntry=document.zip.file('[Content_Types].xml');if(!typesEntry)throw Error('DOCX content types are missing');
+  const types=parseDocxXml(await typesEntry.async('string')),existingType=children(types.documentElement).find(n=>n.getAttribute('PartName')==='/'+path),contentType='application/vnd.openxmlformats-officedocument.custom-properties+xml';
+  if(existingType&&existingType.getAttribute('ContentType')!==contentType)throw Error('Conflicting custom-properties content type');
+  if(!existingType){const node=types.createElementNS(types.documentElement.namespaceURI,'Override');node.setAttribute('PartName','/'+path);node.setAttribute('ContentType',contentType);types.documentElement.appendChild(node);}
+  document.zip.file('[Content_Types].xml',serializer.serializeToString(types));
  }
 }
 async function markReferences(document,names,changedParts){
@@ -245,7 +281,7 @@ export async function applyNumbering(input,plan,{output}={}){
   const object=document.objects[index];changedParts.set(object.part,object.partDoc);names.add(object.layout.bookmarkName);
  }
  if(prepared.size)references=await markReferences(document,names,changedParts);
- if(plan.documentDefaultChanged)writeSettings(document,settings,plan.options.numberFormat);
+ if(plan.documentDefaultChanged){writeSettings(document,settings,plan.options.numberFormat);await writeSharedDefault(document,plan.options.numberFormat);}
  if(prepared.size||plan.documentDefaultChanged){
   for(const [part,doc]of changedParts)document.zip.file(part,serializer.serializeToString(doc));
   if(plan.documentDefaultChanged&&!settings.related){

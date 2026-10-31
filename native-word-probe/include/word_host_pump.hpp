@@ -4,4 +4,6 @@
 // Application.OnTime is a single shared timer and can be replaced by add-ins.
 void EquationLabInstallWordHostPump();
 void EquationLabWakeWordHost();
+void EquationLabScheduleWordHostPoll();
 void EquationLabWordHostDidPoll();
+void EquationLabWordHostDidInitialize();

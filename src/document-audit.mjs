@@ -69,13 +69,13 @@ function instruction(code){
  return result;
 }
 
-function scanPart(doc,part){
+export function scanWordNumberingPart(doc,part){
  let ordinal=0,paragraph=-1,fieldOrdinal=0,bookmarkOrdinal=0;
  const fields=[],bookmarks=[],openBookmarks=new Map(),texts=[],objects=[],structural=[],stack=[];
  const location=()=>({part,paragraph});
  const reviewState=node=>{for(let n=node;n;n=n.parentNode)if(n.namespaceURI===W&&['ins','del','moveFrom','moveTo'].includes(n.localName))return n.localName;return 'unchanged';};
  function fieldStart(node,simple){
-  const record={id:`${part}#field-${fieldOrdinal}`,location:{...location(),fieldOrdinal:fieldOrdinal++},start:ordinal,end:null,endParagraph:null,code:simple?node.getAttributeNS(W,'instr')??'':'',codeParts:[],cachedText:'',locked:enabled(node.getAttributeNS(W,'fldLock'))||stack.some(f=>f.locked),reviewState:reviewState(node),mode:simple?'result':'code',parent:stack.at(-1)?.id??null,simple};
+  const record={id:`${part}#field-${fieldOrdinal}`,location:{...location(),fieldOrdinal:fieldOrdinal++},node,start:ordinal,end:null,endParagraph:null,code:simple?node.getAttributeNS(W,'instr')??'':'',codeParts:[],cachedText:'',locked:enabled(node.getAttributeNS(W,'fldLock'))||stack.some(f=>f.locked),reviewState:reviewState(node),mode:simple?'result':'code',parent:stack.at(-1)?.id??null,simple};
   if(stack.at(-1)?.mode==='code')stack.at(-1).codeParts.push({field:record.id});
   fields.push(record);stack.push(record);return record;
  }
@@ -90,7 +90,7 @@ function scanPart(doc,part){
   let simple=null;
   if(node.namespaceURI===W){
    if(node.localName==='bookmarkStart'){
-    const key=node.getAttributeNS(W,'id'),record={id:`${part}#bookmark-${bookmarkOrdinal++}`,name:node.getAttributeNS(W,'name')??'',key,start:ordinal,end:null,location:location(),reviewState:reviewState(node)};
+    const key=node.getAttributeNS(W,'id'),record={id:`${part}#bookmark-${bookmarkOrdinal++}`,node,name:node.getAttributeNS(W,'name')??'',key,start:ordinal,end:null,location:location(),reviewState:reviewState(node)};
     if(openBookmarks.has(key))structural.push({code:'duplicate-bookmark-id',location:location(),bookmark:record.name});
     else openBookmarks.set(key,record);
     bookmarks.push(record);
@@ -107,9 +107,9 @@ function scanPart(doc,part){
      if(stack.length&&!stack.at(-1).simple){const field=stack.pop();field.end=ordinal;field.endParagraph=paragraph;}else structural.push({code:'unmatched-field-end',location:location()});
     }
    }else if(node.localName==='instrText'){
-    if(stack.at(-1)?.mode==='code'){stack.at(-1).code+=node.textContent;stack.at(-1).codeParts.push({text:node.textContent});}
-    else if(stack.at(-1)?.simple){
-     // Some Word files store a simple field's saved result as instrText.
+    if(stack.at(-1)?.mode==='code'){stack.at(-1).code+=node.textContent;stack.at(-1).codeParts.push({text:node.textContent,position:ordinal});}
+    else if(stack.at(-1)?.mode==='result'){
+     // MathType saves both simple and complex field results as instrText.
      // It is a cache, not another executable instruction or a recalculation.
      for(const field of stack)if(field.mode==='result')field.cachedText+=node.textContent;
      if(!hidden&&!stack.some(f=>f.mode==='code'))texts.push({position:ordinal,text:node.textContent});
@@ -126,25 +126,59 @@ function scanPart(doc,part){
  visit(doc.documentElement);
  for(const field of fields){field.instruction=instruction(field.code);if(field.end===null)structural.push({code:'unclosed-field',location:field.location});}
  const byId=new Map(fields.map(field=>[field.id,field]));
- for(const field of fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code))){
-  if(field.cachedText.trim()){field.numberCache=field.cachedText.trim().length<=128?field.cachedText.trim():null;continue;}
+ const byParent=new Map();for(const field of fields){if(!byParent.has(field.parent))byParent.set(field.parent,[]);byParent.get(field.parent).push(field);}
+ const displayParts=(field,bounds=null,format=false)=>{
   let complete=true;
-  const text=field.codeParts.map(part=>{
+  const included=part=>{
+   if(!bounds)return true;
+   if(part.text!==undefined)return part.position>bounds.start&&part.position<bounds.end;
+   const child=byId.get(part.field);return child&&child.start>bounds.start&&child.end!==null&&child.end<bounds.end;
+  };
+  const text=field.codeParts.filter(included).map(part=>{
    if(part.text!==undefined)return part.text;
    const child=byId.get(part.field),parsed=child?.instruction;
-   if(parsed?.type!=='SEQ'||parsed.family!=='mathtype'){complete=false;return '';}
+   if(parsed?.type!=='SEQ'||parsed.family!=='mathtype'||parsed.unknownSwitches.length){complete=false;return '';}
    if(parsed.hidden)return '';
+   if(format){const code={chapter:'C',section:'S',equation:'E'}[parsed.role],style={ARABIC:'1',ALPHABETIC:'A',alphabetic:'a',ROMAN:'I',roman:'i'}[parsed.format];if(!code||!style){complete=false;return '';}return '#'+code+style;}
    if(!child.cachedText.trim()){complete=false;return '';}
    return child.cachedText;
-  }).join('').replace(/^\s*MACROBUTTON\s+MTPlaceRef\s*/i,'').trim()
-   .replace(/^(?:\\\*\s+(?:MERGEFORMAT|CHARFORMAT)\s+)+/i,'')
-   .replace(/(?:\s+\\\*\s+(?:MERGEFORMAT|CHARFORMAT))+\s*$/i,'').trim();
+  }).join('');
+  return {text,complete};
+ };
+ const outerDisplay=text=>text.replace(/^\s*MACROBUTTON\s+MTPlaceRef\s*/i,'').trim()
+  .replace(/^(?:\\\*\s+(?:MERGEFORMAT|CHARFORMAT)\s+)+/i,'')
+  .replace(/(?:\s+\\\*\s+(?:MERGEFORMAT|CHARFORMAT))+\s*$/i,'').trim();
+ for(const field of fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code))){
+  const projection=displayParts(field),complete=projection.complete;
+  const text=outerDisplay(projection.text);
   // Only known outer formatting switches around the display are syntax.
   // Any remaining switch
   // makes this display projection unknown; never expose it as a saved number.
   field.numberCache=complete&&!text.includes('\\')&&text.length>0&&text.length<=128?text:null;
+  if(field.cachedText.trim())field.numberCache=field.cachedText.trim().length<=128?field.cachedText.trim():null;
+  // MathType creates the reference bookmark only when a reference is added.
+  // An unreferenced number still has a bounded MTPlaceRef envelope. Recognize
+  // that display without inventing a bookmark or granting write authority.
+  const children=byParent.get(field.id)??[],hidden=children.filter(child=>child.instruction.hidden),visible=children.filter(child=>!child.instruction.hidden);
+  const canonical=field.end!==null&&field.location.paragraph===field.endParagraph&&!field.locked&&field.reviewState==='unchanged'
+   &&children.every(child=>child.end!==null&&child.end<field.end&&!child.locked&&child.reviewState==='unchanged'&&child.instruction.type==='SEQ'&&child.instruction.family==='mathtype'&&!child.instruction.unknownSwitches.length&&!byParent.has(child.id))
+   &&singleNumberChain(children)&&hidden.length===1&&hidden[0].instruction.role==='equation'&&!hidden[0].instruction.repeat
+   &&visible.every(child=>child.start>hidden[0].end&&child.instruction.repeat&&child.instruction.reset===null)
+   &&!objects.some(object=>object.order>field.start&&object.order<field.end);
+  if(canonical){const format=displayParts(field,null,true),pattern=outerDisplay(format.text);if(format.complete&&pattern.length<=128&&!pattern.includes('\\'))field.numberFormat=pattern;}
  }
- for(const bookmark of bookmarks){bookmark.cachedText=texts.filter(t=>t.position>bookmark.start&&bookmark.end!==null&&t.position<bookmark.end).map(t=>t.text).join('');if(bookmark.end===null)structural.push({code:'unclosed-bookmark',location:bookmark.location,bookmark:bookmark.name});}
+ for(const bookmark of bookmarks){
+  bookmark.cachedText=texts.filter(t=>t.position>bookmark.start&&bookmark.end!==null&&t.position<bookmark.end).map(t=>t.text).join('');
+  const enclosing=fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code)&&f.start<bookmark.start&&f.end>bookmark.end&&f.location.paragraph===bookmark.location.paragraph&&f.endParagraph===bookmark.endParagraph);
+  if(bookmark.end!==null&&enclosing.length===1){
+   const display=displayParts(enclosing[0],bookmark),format=displayParts(enclosing[0],bookmark,true);
+   // A bookmark inside the macro's code is MathType's actual REF target.
+   // Project only its bounded contents, never surrounding macro instructions.
+   if(display.complete&&display.text.length<=128&&!display.text.includes('\\'))bookmark.cachedText=display.text;
+   if(format.complete&&format.text.length<=128&&!format.text.includes('\\'))bookmark.numberFormat=format.text;
+  }
+  if(bookmark.end===null)structural.push({code:'unclosed-bookmark',location:bookmark.location,bookmark:bookmark.name});
+ }
  return {part,doc,fields,bookmarks,objects,structural};
 }
 
@@ -166,7 +200,7 @@ export async function auditDocx(input){
  // Match inspectDocx's object enumeration for exact same-snapshot index use.
  const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(?:header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
  const scans=[];
- for(const part of parts)scans.push(scanPart(parseDocxXml(await zip.file(part).async('string')),part));
+ for(const part of parts)scans.push(scanWordNumberingPart(parseDocxXml(await zip.file(part).async('string')),part));
  const fields=scans.flatMap(s=>s.fields),bookmarks=scans.flatMap(s=>s.bookmarks),issues=[],targets=[],equations=[],references=[];
  const issue=(code,severity,location,detail={})=>issues.push({id:`issue-${issues.length}`,code,severity,location,...detail});
  const names=new Map();for(const b of bookmarks){const name=b.name.toLowerCase();if(!names.has(name))names.set(name,[]);names.get(name).push(b);}

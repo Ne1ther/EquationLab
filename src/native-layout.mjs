@@ -38,18 +38,41 @@ export function createNativeLayout(prefs,full,nativeFaces){
  const full32=Math.trunc(full*32),space=prefs?.spaces??[],G=(id)=>space[id]&&!space[id].unsupported?nativeDimension32(space[id],full32,{relative:![16,17,22].includes(id)}):undefined;
  const P=(id,ratio=1)=>{const g=G(id);return g===undefined?undefined:Math.trunc(g*Math.trunc(full32*ratio)/full32)/(32*full);};
  const Q=value=>Math.ceil(value*full*32)/(32*full);
+ // Function Full probes include style: Variable Italic often appears first
+ // with the same family and must not replace Function Regular metrics.
+ const functionStyle=prefs?.styles[1],functionFace=nativeFaces.find(f=>f.font===functionStyle?.font&&f.style===functionStyle?.style);
  const boundaryGap=(a,b,ratio)=>{
   if(!a||!b)return 0;
   const ef=tables[ratio<.9?1:0]?.[a-1]?.[b-1]??1,coefficient={2:16,3:22,4:27,5:100,6:200,7:8}[ef];if(!coefficient)return 0;
-  const baseAdvance=(nativeFaces.find(f=>f.font===prefs.styles[1]?.font)?.glyphs?.[32]?.advance??250)*full32/1000;
+  const baseAdvance=(functionFace?.glyphs?.[32]?.advance??250)*full32/1000;
   const advance=Math.trunc(baseAdvance*Math.trunc(full32*ratio)/full32),scaled=Math.trunc(advance*coefficient*4/100),factor=G([a,b].some(c=>c===5||c===6)?16:17)??3200;
   return Q((Math.trunc(factor*scaled/100)>>5)/(32*full));
  };
- const metric=nativeFaces.find(f=>f.font===prefs?.styles[1]?.font)?.metrics??nativeFaces[0]?.metrics;
+ const metric=functionFace?.metrics??nativeFaces[0]?.metrics;
  const M0=(metric?.ascent??750)/1000,M1=(metric?.descent??250)/1000;
  const factory=new SVGWrapperFactory();
  if(!prefs)return {factory,postFilter:()=>{},spacing:null};
  class NativeOperator extends SVGmo{
+  // ParBoxClass 67aca0 / 67b240: noncentral matrices use body height,
+  // not twice the distance from the math axis. Move both finite glyphs
+  // and assembled delimiters to that body's center after sizing them.
+  getStretchedVariant(WH,exact=false){
+   if(this.node.getProperty('elFenceFitBody')&&WH.length===2){
+    this.nativeFenceCenter=(WH[0]-WH[1])/2;
+    const over=Math.max(0,P(15,nativeRatio(this.node))??0);
+    return super.getStretchedVariant([WH[0]+over,WH[1]+over],true);
+   }
+   return super.getStretchedVariant(WH,exact);
+  }
+  getWH(WH){return this.node.getProperty('elFenceFitBody')&&WH.length===2?WH[0]+WH[1]:super.getWH(WH);}
+  getBaseline(WH,HD,C){return this.nativeFenceCenter===undefined?super.getBaseline(WH,HD,C):[HD/2+this.nativeFenceCenter,HD/2-this.nativeFenceCenter];}
+  getCenterOffset(bbox=null){return super.getCenterOffset(bbox)+(this.nativeFenceCenter??this.font.params.axis_height)-this.font.params.axis_height;}
+  addMidV(n,variant,width){
+   if(this.nativeFenceCenter===undefined)return super.addMidV(n,variant,width);
+   if(!n)return [0,0];
+   const [h,d,w]=this.getChar(n,variant),y=(d-h)/2+this.nativeFenceCenter;
+   this.addGlyph(n,variant,(width-w)/2,y);return [h+y,d-y];
+  }
   // Native character records already identify the intended glyph. MathJax's
   // TeX remapping would turn text hyphens and asterisks into other outlines.
   remapChars(chars){return this.node.getProperty('equationNativeSize')?chars:super.remapChars(chars);}
@@ -164,10 +187,10 @@ export function createNativeLayout(prefs,full,nativeFaces){
    // Typeface 22 is a geometric template, not a font glyph. Its pen follows
    // Full size while hook width follows the independent variable-symbol size.
    // One continuous curve keeps the same stroke at every body height.
-   const group=this.adaptor.append(parent,this.svg('g',{transform:'translate('+this.fixed(x)+' '+this.fixed(y)+')','data-equation-integral-contour':'true'})),F=v=>this.fixed(v),mid=c.width/2,left=c.tip,right=c.width-c.tip,top=c.top-c.tip,bottom=c.bottom+c.tip;
+   const color=this.node.attributes.get('mathcolor')??'currentColor',group=this.adaptor.append(parent,this.svg('g',{transform:'translate('+this.fixed(x)+' '+this.fixed(y)+')','data-equation-integral-contour':'true'})),F=v=>this.fixed(v),mid=c.width/2,left=c.tip,right=c.width-c.tip,top=c.top-c.tip,bottom=c.bottom+c.tip;
    const path=`M${F(right)} ${F(top)}C${F(right)} ${F(c.top)} ${F(mid)} ${F(c.top)} ${F(mid)} ${F(c.top-c.hook)}L${F(mid)} ${F(c.bottom+c.hook)}C${F(mid)} ${F(c.bottom)} ${F(left)} ${F(c.bottom)} ${F(left)} ${F(bottom)}`;
-   this.adaptor.append(group,this.svg('path',{d:path,fill:'none',stroke:'currentColor','stroke-width':F(c.stroke),'stroke-linecap':'round','stroke-linejoin':'round'}));
-   for(const [cx,cy]of [[right,top],[left,bottom]])this.adaptor.append(group,this.svg('path',{d:`M${F(cx-c.tip)} ${F(cy)}A${F(c.tip)} ${F(c.tip)} 0 1 1 ${F(cx+c.tip)} ${F(cy)}A${F(c.tip)} ${F(c.tip)} 0 1 1 ${F(cx-c.tip)} ${F(cy)}Z`,fill:'currentColor',stroke:'none'}));
+   this.adaptor.append(group,this.svg('path',{d:path,fill:'none',stroke:color,'stroke-width':F(c.stroke),'stroke-linecap':'round','stroke-linejoin':'round'}));
+   for(const [cx,cy]of [[right,top],[left,bottom]])this.adaptor.append(group,this.svg('path',{d:`M${F(cx-c.tip)} ${F(cy)}A${F(c.tip)} ${F(c.tip)} 0 1 1 ${F(cx+c.tip)} ${F(cy)}A${F(c.tip)} ${F(c.tip)} 0 1 1 ${F(cx-c.tip)} ${F(cy)}Z`,fill:color,stroke:'none'}));
   }
   drawIntegral(parent,p){const svg=this.standardSVGnode(parent);this.adaptor.setAttribute(svg,'data-equation-integral','true');for(const[child,x,y,visible,,box]of p.items)if(visible){if(box?.contour)this.drawIntegralContour(svg,x,y,box.contour);else {child.toSVG(svg);child.place(x,y);}}if(p.overlay)this.adaptor.append(svg,this.svg('path',{d:p.overlay.path,transform:'translate('+this.fixed(p.overlayX)+' '+this.fixed(p.overlayY)+') scale('+p.r+')'}));}
 

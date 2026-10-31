@@ -8756,36 +8756,36 @@
       "category": "matrices",
       "group": "matrix-layout",
       "label": "等列宽矩阵",
-      "latex": "\\mtmatrix{129}{1}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
-      "sample": "\\mtmatrix{129}{1}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "latex": "\\mtmatrix{129}{1}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "sample": "\\mtmatrix{129}{1}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
       "hint": "等列宽矩阵",
       "originalToken": null,
       "sourceStatus": "verified-local",
-      "canonical": "\\left[\\mtmatrix{129}{1}{4}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
+      "canonical": "\\left[\\mtmatrix{129}{1}{1}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
     },
     {
       "id": "matrix-equal-rows",
       "category": "matrices",
       "group": "matrix-layout",
       "label": "等行高矩阵",
-      "latex": "\\mtmatrix{1}{129}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
-      "sample": "\\mtmatrix{1}{129}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "latex": "\\mtmatrix{1}{129}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "sample": "\\mtmatrix{1}{129}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
       "hint": "等行高矩阵",
       "originalToken": null,
       "sourceStatus": "verified-local",
-      "canonical": "\\left[\\mtmatrix{1}{129}{4}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
+      "canonical": "\\left[\\mtmatrix{1}{129}{1}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
     },
     {
       "id": "matrix-equal-both",
       "category": "matrices",
       "group": "matrix-layout",
       "label": "等列宽及等行高",
-      "latex": "\\mtmatrix{129}{129}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
-      "sample": "\\mtmatrix{129}{129}{4}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "latex": "\\mtmatrix{129}{129}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
+      "sample": "\\mtmatrix{129}{129}{1}{\\begin{bmatrix}x&xxx\\\\x&x\\end{bmatrix}}",
       "hint": "等列宽及等行高",
       "originalToken": null,
       "sourceStatus": "verified-local",
-      "canonical": "\\left[\\mtmatrix{129}{129}{4}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
+      "canonical": "\\left[\\mtmatrix{129}{129}{1}{\\begin{matrix}x&xxx\\\\x&x\\end{matrix}}\\right]"
     },
     {
       "id": "matrix-partitioned",

@@ -1,5 +1,19 @@
 # 版本记录
 
+## 0.6.11 · build99
+
+中文输入是这次的重点。Word 正文、公式画布和 LaTeX 源码区会等组字完成后再同步，长拼音可以继续停留和选词。Word 的启动入口也重新整理，打开 Word 后自动连接公式组件。
+
+手动编辑增加结构位置提示和求和上下标操作，改善旧 MathType 矩阵括号、颜色与中文标注的显示。预览面板会保留内容，应用图标的留白也作了调整。
+
+完善旧 MathType 编号、章和节、交叉引用的读回与更新，保留原生公式与引用关系。
+
+[下载 0.6.11](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.11)
+
+This release focuses on Chinese input. Word, the formula canvas, and the LaTeX editor defer synchronization until composition finishes, allowing longer Pinyin input and candidate selection. Word startup now connects the native formula component automatically.
+
+Manual editing gains structure cues and sum-limit controls. Rendering improves legacy MathType matrix delimiters, colors, and Chinese annotations; preview panels retain their contents, and the app icon has more consistent spacing. Numbering updates preserve native equations and references while improving legacy MathType chapter and section handling.
+
 ## 0.6.10 · build98
 
 这次补上了整篇文档的整理工具。在右侧“文档”页检查公式编号与引用，选好范围后，可以统一字体、字号、间距和编号格式，另存一份整理好的 Word 副本。也可以只保存后续新公式的默认设置。

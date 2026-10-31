@@ -20,6 +20,10 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 多行公式可用 `\\` 换行，也可输入 `aligned`、`gathered` 或 `cases` 环境。保存时各行一起回到 Word。旧 MathType 公式可保留原结构替换字符，也可使用编辑器中的结构工具调整；黑板体、花体、颜色和多行排版都有对应显示。
 
+手动填写分式和根式时，编辑区下方会显示光标所在的分子、分母或根号范围，蓝色虚线标出当前输入区域。点“移出根号”或“移出分式”即可继续填写外部内容；“选中结构”可选中整个结构一起替换。点击求和符号或它的上下限后，可把“上下限位置”设为“上下”或“右侧”，位置随公式一起保存到 Word。
+
+“Word 排版预览”和“LaTeX 源码”保持展开，可以并排对照。Word 预览使用公式的原生字体、字号和间距；写回 Word 时使用矢量呈现，缩放时保留线条与字符细节。
+
 ## 编号格式、章和节
 
 在 Word 正文中选中一个已有公式对象，再点“右侧编号”或“左侧编号”，可添加编号或把编号移到另一侧；再次点击同一侧会沿用现有编号。“独立编号”在选中公式右侧添加编号。这些操作用于每段一个公式的普通正文段落。
@@ -77,6 +81,10 @@ Changed drafts prompt before switching documents or equations and remain availab
 Long documents open the current equation first and load the rest in batches. Thumbnails appear and update individually as you browse, and the current equation scrolls into view. You can keep typing, adjust sizes, or cancel while loading. If the document changes, the app keeps the current draft so you can reload the list later.
 
 Use `\\` for line breaks, or enter an `aligned`, `gathered`, or `cases` environment. All lines save back to Word together. For legacy MathType equations, you can replace characters while preserving the original structure or use the editor’s structure tools. The preview includes blackboard and script characters, colors, and multiline layouts.
+
+When filling fractions and radicals by hand, the controls below the editor identify the current numerator, denominator, or root. A blue outline marks the input scope. Choose Exit Root or Exit Fraction to continue outside it, or Select Structure to replace the whole structure. Click a sum or one of its limits, then choose Above / below or Right side under Limits position. The placement saves with the equation in Word.
+
+Word Layout Preview and LaTeX Source remain expanded for comparison. The Word preview uses the equation’s native fonts, sizes, and spacing. Saving to Word uses vector artwork so lines and characters retain their detail when enlarged.
 
 ## Number formats, chapters, and sections
 

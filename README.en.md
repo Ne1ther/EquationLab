@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.10 (build98)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.10/Equation-Lab-0.6.10.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.11 (build99)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/Equation-Lab-0.6.11.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -26,6 +26,8 @@ The sidebar menu lists open Word documents and distinguishes files with the same
 Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 
 The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving. Open the new file in Word and update its numbering and references to continue editing. [Read the document tools guide](docs/document-tools.md)
+
+Chinese input in Word and the formula editors waits for composition to finish before synchronization. Manual editing provides structure cues and controls for sum-limit placement.
 
 The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads. For connection issues, check the status and copy connection diagnostics from the **Office plugin** panel.
 

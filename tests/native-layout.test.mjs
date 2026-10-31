@@ -214,3 +214,20 @@ test('Reusable SVG outlines retain strict PDF references and native PNG pixel bo
  const referenced=vectorPdfRequest('<svg viewBox="0 0 20 20"><defs><path id="a" d="M0 0h2v2z"/></defs><use href="#a" x="3" y="4"/></svg>',12,12);assert.deepEqual(referenced.vector[0].matrix,[1,0,0,1,3,4]);
  for(const svg of ['<svg viewBox="0 0 20 20"><use href="https://example.com/x.svg#a"/></svg>','<svg viewBox="0 0 20 20"><defs><g id="a"><use href="#a"/></g></defs><use href="#a"/></svg>'])assert.throws(()=>vectorPdfRequest(svg,12,12),/External|Cyclic/);
 });
+
+test('Function Full font metrics use the declared style independently of glyph-face order',async()=>{
+ const {createNativeLayout}=await import('../src/native-layout.mjs'),{factoryTypography}=await import('../src/new-formula.mjs');
+ // Distinct metrics make an accidental Variable Italic selection observable.
+ // These are injected contract values, not a claim about Windows GDI output.
+ const regular={font:'Times New Roman',style:0,metrics:{xHeight:447},glyphs:{32:{advance:250}}},italic={font:'Times New Roman',style:2,metrics:{xHeight:430},glyphs:{32:{advance:1000}}},prefs=factoryTypography();
+ const functionFirst=createNativeLayout(prefs,12,[regular,italic]),variableFirst=createNativeLayout(prefs,12,[italic,regular]);
+ assert.equal(functionFirst.fontParameters.x_height,.447);assert.equal(variableFirst.fontParameters.x_height,.447);
+ // Apply native boundary spacing to two real token classifications. The
+ // injected italic space must not change the Function-based operator gap.
+ const left={kind:'mi',isToken:true,getText:()=> 'x',getProperty:name=>name==='equationNativeSize'?1:undefined,setProperty(){}},gaps=[];
+ for(const layout of [functionFirst,variableFirst]){
+  const relation={kind:'mo',isToken:true,attributes:{set(){},get(){}},getText:()=> '=',getProperty:name=>name==='equationNativeSize'?1:undefined,setProperty(name,value){if(name==='elGap')gaps.push(value);}};
+  const row={kind:'mrow',childNodes:[left,relation]};layout.postFilter({data:{root:{walkTree:callback=>callback(row)}}});
+ }
+ assert.ok(gaps[0]>0);assert.equal(gaps[0],gaps[1]);
+});

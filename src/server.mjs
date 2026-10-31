@@ -12,7 +12,7 @@ export async function operation(path,body) {
  const {nativeSessionOperation}=await import('./word-native-session.mjs');
  if(['ribbon-create','ribbon-number','ribbon-chapter'].includes(path)){
   const {mode,...numberOptions}=body.layout??{};
-  const docx=path==='ribbon-number'?await numberDocx(numberOptions):path==='ribbon-chapter'?await chapterDocx({chapter:numberOptions.chapter,section:numberOptions.section,resetEquation:false}):await createDocx([{latex:'x',layout:body.layout}],{fragment:true,initializeContext:false});
+  const docx=path==='ribbon-number'?await numberDocx({...numberOptions,numberingFamily:'mathtype'}):path==='ribbon-chapter'?await chapterDocx({chapter:numberOptions.chapter,section:numberOptions.section,resetEquation:false,numberingFamily:'mathtype'}):await createDocx([{latex:'x',layout:body.layout}],{fragment:true,initializeContext:false,numberingFamily:'mathtype'});
   return {docx:docx.toString('base64'),ooxml:await flatOpc(docx)};
  }
  if(path.startsWith('native-'))return nativeSessionOperation(path,body);

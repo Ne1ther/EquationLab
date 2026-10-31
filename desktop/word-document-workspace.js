@@ -120,6 +120,9 @@ window.createWordDocumentWorkspace = api => {
    activeMetadataChanged=active?.identity!==target?.identity||active?.name!==target?.name;
    active=target?{identity:target.identity,name:String(target.name||'Word 文档')}:null;
    const state=api.state(),sourceIdentity=identityOf(state.source),cacheIdentity=identityOf(cached),cachedBeforeRetirement=cached;
+   // Direct OLE editing can retain an exact live owner without a document
+   // snapshot. Metadata polling must not cancel it to open another equation.
+   if(!force&&state.wordTicket&&state.source&&!state.source.hasDocumentContext)return false;
    const retiredSource=sourceIdentity&&retired.has(sourceIdentity)?sourceIdentity:null;
    const retiredCache=cacheIdentity&&retired.has(cacheIdentity)?cacheIdentity:null;
    const retiredIdentity=retiredSource||(!sourceIdentity&&retiredCache)||null;
@@ -349,6 +352,6 @@ window.createWordDocumentWorkspace = api => {
    pending=null;generation++;changed();return !!approved;
   },
   clearUnavailable,
-  accepted(document){generation++;emptyDocument=null;const identity=identityOf(document);if(identity)knownRetired.delete(identity);wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
+  accepted(document){generation++;emptyDocument=null;const identity=identityOf(document);if(identity)knownRetired.delete(identity);else cached=null;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
  };
 };

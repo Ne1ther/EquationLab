@@ -279,6 +279,8 @@ async function launchWordTest(app){
  for(let attempt=0;attempt<30;attempt++){const state=await workspaceState();if(state.running.some(p=>p.app===app))return;if(state.running.length)throw Error('启动了其他 Equation Lab 副本，未视为测试成功。');await new Promise(resolve=>setTimeout(resolve,100));}
  throw Error('open 已返回，但未确认准确路径的测试 App 在运行。');
 }
+// Computer Use can launch the verified bundle after this deployment completes.
+export {deploy as deployWordTestBundle};
 if(process.argv[1]&&path.resolve(process.argv[1])===fileURLToPath(import.meta.url)){
  try{
   const [mode,rootArg,buildDirectory]=process.argv.slice(2),root=path.resolve(rootArg??'.'),paths=wordTestPaths(root);

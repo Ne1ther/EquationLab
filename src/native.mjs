@@ -260,7 +260,7 @@ export function latexAst(input) {
       if(command==='mtpile'){
         const halign=Number(textGroup()),valign=Number(textGroup()),body=group();let pile=body;
         while(pile?.kind==='seq'&&pile.items.length===1)pile=pile.items[0];
-        if(![1,2,3,4].includes(halign)||![1,3,4].includes(valign)||pile?.kind!=='matrix'||!['gathered','aligned'].includes(pile.env))throw Error('Invalid native pile settings');
+        if(![1,2,3,4].includes(halign)||![0,1,2,3,4].includes(valign)||pile?.kind!=='matrix'||!['gathered','aligned'].includes(pile.env))throw Error('Invalid native pile settings');
         Object.assign(pile,{pileHalign:halign,valign});return body;
       }
       if(command==='elrows'){
@@ -285,7 +285,7 @@ export function latexAst(input) {
       if(command==='mtmatrix'){
         const hjust=Number(textGroup()),vjust=Number(textGroup()),valign=Number(textGroup()),value=group();let matrix=value;
         while(matrix.kind==='fence'||matrix.kind==='seq'&&matrix.items.length===1)matrix=matrix.kind==='fence'?matrix.body:matrix.items[0];
-        if(matrix.kind!=='matrix'||['aligned','gathered'].includes(matrix.env)||!Number.isInteger(hjust)||!Number.isInteger(vjust)||!Number.isInteger(valign)||![0,1,2].includes(hjust&127)||![1].includes(vjust&127)||hjust<0||hjust>130||vjust<0||vjust>129||![1,3,4].includes(valign))throw Error('Native matrix settings require one matrix, optionally wrapped in fences');
+        if(matrix.kind!=='matrix'||['aligned','gathered'].includes(matrix.env)||!Number.isInteger(hjust)||!Number.isInteger(vjust)||!Number.isInteger(valign)||![0,1,2].includes(hjust&127)||![1].includes(vjust&127)||hjust<0||hjust>130||vjust<0||vjust>129||![0,1,2,3,4].includes(valign))throw Error('Native matrix settings require one matrix, optionally wrapped in fences');
         Object.assign(matrix,{hjust,vjust,valign});return value;
       }
       if(command==='mtfrac'){const variation=Number(textGroup());if(![0,1,2,3,6].includes(variation))throw Error('Unknown native fraction variation');return {kind:'fraction',variation,small:!!(variation&1),num:group(),den:group()};}
@@ -430,7 +430,7 @@ function pileLine(node,ctx,style,lineSpacing=0){
   const empty=emptyNode(node),options=(empty?1:0)|(lineSpacing?4:0),line=cat([1,options],...(lineSpacing?[signedWord(lineSpacing)]:[]),...(empty?[]:[emit(node,{...ctx,logicalSize:ctx.logicalSize??0},style),[0]]));
   return cat([inheritedSize(ctx)],line);
 }
-function pileRecord(rows,ctx,style,{rowSpacing=[],ruler=[],halign=2,valign=4}={}){
+function pileRecord(rows,ctx,style,{rowSpacing=[],ruler=[],halign=2,valign=1}={}){
   const hasRuler=!!ruler.length,lines=rows.map((row,index)=>pileLine(row,ctx,style,index?rowSpacing[index-1]??0:0));
   return cat([4,hasRuler?2:0,halign,valign],...(hasRuler?[rulerRecord(ruler)]:[]),...lines,[0]);
 }
@@ -492,6 +492,10 @@ function combineStyle(parent,command){
 }
 function authoredTypeface(ctx,value,style){
  const mathematical=nativeGreekGlyphs.has(value)||nativeMathGlyphs.has(value);
+ // MathLive commits Chinese IME text as plain Unicode in math mode. Use the
+ // same explicit Unicode face as \text instead of encoding it as Symbol,
+ // which cannot render these characters after a successful composition.
+ if(!style&&!mathematical&&/[\u3000-\u303f\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af\uf900-\ufaff\uff00-\uffef]/u.test(value))return ctx.explicit({family:'textUnicode',bits:0},value);
  if(style)return ctx.explicit(mathematical?{...style,family:'math'}:style,value);
  if(mathematical)return ctx.explicit({family:'math',bits:nativeGreekGlyphs.has(value)?2:0},value);
  return undefined;
@@ -570,7 +574,7 @@ function emit(n,ctx,style){
         if(lhs.items.some(x=>x.kind==='char'&&['=','<','>','≤','≥','≠','≈','≡','∼'].includes(x.value)))throw Error('Aligned rows contain an earlier relation that would change native alignment');
         return slot(seqNode([...lhs.items,...rhs.items]),ctx,undefined,style);
       });
-      return cat([4,0,n.pileHalign??4,n.valign??4],...rows,[0]);
+      return cat([4,0,n.pileHalign??4,n.valign??1],...rows,[0]);
     }
     if(n.env==='cases'&&n.rowSpacing?.some(value=>value!==0)){
       const rows=n.rows.map(([left,right])=>seqNode([...left.items,{kind:'char',value:'\t'},...right.items])),pile=pileRecord(rows,ctx,style,{rowSpacing:n.rowSpacing,ruler:caseRuler(ctx)}),body=cat([inheritedSize(ctx),1,0],pile,[0]);
@@ -578,14 +582,14 @@ function emit(n,ctx,style){
     }
     if(n.env==='gathered'){
       const decoded=tabbedPileRows(n),spaced=n.rowSpacing?.some(value=>value!==0),ruler=decoded.ruler;
-      if(spaced||ruler.length)return pileRecord(decoded.rows,ctx,style,{rowSpacing:n.rowSpacing,ruler,halign:n.pileHalign??2,valign:n.valign??4});
-      return cat([4,0,n.pileHalign??2,n.valign??4],...decoded.rows.map(row=>slot(row,ctx,undefined,style)),[0]);
+      if(spaced||ruler.length)return pileRecord(decoded.rows,ctx,style,{rowSpacing:n.rowSpacing,ruler,halign:n.pileHalign??2,valign:n.valign??1});
+      return cat([4,0,n.pileHalign??2,n.valign??1],...decoded.rows.map(row=>slot(row,ctx,undefined,style)),[0]);
     }
     // MatrixSpec column_align wire enums: left0, center1, right2. Original
     // 0x679330 writes these bytes directly; 1..5 belongs to the UI mapping.
     const hjust=n.hjust??(n.env==='cases'||n.columns?.[0]==='l'?0:n.columns?.[0]==='r'?2:1);
     const pack=(rules,count)=>{const b=Buffer.alloc(Math.ceil((count+1)/4));for(let i=0;i<=count;i++)b[i>>2]|=(rules?.[i]||0)<<((i&3)*2);return b;};
-    const cells=n.rows.flat(),matrix=cat([5,0,n.valign??4,hjust,n.vjust??1,n.rows.length,n.cols],pack(n.rowRules,n.rows.length),pack(n.colRules,n.cols),...cells.map(c=>slot(c,ctx,undefined,style)),[0]);
+    const cells=n.rows.flat(),matrix=cat([5,0,n.valign??1,hjust,n.vjust??1,n.rows.length,n.cols],pack(n.rowRules,n.rows.length),pack(n.colRules,n.cols),...cells.map(c=>slot(c,ctx,undefined,style)),[0]);
     const wrappers={pmatrix:['(',')'],bmatrix:['[',']'],Bmatrix:['{','}'],vmatrix:['|','|'],Vmatrix:['‖','‖'],cases:['{','.']};
     if(wrappers[n.env]){const [left,right]=wrappers[n.env],selector=fencePairs.findIndex(([l])=>l===left);return tmpl(selector,[cat([inheritedSize(ctx),1,0],matrix,[0]),charRecord(left,{typeface:22}),...(right==='.'?[]:[charRecord(right,{typeface:22})])],right==='.'?1:3);}
     return matrix;
@@ -731,6 +735,10 @@ function previewError(message){throw Error(`${message}; original native data rem
 function glyphLatex(n){
   if(n.code===undefined)previewError('Character has no MTCode mapping');const c=String.fromCharCode(n.code);
   const legacy=legacyGlyph(n.code);if(legacy)return legacy.latex;
+  // Older MathType CHAR records use these MTCode values for mathematical
+  // angle brackets, including fixed-size brackets outside fence templates.
+  if(n.code===0x2329)return '\\langle ';
+  if(n.code===0x232a)return '\\rangle ';
   if(n.code===0x2119)return '\\mathbb{P}';
   if(n.code===0x7e)return '\\sim ';
   if(n.code===0x27)return '\\prime ';
@@ -749,10 +757,12 @@ function glyphLatex(n){
 function decoderContext(parsed){
   const fonts=[],styles=[],preferences=[],encodings=[];
   function walk(nodes){for(const n of nodes){if(n.type===17)fonts.push(n);else if(n.type===8)styles.push(n);else if(n.type===18)preferences.splice(0,preferences.length,...n.styles);else if(n.type===19)encodings.push(n);if(n.children)walk(n.children);}}
-  walk(parsed.records);const colors=['#000000'],charColors=new Map();let color=colors[0];
-  function colorWalk(nodes){for(const n of nodes){if(n.type===16){if(n.options&~7||n.options&1||n.components.some(v=>v>1000))previewError('Unsupported native color definition');colors.push('#'+n.components.map(v=>Math.round(v*255/1000).toString(16).padStart(2,'0')).join(''));}else if(n.type===15){color=colors[n.color];if(!color)previewError('Missing native color definition');}else if(n.type===2)charColors.set(n.start,color);if(n.children)colorWalk(n.children);}}colorWalk(parsed.records);
-  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize,charColors};
+  walk(parsed.records);const colors=['#000000'],charColors=new Map(),recordColors=new Map();let color=colors[0];
+  function colorWalk(nodes){for(const n of nodes){if(n.type===16){if(n.options&~7||n.options&1||n.components.some(v=>v>1000))previewError('Unsupported native color definition');colors.push('#'+n.components.map(v=>Math.round(v*255/1000).toString(16).padStart(2,'0')).join(''));}else if(n.type===15){color=colors[n.color];if(!color)previewError('Missing native color definition');}else {recordColors.set(n.start,color);if(n.type===2)charColors.set(n.start,color);}if(n.children)colorWalk(n.children);}}colorWalk(parsed.records);
+  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize,charColors,recordColors,inheritedColor:colors[0]};
 }
+function editableColor(text,color,ctx){return !ctx.fontToken&&color&&color!==ctx.inheritedColor?`\\textcolor{${color}}{${text}}`:text;}
+function structureColorContext(n,ctx){return ctx.fontToken?ctx:{...ctx,inheritedColor:ctx.recordColors.get(n.start)??ctx.inheritedColor};}
 function characterStyle(n,ctx){
   if(n.typeface===23&&n.code===9&&n.fontPosition===9)return null;
   if(n.typeface===22)previewError('Expanding decoration appeared outside a supported template');
@@ -813,7 +823,7 @@ function renderChar(n,ctx){
     if(ctx.embellishment)text=ctx.embellishment(e,text,ctx);
   }}
   const color=ctx.charColors?.get(n.start);
-  return !ctx.fontToken&&color&&color!=='#000000'?`\\textcolor{${color}}{${text}}`:text;
+  return editableColor(text,color,ctx);
 }
 function contentChildren(n){
   const defs=new Set([8,15,16,17,18,19]);
@@ -919,7 +929,7 @@ function nativeRowGap(value){
 function nativeRowBreak(lineRecords,index){return `\\\\${nativeRowGap(lineRecords[index+1]?.lineSpacing??0)}`;}
 function findPile(nodes){for(const n of nodes){if(n.type===4)return n;if(n.children){const found=findPile(n.children);if(found)return found;}}return null;}
 function renderCasePile(slotNodes,ctx){
-  const pile=findPile(slotNodes);if(!pile||pile.halign!==2||pile.valign!==4||!pile.ruler?.tabs||pile.ruler.tabs.length!==1)return null;
+  const pile=findPile(slotNodes);if(!pile||pile.halign!==2||![1,4].includes(pile.valign)||!pile.ruler?.tabs||pile.ruler.tabs.length!==1)return null;
   const expected=Math.min(32767,Math.max(1,Math.round((ctx.fullPointSize??12)*2*32))),tab=pile.ruler.tabs[0];
   if(tab.position!==expected||tab.type!==0)return null;
   const lines=pile.children.filter(child=>child.type===1);if(lines.length<1)return null;
@@ -948,35 +958,35 @@ function renderNodes(nodes,ctx,{top=false}={}){
       }else if(n.typeface===2&&!(n.children?.length)&&!(n.options&8)&&!ctx.fontToken){
         if(characterStyle(n,ctx)!=='function'){out.push(renderChar(n,ctx));continue;}
         let name=String.fromCharCode(n.code),j=i+1;
-        for(;j<nodes.length;j++){const c=nodes[j];if(c.type!==2||c.typeface!==2||c.children?.length||c.options&10||!/[A-Za-z]/.test(String.fromCharCode(c.code))||characterStyle(c,ctx)!=='function')break;name+=String.fromCharCode(c.code);}
+        for(;j<nodes.length;j++){const c=nodes[j];if(c.type!==2||c.typeface!==2||c.children?.length||c.options&10||!/[A-Za-z]/.test(String.fromCharCode(c.code))||characterStyle(c,ctx)!=='function'||ctx.charColors.get(c.start)!==ctx.charColors.get(n.start))break;name+=String.fromCharCode(c.code);}
         characterStyle(n,ctx);
-        if(/^[A-Za-z]+$/.test(name)){const expression=functions.has(name)||['lim','limsup','liminf','sup','inf','max','min'].includes(name)?`\\${name} `:`\\operatorname{${name}}`,color=ctx.charColors?.get(n.start);out.push(color&&color!=='#000000'?`\\textcolor{${color}}{${expression}}`:expression);i=j-1;}else out.push(renderChar(n,ctx));
+        if(/^[A-Za-z]+$/.test(name)){const expression=functions.has(name)||['lim','limsup','liminf','sup','inf','max','min'].includes(name)?`\\${name} `:`\\operatorname{${name}}`,color=ctx.charColors?.get(n.start);out.push(editableColor(expression,color,ctx));i=j-1;}else out.push(renderChar(n,ctx));
       }else out.push(renderChar(n,ctx));
     }
-    else if(n.type===3){const latex=renderTemplate(n,ctx),rendered=ctx.template?ctx.template(n,latex,ctx):latex,previous=nodes.slice(0,i).findLast(c=>[1,2,3,4,5].includes(c.type)),script=[27,28,29].includes(n.selector)&&!n.variation,previousScript=previous?.type===3&&[27,28,29].includes(previous.selector)&&!previous.variation;
+    else if(n.type===3){const script=[27,28,29].includes(n.selector)&&!n.variation,local=script?ctx:structureColorContext(n,ctx),latex=renderTemplate(n,local),rendered=ctx.template?ctx.template(n,latex,local):script?latex:editableColor(latex,local.inheritedColor,ctx),previous=nodes.slice(0,i).findLast(c=>[1,2,3,4,5].includes(c.type)),previousScript=previous?.type===3&&[27,28,29].includes(previous.selector)&&!previous.variation;
       if(script&&previousScript){let base=out.pop()??'';if(!lastScriptCombined)base=(out.pop()??'{}')+base;out.push(`{${base}}${rendered}`);lastScriptCombined=true;}
       else {out.push(rendered);lastScriptCombined=false;}
     }
     else if(n.type===5){
       if(n.options)previewError('Nudged matrices are unsupported');
       const hjust=n.hjust&0x7f,vjust=n.vjust&0x7f;
-      if(!n.rows||!n.cols||n.rows>31||n.cols>31||!([0,1,2].includes(hjust))||vjust!==1||![1,3,4].includes(n.valign))previewError('Custom matrix alignment is unsupported');
+      if(!n.rows||!n.cols||n.rows>31||n.cols>31||!([0,1,2].includes(hjust))||vjust!==1||![0,1,2,3,4].includes(n.valign))previewError('Custom matrix alignment is unsupported');
       const cells=n.children.filter(c=>c.type===1);if(cells.length!==n.rows*n.cols||n.children.some(c=>![1,10,11,12,13,14].includes(c.type)))previewError('Matrix cell count/structure is invalid');
       const unpack=(bytes,count)=>Array.from({length:count+1},(_,i)=>(bytes[i>>2]>>((i&3)*2))&3),rowRules=unpack(n.rowPartitions,n.rows),colRules=unpack(n.colPartitions,n.cols);
       if([...rowRules,...colRules].some(x=>x>1))previewError('Dashed/dotted matrix partition styles require native renderer');
-      const partitioned=rowRules.some(Boolean)||colRules.some(Boolean),rows=[];for(let r=0;r<n.rows;r++)rows.push((rowRules[r]?'\\hline ':'')+cells.slice(r*n.cols,(r+1)*n.cols).map(c=>renderNodes(c.children,ctx)).join('&'));
+      const local=structureColorContext(n,ctx),partitioned=rowRules.some(Boolean)||colRules.some(Boolean),rows=[];for(let r=0;r<n.rows;r++)rows.push((rowRules[r]?'\\hline ':'')+cells.slice(r*n.cols,(r+1)*n.cols).map(c=>renderNodes(c.children,local)).join('&'));
       const env=hjust===1&&!partitioned?'matrix':'array',align=hjust===0?'l':hjust===2?'r':'c',columns=env==='matrix'?'':`{${Array.from({length:n.cols},(_,c)=>(colRules[c]?'|':'')+align).join('')+(colRules[n.cols]?'|':'')}}`;
-      const latex=`\\begin{${env}}${columns}${rows.join('\\\\')}${rowRules[n.rows]?'\\\\\\hline ':''}\\end{${env}}`;out.push(ctx.matrix?ctx.matrix(n,latex,ctx):(n.hjust|n.vjust)&0x80||n.valign!==4?`\\mtmatrix{${n.hjust}}{${n.vjust}}{${n.valign}}{${latex}}`:latex);
+      const latex=`\\begin{${env}}${columns}${rows.join('\\\\')}${rowRules[n.rows]?'\\\\\\hline ':''}\\end{${env}}`,rendered=(n.hjust|n.vjust)&0x80||n.valign!==1?`\\mtmatrix{${n.hjust}}{${n.vjust}}{${n.valign}}{${latex}}`:latex;out.push(ctx.matrix?ctx.matrix(n,latex,local):editableColor(rendered,local.inheritedColor,ctx));
     }
     else if(n.type===4){
-      if(n.options&8||![1,2,3,4].includes(n.halign)||![1,3,4].includes(n.valign)||n.children.some(c=>![1,10,11,12,13,14,15,16].includes(c.type)))previewError('Custom equation pile is unsupported');
-      const local={...ctx,currentRuler:n.ruler||ctx.currentRuler};
+      if(n.options&8||![1,2,3,4].includes(n.halign)||![0,1,2,3,4].includes(n.valign)||n.children.some(c=>![1,10,11,12,13,14,15,16].includes(c.type)))previewError('Custom equation pile is unsupported');
+      const local={...structureColorContext(n,ctx),currentRuler:n.ruler||ctx.currentRuler};
       let hasAlignment=false;const lineRecords=n.children.filter(c=>c.type===1),rows=lineRecords.map(c=>{
         if(n.halign!==4){const latex=renderNodes(c.children,local);if(ctx.line)return ctx.line(c,latex,local);if(ctx.fontToken)return rulerLatex(latex,local);const parts=rulerParts(latex,local);hasAlignment||=parts.length>1;return parts.join('&');}
         const at=c.children.findIndex(x=>x.type===2&&['=','<','>','≤','≥','≠','≈','≡','∼'].includes(String.fromCharCode(x.code)));
         if(at<0)previewError('Relationally aligned pile has no supported relation');
         return renderNodes(c.children.slice(0,at),local)+'&'+renderNodes(c.children.slice(at),local);
-      });const env=n.halign===4||hasAlignment?'aligned':'gathered',spaced=lineRecords.slice(1).some(line=>line.lineSpacing??0),body=ctx.fontToken?`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`:`\\begin{${env}}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lineRecords,index):'')).join('')}\\end{${env}}`,latex=ctx.fontToken&&spaced?`\\elrows{${lineRecords.slice(1).map(line=>line.lineSpacing??0).join(',')}}{${body}}`:body;out.push(ctx.pile?ctx.pile(n,latex,local):n.halign===1||n.halign===3||n.valign!==4?`\\mtpile{${n.halign}}{${n.valign}}{${latex}}`:latex);
+      });const env=n.halign===4||hasAlignment?'aligned':'gathered',spaced=lineRecords.slice(1).some(line=>line.lineSpacing??0),body=ctx.fontToken?`\\begin{${env}}${rows.join('\\\\')}\\end{${env}}`:`\\begin{${env}}${rows.map((row,index)=>row+(index<rows.length-1?nativeRowBreak(lineRecords,index):'')).join('')}\\end{${env}}`,latex=ctx.fontToken&&spaced?`\\elrows{${lineRecords.slice(1).map(line=>line.lineSpacing??0).join(',')}}{${body}}`:body,rendered=n.halign===1||n.halign===3||n.valign!==1?`\\mtpile{${n.halign}}{${n.valign}}{${latex}}`:latex;out.push(ctx.pile?ctx.pile(n,latex,local):editableColor(rendered,local.inheritedColor,ctx));
     }
     else if(n.type===9){if(!ctx.fontToken)previewError('Explicit character-size overrides cannot be faithfully represented');}
     else if([15,16].includes(n.type)){}

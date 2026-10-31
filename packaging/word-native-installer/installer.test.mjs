@@ -149,6 +149,8 @@ test('file installation and app health never substitute for a fresh AutoExec rec
   assert.equal((await f.installer.verify(f.request('user'))).nativeRegistrationVerified, false);
   f.setRunning([{pid: 1234}]); const ready = await f.installer.verify(f.request('user'));
   assert.equal(ready.phase, 'native-registered'); assert.equal(ready.coldEditorWakeVerified, false);
+  receipt.entryPoint = 'LazyConnect'; await fs.writeFile(file, JSON.stringify(receipt)); assert.equal((await f.installer.verify(f.request('user'))).nativeRegistrationVerified, false, 'lazy receipt in startup path is not cold startup proof');
+  receipt.entryPoint = 'AutoExec'; await fs.writeFile(file, JSON.stringify(receipt)); assert.equal((await f.installer.verify(f.request('user'))).nativeRegistrationVerified, true);
   const acceptedHash = receipt.helperSha256; receipt.helperSha256 = '0'.repeat(64); await fs.writeFile(file, JSON.stringify(receipt)); assert.equal((await f.installer.verify(f.request('user'))).nativeRegistrationVerified, false); receipt.helperSha256 = acceptedHash;
   receipt.installId = 'old-install'; await fs.writeFile(file, JSON.stringify(receipt)); assert.equal((await f.installer.verify(f.request('user'))).nativeRegistrationVerified, false);
 }));
