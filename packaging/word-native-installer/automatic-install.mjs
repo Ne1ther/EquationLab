@@ -3,7 +3,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {execFileSync} from 'node:child_process';
-import {createHash} from 'node:crypto';
+import {createHash,randomUUID} from 'node:crypto';
 import {fileURLToPath} from 'node:url';
 import {homedir,userInfo} from 'node:os';
 import {createInstaller,detectWordStartup,isMainModule} from './installer.mjs';
@@ -55,10 +55,36 @@ export async function ownedWebManifest(home){
  return {record,manifest,state};
 }
 function wordIsRunning(){return run('/bin/ps',['-axo','comm=']).split('\n').some(line=>path.basename(line.trim())==='Microsoft Word');}
-export async function installAutomatically({action='install',app='/Applications/Equation Lab.app',artifacts,user=loggedInUser(),checkOnly=false,installer,service,wordRunning=wordIsRunning}={}){
+export const pendingWordSetupPath=home=>path.join(home,'Library/Application Support/Equation Lab/word-native/pending-setup.json');
+async function deferWordSetup({user,app,checkOnly,error}){
+ const result={ok:true,wordSetupPending:true,wordInstalled:false,reason:error.code,user:user.username};
+ if(checkOnly)return result;
+ const file=pendingWordSetupPath(user.home);
+ await ensureOwnedDirectories(path.dirname(file),user);
+ if(await fs.realpath(path.dirname(file))!==path.dirname(file))throw Error('Word 插件待完成记录的目录包含符号链接。');
+ const existing=await present(file);
+ if(existing&&(!existing.isFile()||existing.isSymbolicLink()))throw Error('Word 插件待完成记录不是普通文件。');
+ const temporary=file+`.${randomUUID()}.tmp`;let created=false;
+ try{
+  const handle=await fs.open(temporary,'wx',0o600);created=true;
+  try{await handle.writeFile(JSON.stringify({schema:'equationlab.word-setup-pending.v1',app,reason:error.code,createdAt:new Date().toISOString()},null,2)+'\n');}
+  finally{await handle.close();}
+  await ownTree(temporary,user);await fs.rename(temporary,file);
+ }finally{if(created)await fs.unlink(temporary).catch(()=>{});}
+ return result;
+}
+export async function installAutomatically({action='install',app='/Applications/Equation Lab.app',artifacts,user=loggedInUser(),checkOnly=false,installer,service,wordRunning=wordIsRunning,deferOfficeSetup=false}={}){
  if(wordRunning())throw Error('请先保存文档并退出 Microsoft Word，然后重新运行安装器。');
  const resolvedHome=await fs.realpath(user.home);if(resolvedHome!==user.home)throw Error('用户目录包含符号链接，未安装。');
- const startup=await automaticStartup(user.home,{forRemoval:action==='remove'});
+ let startup;
+ try{startup=await automaticStartup(user.home,{forRemoval:action==='remove'});}
+ catch(error){
+  // The full PKG can place the app without reading Office's protected
+  // settings. Leave Word entirely untouched and let the foreground app ask
+  // for scoped access. Never guess a Startup folder or soften later errors.
+  if(action!=='install'||!deferOfficeSetup||error.code!=='WORD_SETTINGS_ACCESS_DENIED')throw error;
+  return deferWordSetup({user,app,checkOnly,error});
+ }
  if(startup!==user.home&&!startup.startsWith(user.home+path.sep))throw Error('Word Startup 必须位于当前用户目录。');
  const api=installer??createInstaller({homeDirectory:user.home});
  const request={schema:'equationlab.word-plugin-request.v1',installationScope:'user',startupDirectory:startup,startupDirectoryConfirmed:true,artifactManifestDirectory:artifacts};
@@ -101,6 +127,7 @@ export async function installAutomatically({action='install',app='/Applications/
    await fs.unlink(web.manifest);webRemoved=true;
    const record={...web.state,migratedToNative:true,migratedAt:new Date().toISOString(),manifestBackup:backup};await fs.writeFile(web.record,JSON.stringify(record,null,2)+'\n',{mode:0o600});await ownTree(web.record,user);
   }
+  await fs.unlink(pendingWordSetupPath(user.home)).catch(error=>{if(error.code!=='ENOENT')throw error;});
   return {...committed,user:user.username,startup,automatic:true,...(moving?{migratedFrom:state.startupDirectory}:{})};
   }catch(error){
    try{
@@ -125,16 +152,19 @@ if(isMainModule(import.meta.url)){
   if(args.includes('--service-only')){
    const uid=Number(value('--uid'));if(uid!==process.getuid())throw Error('后台服务用户不匹配。');
    result=await manageWordService({app:value('--app'),home:value('--home'),uid});
-  }else if(args.includes('--update-existing')){
+  }else if(args.includes('--update-existing')||args.includes('--install-user')){
+   if(process.geteuid()===0)throw Error('请从 Equation Lab App 为当前用户安装 Word 插件。');
    const home=homedir(),record=path.join(home,'Library/Application Support/Equation Lab/word-native/current.json');
-   const state=JSON.parse(await fs.readFile(record,'utf8'));
-   if(process.geteuid()===0||state.schema!=='equationlab.word-native-installation.v1'||state.scope!=='user'||state.installed!==true)throw Error('现有用户安装记录不存在，请使用完整系统安装包。');
+   if(args.includes('--update-existing')){
+    const state=JSON.parse(await fs.readFile(record,'utf8'));
+    if(state.schema!=='equationlab.word-native-installation.v1'||state.scope!=='user'||state.installed!==true)throw Error('现有用户安装记录不存在，请使用完整系统安装包。');
+   }
    const app=path.resolve(import.meta.dirname,'../../../..');if(!app.endsWith('.app'))throw Error('自动更新仅由已安装的 Equation Lab App 提供。');
    result=await installAutomatically({app,artifacts:path.join(app,'Contents/Resources/native-word-artifacts'),user:{home,uid:process.getuid(),gid:process.getgid(),username:userInfo().username}});
   }else{
    if(process.geteuid()!==0)throw Error('请通过 Equation Lab 系统安装包安装 Word 插件。');
-   result=await installAutomatically({action:args.includes('--remove')?'remove':'install',app:value('--app','/Applications/Equation Lab.app'),artifacts:value('--artifacts',path.resolve(import.meta.dirname,'../artifacts')),checkOnly:args.includes('--check')});
+   result=await installAutomatically({action:args.includes('--remove')?'remove':'install',app:value('--app','/Applications/Equation Lab.app'),artifacts:value('--artifacts',path.resolve(import.meta.dirname,'../artifacts')),checkOnly:args.includes('--check'),deferOfficeSetup:args.includes('--allow-deferred-word-setup')});
   }
   process.stdout.write(JSON.stringify(result)+'\n');
- }catch(error){process.stderr.write('Equation Lab：'+error.message+'\n');process.exitCode=1;}
+ }catch(error){process.stdout.write(JSON.stringify({ok:false,error:{code:error.code??'INSTALL_FAILED',message:error.message}})+'\n');process.stderr.write('Equation Lab：'+error.message+'\n');process.exitCode=1;}
 }

@@ -22,7 +22,7 @@ export async function buildAutomaticPackage({app,artifacts,output,version,kind='
   await fs.copyFile(path.join(app,'Contents/Resources/runtime/bin/node'),path.join(scripts,'node'));await fs.chmod(path.join(scripts,'node'),0o755);
   run('/usr/bin/codesign',['--verify','--strict',path.join(scripts,'node')]);
   const removing=kind==='remove',flag=removing?' --remove':'';
-  const entry='"$script_directory/node" "$script_directory/word-native-installer/automatic-install.mjs"'+flag;
+  const entry='"$script_directory/node" "$script_directory/word-native-installer/automatic-install.mjs"'+flag+(kind==='full'?' --allow-deferred-word-setup':'');
   const preinstall=`#!/bin/sh\nset -eu\nscript_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\nif [ "$(/usr/bin/uname -m)" != arm64 ]; then echo 'Equation Lab 需要 Apple Silicon Mac。' >&2; exit 1; fi\nif /usr/bin/pgrep -x 'Microsoft Word' >/dev/null; then echo '请先保存文档并退出 Microsoft Word，然后重试安装。' >&2; exit 1; fi\n${kind==='full'?"if /usr/bin/pgrep -x EquationLab >/dev/null; then echo '请先退出 Equation Lab，然后重试安装。' >&2; exit 1; fi\n":""}${entry} --check\n`;
   const postinstall=`#!/bin/sh\nset -eu\nscript_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)\n${entry}\n`;
   for(const [name,text]of [['preinstall',preinstall],['postinstall',postinstall]]){await fs.writeFile(path.join(scripts,name),text,{mode:0o755});run('/bin/sh',['-n',path.join(scripts,name)]);}
@@ -43,9 +43,9 @@ export async function buildAutomaticPackage({app,artifacts,output,version,kind='
   }else payloadArgs.push('--nopayload');
   run('/usr/bin/pkgbuild',[...payloadArgs,'--identifier',identifier,'--version',version,'--scripts',scripts,component]);
   const title=removing?'Equation Lab Word 插件卸载':kind==='full'?'Equation Lab':'Equation Lab Word 插件';
-  const introduction=`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>body{font:14px -apple-system;padding:16px;color:#252525;line-height:1.7}h1{font-size:24px}li{margin:8px 0}</style><h1>${title}</h1><p>${removing?'将移除本安装器管理的 Word 顶栏组件和后台服务，保留 Equation Lab App 和个人公式。':'安装完成后，重新打开 Word 并新建或打开一篇文档，即可看到 Equation Lab 顶栏。安装器会自动放置全部组件，无需选择插件目录。'}</p><ul><li>请先保存文档并退出 Microsoft Word。${kind==='full'?'同时退出 Equation Lab。':''}</li><li>适用于 Apple Silicon Mac 和桌面版 Microsoft Word。</li><li>${kind==='full'?'App 安装到“应用程序”，Word 插件安装到当前登录用户的启动目录。':'用于已安装 Equation Lab 的当前 macOS 登录用户。'}</li></ul></html>`;
+  const introduction=`<!doctype html><html lang="zh-CN"><meta charset="utf-8"><style>body{font:14px -apple-system;padding:16px;color:#252525;line-height:1.7}h1{font-size:24px}li{margin:8px 0}</style><h1>${title}</h1><p>${removing?'将移除本安装器管理的 Word 顶栏组件和后台服务，保留 Equation Lab App 和个人公式。':kind==='full'?'安装 App 和当前用户的 Word 插件。如果 macOS 要求访问 Office 文件夹，可在安装后打开 App，按提示完成授权。':'安装完成后，重新打开 Word 并新建或打开一篇文档，即可看到 Equation Lab 顶栏。安装器会自动放置全部组件，无需选择插件目录。'}</p><ul><li>请先保存文档并退出 Microsoft Word。${kind==='full'?'同时退出 Equation Lab。':''}</li><li>适用于 Apple Silicon Mac 和桌面版 Microsoft Word。</li><li>${kind==='full'?'App 安装到“应用程序”，Word 插件安装到当前登录用户的启动目录。':'用于已安装 Equation Lab 的当前 macOS 登录用户。'}</li></ul></html>`;
   await fs.writeFile(path.join(resources,'welcome.html'),introduction);
-  await fs.writeFile(path.join(resources,'conclusion.html'),`<!doctype html><meta charset="utf-8"><style>body{font:15px -apple-system;padding:20px;line-height:1.7}</style><p>${removing?'Word 插件已卸载。':'安装完成。打开 Microsoft Word，新建或打开一篇文档，在顶部点击 Equation Lab 即可开始。'}</p><p>以后可在 Equation Lab App 的“Office 插件”入口安装、修复或卸载。</p>`);
+  await fs.writeFile(path.join(resources,'conclusion.html'),`<!doctype html><meta charset="utf-8"><style>body{font:15px -apple-system;padding:20px;line-height:1.7}</style><p>${removing?'Word 插件已卸载。':kind==='full'?'Equation Lab App 已安装。打开 App 检查 Word 插件连接；如果 macOS 尚未允许访问 Office 文件夹，App 会引导完成授权和插件安装。':'Word 插件已安装。重新打开 Word，新建或打开一篇文档，在顶部点击 Equation Lab 即可开始。'}</p><p>以后可在 Equation Lab App 的“Office 插件”入口安装、修复或卸载。</p>`);
   const distribution=path.join(temporary,'Distribution.xml');
   // Let Installer explain the running-app requirement before privileged scripts
   // start. Keep preinstall's process check as protection against a later launch.

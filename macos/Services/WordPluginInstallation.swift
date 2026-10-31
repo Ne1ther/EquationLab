@@ -2,6 +2,17 @@ import AppKit
 import Foundation
 
 extension DesktopBridge {
+    func presentDeferredWordSetup() {
+        guard !deferredWordSetupPresented else { return }
+        let file = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library/Application Support/Equation Lab/word-native/pending-setup.json")
+        guard WordPluginSetupRequest.load(from: file, for: Bundle.main.bundleURL) != nil else { return }
+        deferredWordSetupPresented = true
+        wordPluginSetupPending = true
+        wordOfficeAccessRequired = true
+        showOfficePlugins = true
+    }
+
     private var nativeInstallerURL: URL? {
         Bundle.main.resourceURL?.appendingPathComponent("installer/word-native-installer.mjs")
     }
@@ -16,34 +27,30 @@ extension DesktopBridge {
             installationMessage = "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。"
             return
         }
-        let record = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Application Support/Equation Lab/word-native/current.json")
-        if let bytes = try? Data(contentsOf: record),
-           let state = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any],
-           state["schema"] as? String == "equationlab.word-native-installation.v1",
-           state["scope"] as? String == "user", state["installed"] as? Bool == true {
-            updateExistingWordPlugin()
-            return
-        }
-        openWordPackage(removing: false)
+        installUserWordPlugin()
     }
 
-    private func updateExistingWordPlugin() {
+    private func installUserWordPlugin() {
         guard !installationRunning else { return }
         guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty else {
-            installationMessage = "请先保存文档并完全退出 Word，再更新插件。"
+            installationMessage = "请先保存文档并完全退出 Word，再安装或更新插件。"
             return
         }
         guard let node = bundledNodeURL(), let script = Bundle.main.resourceURL?
-            .appendingPathComponent("installer/word-native-installer/automatic-install.mjs") else { return }
+            .appendingPathComponent("installer/word-native-installer/automatic-install.mjs"),
+              FileManager.default.fileExists(atPath: script.path) else {
+            installationMessage = "此构建未包含 Word 插件安装器。"
+            return
+        }
         installationRunning = true
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var message: String
             var succeeded = false
+            var errorCode: String?
             do {
                 let process = Process(), output = Pipe(), errors = Pipe()
                 process.executableURL = node
-                process.arguments = [script.path, "--update-existing"]
+                process.arguments = [script.path, "--install-user"]
                 process.standardOutput = output
                 process.standardError = errors
                 try process.run()
@@ -52,10 +59,12 @@ extension DesktopBridge {
                 process.waitUntilExit()
                 let result = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 succeeded = process.terminationStatus == 0 && result?["ok"] as? Bool == true
-                message = succeeded ? "Word 插件已更新。重新打开 Word 即可使用固定顶栏。"
-                    : String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Word 插件自动更新未完成。"
+                let failure = result?["error"] as? [String: Any]
+                errorCode = failure?["code"] as? String
+                message = succeeded ? "Word 插件已安装。重新打开 Word 即可使用固定顶栏。"
+                    : failure?["message"] as? String ?? String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Word 插件安装未完成。"
             } catch { message = error.localizedDescription }
-            let accessDenied = !succeeded && (message.contains("operation not permitted") || message.contains("permission denied"))
+            let accessDenied = !succeeded && (["WORD_SETTINGS_ACCESS_DENIED", "WORD_STARTUP_ACCESS_DENIED", "EPERM", "EACCES"].contains(errorCode ?? "") || message.localizedCaseInsensitiveContains("operation not permitted") || message.localizedCaseInsensitiveContains("permission denied"))
             let completedMessage = accessDenied
                 ? "macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。" : message
             let completedSuccess = succeeded
@@ -64,8 +73,11 @@ extension DesktopBridge {
                 self.installationRunning = false
                 if accessDenied {
                     self.wordOfficeAccessRequired = true
+                } else if completedSuccess {
+                    self.wordOfficeAccessRequired = false
+                    self.wordPluginSetupPending = false
                 }
-                self.nativeWordStatus = completedSuccess || accessDenied ? completedMessage : "Word 插件自动更新未完成。"
+                self.nativeWordStatus = completedSuccess || accessDenied ? completedMessage : "Word 插件安装未完成。"
                 self.installationMessage = completedMessage
             }
         }

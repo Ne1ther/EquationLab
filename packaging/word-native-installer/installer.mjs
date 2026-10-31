@@ -22,6 +22,15 @@ export function isMainModule(metaUrl, script = process.argv[1]) {
   catch { return false; }
 }
 export async function detectWordStartup(home) {
+  try { return await lookupWordStartup(home); }
+  catch (error) {
+    // TCC can deny directory discovery before we reach the database itself.
+    if (['EACCES', 'EPERM'].includes(error.code))
+      fail('WORD_SETTINGS_ACCESS_DENIED', 'macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。');
+    throw error;
+  }
+}
+async function lookupWordStartup(home) {
   const base = path.join(home, 'Library/Group Containers/UBF8T346G9.Office');
   const database = path.join(base, 'MicrosoftRegistrationDB.reg');
   const configurationAvailable = await exists(database);
@@ -54,7 +63,7 @@ export async function detectWordStartup(home) {
       rows = JSON.parse(execFileSync('/usr/bin/sqlite3', ['-readonly', '-json', resolvedDatabase, query],
         {encoding: 'utf8', timeout: 5000, maxBuffer: 32768, stdio: ['ignore', 'pipe', 'pipe']}) || '[]');
     } catch (error) {
-      if (['EACCES', 'EPERM'].includes(error.code) || /authorization denied|permission denied/i.test(String(error.stderr ?? '')))
+      if (['EACCES', 'EPERM'].includes(error.code) || /authorization denied|permission denied|operation not permitted/i.test(String(error.stderr ?? '')))
         fail('WORD_SETTINGS_ACCESS_DENIED', 'macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。');
       fail('WORD_STARTUP_LOOKUP_FAILED', '无法读取 Word 的启动目录设置。请在 Word“偏好设置 → 文件位置 → 启动”确认位置后重试。');
     }

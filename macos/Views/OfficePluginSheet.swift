@@ -24,7 +24,11 @@ struct OfficePluginSheet: View {
                         Text(bridge.wordApplicationPath).font(.caption).foregroundStyle(.secondary)
                             .textSelection(.enabled)
                     }
-                    Text(bridge.t("固定顶栏、公式插入与双击编辑、编号和引用。系统安装器会自动放置所有组件，无需选择文件夹。"))
+                    Text(bridge.t("固定顶栏、公式插入与双击编辑、编号和引用。按照窗口提示完成安装即可。"))
+                    if bridge.wordPluginSetupPending {
+                        Text(bridge.t("App 已安装，Word 插件尚未配置。按提示允许访问 Word 文件夹后，点击安装插件。"))
+                            .font(.callout)
+                    }
                     Text(bridge.t(bridge.nativeWordStatus)).font(.callout).foregroundStyle(.secondary)
                     HStack {
                         Button(bridge.t("安装 / 更新 Word 插件…")) { bridge.installWordPlugin() }

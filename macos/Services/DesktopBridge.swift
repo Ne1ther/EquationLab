@@ -82,6 +82,8 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published var wordApplicationPath = ""
     @Published var wordApplicationVersion = ""
     @Published var wordOfficeAccessRequired = false
+    @Published var wordPluginSetupPending = false
+    var deferredWordSetupPresented = false
     var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
     @Published private(set) var wordPresentationRevision = 0

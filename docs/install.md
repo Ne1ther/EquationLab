@@ -50,6 +50,8 @@
 
 退出 Word 和 Equation Lab 后重试。仍失败时，请在安装器的 **窗口 → 安装器日志 → 显示所有日志** 中保存日志，在 [issue](https://github.com/Ne1ther/EquationLab/issues) 附上安装包名称、Mac 芯片、macOS 和 Word 版本。
 
+已有反馈的定位和修复进度见[问题处理记录](issue-status.md)，其中注明了哪些修复已经发布。
+
 ---
 
 # Installation and use
@@ -101,3 +103,5 @@ The installer updates both the app and Word plugin. Save your documents and quit
 ## Installation errors
 
 Quit Word and Equation Lab and retry. If installation still fails, save the log from **Installer → Window → Installer Log → Show All Logs**. Attach it to an [issue](https://github.com/Ne1ther/EquationLab/issues) with the package name, Mac chip, macOS version, and Word version.
+
+See the [issue status](issue-status.md) for findings, fixes and their release status.
