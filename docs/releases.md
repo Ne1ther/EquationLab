@@ -18,13 +18,13 @@ Component ownership checks and other add-ins are preserved. The release includes
 
 手动编辑增加结构位置提示和求和上下标操作，改善旧 MathType 矩阵括号、颜色与中文标注的显示。预览面板会保留内容，应用图标的留白也作了调整。
 
-完善旧 MathType 编号、章和节、交叉引用的读回与更新，保留原生公式与引用关系。
+读回和更新旧 MathType 的编号、章和节及交叉引用时，保留原生公式和引用关系。
 
 [下载 0.6.11](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.11)
 
 This release focuses on Chinese input. Word, the formula canvas, and the LaTeX editor defer synchronization until composition finishes, allowing longer Pinyin input and candidate selection. Word startup now connects the native formula component automatically.
 
-Manual editing gains structure cues and sum-limit controls. Rendering improves legacy MathType matrix delimiters, colors, and Chinese annotations; preview panels retain their contents, and the app icon has more consistent spacing. Numbering updates preserve native equations and references while improving legacy MathType chapter and section handling.
+Manual editing adds structure cues and sum-limit controls. Rendering improves legacy MathType matrix delimiters, colors, and Chinese annotations; preview panels retain their contents, and the app icon has more consistent spacing. Numbering updates preserve native equations and references while improving legacy MathType chapter and section handling.
 
 ## 0.6.10 · build98
 
@@ -60,7 +60,7 @@ Editor numbering settings now apply to Word and later insertions. The cursor adv
 
 ## 0.6.6 · build86
 
-长文档先打开正在编辑的公式，其余内容分批读取，缩略图随浏览补齐。增加旧 MathType 黑板体、花体、颜色和多行结构的显示支持。“更新编号”识别 MTEqn、MTChap、MTSec 与 MTPlaceRef，保留原有重置、重复序号和交叉引用关系。
+长文档先打开正在编辑的公式，其余内容分批读取，缩略图随浏览补齐。增加对旧 MathType 黑板体、花体、颜色及多行结构的显示支持。“更新编号”可识别 MTEqn、MTChap、MTSec 与 MTPlaceRef，保留原有的重置、重复序号和交叉引用关系。
 
 [下载 0.6.6](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.6)
 
@@ -76,7 +76,7 @@ The document menu distinguishes files with identical names, retains drafts durin
 
 ## 0.6.4 · build73
 
-从 Dock 重开时刷新文档公式，插入期间也可以切换到已有公式。取消、完成并插入和更新公式放到编辑模式栏右侧。改善双击后的窗口置前和保存后返回 Word。
+从 Dock 重开时刷新文档公式，插入期间也可以切换到已有公式。“取消”、“完成并插入”和“更新公式”放到了编辑模式栏右侧。也调整了双击后的窗口置前和保存后返回 Word 的处理。
 
 [下载 0.6.4](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.4)
 

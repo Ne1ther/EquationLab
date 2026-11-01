@@ -25,7 +25,7 @@
 
 在“应用当前公式样式…”中选择“保存文档预设（另存副本）”，将当前字体、字号和间距存为该文档后续公式的预设。
 
-打开带有预设的文档后，新插入会话会采用它。也可选择“将文档预设载入当前草稿”，在当前公式中使用。载入后按正常流程更新公式或完成插入。
+打开带有预设的文档后，新插入的公式会沿用这套预设。你也可以选择“将文档预设载入当前草稿”，将它用于当前公式，再点更新公式或完成插入。
 
 ## 编号的作用范围
 
@@ -37,13 +37,13 @@
 | 全部已有编号 | 统一整理文档中可处理的 Equation Lab 编号格式 |
 | 仅后续新增公式 | 保存后续新增编号的默认格式，已有编号沿用原格式 |
 
-当前公式和全部已有编号这两个范围处理现有编号。要另外设置后续默认，可选择“仅后续新增公式”。预检会列出修改和跳过的项目，保存后在 Word 中打开副本，点“更新编号”重算序号与交叉引用。
+“当前公式”和“全部已有编号”用来修改现有编号。如果只想给以后新增的公式设置默认格式，选“仅后续新增公式”。预检会列出修改和跳过的项目；保存后用 Word 打开新副本，点功能区的“更新编号”重算序号和交叉引用。
 
 旧 MathType 公式的编号通过 Word 功能区调整。“更新编号”沿用其原有编号字段与重新起号设置，并更新相关引用。
 
 ## 连接诊断
 
-打开 **Office 插件**面板，先检查连接状态，需要报告问题时点“复制连接诊断”。诊断包含 App 和组件版本、本地服务状态、最近操作阶段与耗时，可随复现步骤一并提供。文档内容和路径留在本机，复制后由你选择如何分享。
+打开 **Office 插件**面板查看连接状态。反馈问题时，点“复制连接诊断”，把诊断文本和复现步骤一起提供。诊断包括 App 与组件版本、本地服务状态、最近操作阶段和耗时，不含文档内容与路径；是否分享这段文本由你决定。
 
 ## 命令行
 
@@ -115,7 +115,7 @@ Style processing changes native equation settings while retaining local special 
 
 Under Apply current formula style, choose Store document preset in a copy to save the current fonts, sizes, and spacing for future equations in that document.
 
-New insertion sessions adopt the preset when you open a document containing it. You can also choose Load document preset into draft to use it in the current equation, then update the equation or finish inserting as usual.
+When you open a document with a saved preset, newly inserted equations automatically adopt it. You can also choose Load document preset into draft to apply it to the current equation, then update or insert as usual.
 
 ## Choose a numbering scope
 
@@ -133,7 +133,7 @@ Use the Word ribbon to adjust legacy MathType numbering. Update Numbers follows 
 
 ## Connection diagnostics
 
-Open the **Office plugin** panel to check connection status. Use Copy connection diagnostics when reporting an issue. It includes app and component versions, local service status, recent operation stages, and timing, ready to accompany your reproduction steps. Document content and paths stay on your Mac; you choose how to share the copied report.
+Open the **Office plugin** panel to check the connection status. When reporting an issue, click Copy connection diagnostics to copy app and component versions, local service status, recent stages, and operation timing. The copied text omits document content and paths. You choose how to share it.
 
 ## Command line
 

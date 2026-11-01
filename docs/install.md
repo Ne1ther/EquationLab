@@ -31,7 +31,7 @@
 
 在右侧 **文档 → 文档检查与批量处理** 中，可检查编号和引用，把当前公式的字体、字号、间距应用到文档副本，或按范围整理 Equation Lab 编号格式。
 
-先查看预检结果，再点“另存应用后的副本…”。这些工具生成新文件；要使用修改后的文档，在 Word 中打开这个副本，检查排版并更新编号与引用。[详细用法](document-tools.md)
+先查看预检结果，再点“另存应用后的副本…”。这些工具生成新文件。保存后在 Word 中打开副本，检查排版，再点“更新编号”刷新序号和引用。[详细用法](document-tools.md)
 
 ## Word 里没有显示 Equation Lab
 
@@ -68,7 +68,7 @@ Use an Apple Silicon Mac with macOS 14 or later. Word integration requires deskt
 
 ## Start editing
 
-Double-click a MathType equation in Word to open its editor. Browse and search equations on the left, and adjust style, layout, and numbering on the right. Choose Update equation to save back in place.
+Double-click a MathType equation in Word to open the editor window. Browse and search equations on the left, and adjust style, layout, and numbering on the right. Choose Update equation to save back in place.
 
 To add an equation, choose a Word document at the top of the sidebar and use Insert into Word at the bottom. Pick inline, centered, right-numbered, or left-numbered placement. You can also start from the Word ribbon. Choose Finish and insert when ready; the app displays Word’s save result. Cancel returns to the original document.
 

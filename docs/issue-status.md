@@ -13,9 +13,9 @@
 
 先从 **Equation Lab → 关于**确认版本。然后打开 **Office 插件 → 检查连接**，需要进一步排查时点**复制连接诊断**。诊断只包含版本、组件及连接状态，不带文档内容、文件名或路径。
 
-双击报错时，区分“功能区未加载”“无法确认文档上下文”和“编辑器已经打开但没有置前”。这三个现象的处理入口不同。请保留具体提示；不必反复重装或把论文原件上传到 issue。
+双击公式报错时，请先分清是“功能区未加载”、“无法确认文档上下文”还是“编辑器已经打开但没有置前”。这三种情况的原因和解决入口不同。只要保留具体的错误提示文字即可，不需要反复重装，也请不要把论文原件上传到公共 issue 里。
 
-本轮安装回归使用临时目录模拟目录和数据库权限拒绝，验证了预检不写文件、延后配置不改 Word、授权后完成安装、失败回滚及其他加载项保留。候选 App 和 PKG 另行构建核对；这些检查不等同于另一台 Mac 上的系统授权验收。
+这轮测试用临时目录模拟了文件夹和数据库读取被拒绝的情况，检查了预检不写文件、延后配置不改 Word，以及恢复读取权限后可以继续安装。失败回滚和其他加载项保留也有对应测试。候选 App 和 PKG 另行构建核对；这些模拟权限测试不能替代另一台 Mac 上的系统授权验收。
 
 ---
 
@@ -28,4 +28,4 @@ Checked on 2026-10-31. The public installer is **0.6.12 (build100)**.
 - **[#4](https://github.com/Ne1ther/EquationLab/issues/4):** The report covers 0.6.6 and 0.6.9. Version 0.6.11 fixes the automatic startup entry and has passed local Word cold-start and native-equation lifecycle checks. We also opened the public 30-equation sample in this pass. The reporter’s macOS 15.7.4 environment remains unconfirmed, so this issue stays open.
 - **[#5](https://github.com/Ne1ther/EquationLab/issues/5):** The animation shows interrupted Chinese composition, but does not identify the app version. Version 0.6.11 defers Word macro polling during composition. The shipped Word components passed six-second composition tests in Word on our Mac. The editor fix also passed real input tests in its LaTeX field and formula canvas before release. Confirmation from the reporter is still needed.
 
-Use **About** to check the app version, then **Office plugin → Check connection / Copy connection diagnostics**. Diagnostics contain versions and connection states, without document content, names or paths. The installer regression tests simulate denied filesystem access; they do not establish a successful macOS consent flow on another machine.
+Check the app version under **About**, then go to **Office plugin → Check connection / Copy connection diagnostics**. The copied diagnostics include versions and connection states, without document content, filenames, or paths. The installer tests simulate denied filesystem access. They do not verify macOS system authorization on another Mac.

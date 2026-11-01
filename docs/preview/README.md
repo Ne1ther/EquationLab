@@ -12,9 +12,9 @@ Made with the timeline and camera tools from Lieflat Code Video Starter, using N
 
 ![Equation Lab 工作台](workbench-0.6.10.png)
 
-文档选择、公式列表、编辑画布与 Word 排版预览。右侧检查器集中调整样式、间距和文档设置。
+工作台里可以选择文档、浏览公式、编写公式并查看 Word 排版预览。右侧检查器用来调整样式、间距和文档设置。
 
-The workbench brings together document selection, equation browsing, editing, and Word layout previews. The inspector groups typography, spacing, and document tools.
+The workbench combines document selection, equation browsing, editing, and Word layout previews, while the inspector groups typography, spacing, and document settings.
 
 [30 公式 Word 演示](../examples/equation-lab-30-formulas.docx) · [PDF](../examples/equation-lab-30-formulas.pdf)
 

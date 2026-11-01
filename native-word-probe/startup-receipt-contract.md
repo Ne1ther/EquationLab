@@ -25,6 +25,6 @@
 | `-9` | 写入失败或遇到符号链接 |
 | `-10` | 组件路径或 Word 信息无效 |
 
-安装或更新前须退出 Word。验证时同时核对新 PID、当前安装 ID 和组件哈希；已有旧记录不能证明新版本已加载。
+安装或更新前必须完全退出 Word。验证时同时核对新的 Word PID、当前安装 ID 和组件哈希，旧的启动记录不能证明新版本已加载。
 
-测试：`node native-word-probe/script/run_startup_receipt_tests.mjs`。真实 Word 冷启动验收另行记录，不以测试注入的环境代替。
+运行测试：`node native-word-probe/script/run_startup_receipt_tests.mjs`。真实 Word 冷启动的验收结果需单独记录，不能用测试模拟注入的环境直接替代。

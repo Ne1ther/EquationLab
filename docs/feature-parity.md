@@ -15,10 +15,10 @@
 | 自动更新 | `macos/Services/AppUpdater.swift`、`updater/`；`tests/updates/AppUpdaterTests.swift` |
 | 安装与修复 | `packaging/word-native-installer/`；安装器测试及真实 Word 加载记录 |
 
-发布前除代码测试外，还要在 Word 中检查插入、列表切换、双击、保存、重开、编号和引用。程序化读回用于核对原生公式是否改变，界面测试用于核对实际显示和前台切换。
+发布前除了自动化测试，还要在 Word 中检查插入、公式列表切换、双击、保存、重开、编号和引用。脚本读回用于核对原生公式是否发生变化，界面测试另行检查实际显示和前台切换。
 
 公开的 [30 公式演示](examples/equation-lab-30-formulas.docx) 提供编号、引用和多种公式结构，可用于开发回归。
 
 ---
 
-The table maps current features to their code and tests. Word insertion, list switching, double-click, saving, reopening, numbering, and references also need host checks. Use the public thirty-equation demo for repeatable numbering, reference, and layout checks.
+The table maps current features to their source files and test suites. Beyond automated tests, Word insertion, list switching, double-click opening, saving, reopening, numbering, and references require testing in the real Word host. Use the public thirty-equation demo for repeatable numbering, reference, and layout checks.

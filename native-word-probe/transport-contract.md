@@ -27,7 +27,7 @@
 | `navigate` | 目标公式的零起始 `index` |
 | `cancelled` | 结束编辑，保留原公式 |
 
-宽高使用正整数 HIMETRIC。原生数据和 PDF 各不超过 16 MiB，组件先检查数据、单页 PDF 和尺寸，再在 Word 主线程回存。之后发送 `/api/native-ack`，携带 `ticket`、原 `session` 和 `ok`；App 通过 `/api/native-status` 等待确认。
+宽高以正整数 HIMETRIC 为单位。原生数据和 PDF 分别不超过 16 MiB，组件先校验数据完整性、单页 PDF 与尺寸，再在 Word 主线程执行写回。写回完成后发送 `/api/native-ack`，携带 `ticket`、原 `session` 和 `ok`；App 则通过 `/api/native-status` 等待确认。
 
 App 使用 `/api/native-read` 取得当前公式和文档快照，左侧切换在 App 内完成。保存其他公式时，`/api/native-complete` 在原 ticket 中提交 `target: {index, expectedNativeSha256, documentIdentity}`。服务核对原会话和快照；Word 组件再核对 Document、原 InlineShape 锚点及 Native 哈希，在后台写回并确认。App 收到确认后返回 Word。
 
@@ -39,10 +39,10 @@ Native 写回立即清空全部 XML 缓存，同时为最多 32 个存活对象�
 
 `MathTypeBridgeTakeDocumentCaptureRequest` 只领取当前最新激活的一次请求，`MathTypeBridgeDocumentCapture{RequestToken,Snapshot,Index,Identity}` 返回其绑定。VBA 强制生成新快照后调用 `MathTypeBridgeFinishDocumentCaptureRequest`；失败调用 `MathTypeBridgeFailDocumentCaptureRequest`。只有 Document 生命周期一致、新快照、当前 activation 且未过期的响应可继续。SaveObject 期间不可领取请求。重复打开同一对象共用该请求；文档清理、关闭及对象释放清除关联。请求超时会结束待打开会话，可重新双击重试，已知文档不会静默降为单式。
 
-现有 OnTime 每秒只检查整数请求，WordOpenXML 不参与周期轮询。正常新捕获沿用约 25ms 的准备路径；只有缺快照的已知对象等待按需捕获，等待边界为三秒。原生测试可以模拟 VBA 回应；实际 Word 是否完成捕获须另行验证。
+原生调度器按一秒间隔安排轮询，进入 Word 宏前会检查是否仍在组字，组字未完成就延后调用。WordOpenXML 不参与周期轮询。正常新捕获沿用约 25ms 的准备路径；只有缺快照的已知对象等待按需捕获，最多等三秒。原生测试可以模拟 VBA 回应，实际 Word 是否完成捕获仍须另行验证。
 
 ## 清理与检查
 
-完成、取消、错误或对象关闭后清理会话；失联会话在二十分钟后过期。临时目录权限为 `0700`，文件为 `0600`。日志不记录公式、文档名、ticket 或编辑 URL。
+完成、取消、报错或对象关闭后清理会话，失联会话在二十分钟后过期。临时目录权限为 `0700`，文件权限为 `0600`。日志不记录公式内容、文档名、ticket 或编辑 URL。
 
-接口测试见 `tests/word-native-session.test.mjs`、`tests/word-native-rpc.test.mjs`；原生传输和应用定位测试见 `script/run_transport_tests.mjs`、`script/run_launch_target_tests.mjs`。发布时另测实际 Word 双击、切换、保存和重开。
+接口测试见 `tests/word-native-session.test.mjs` 与 `tests/word-native-rpc.test.mjs`；原生传输和应用定位测试见 `script/run_transport_tests.mjs` 与 `script/run_launch_target_tests.mjs`。发布前必须在真实 Word 中单独测试双击、切换、保存以及重新打开流程。

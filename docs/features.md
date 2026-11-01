@@ -6,9 +6,9 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 ## 选择文档和插入公式
 
-左侧标题将文档图标、文件名和下拉箭头居中排列。打开菜单即可选择 Word 当前打开的文档，同名文件也能区分。菜单中的刷新更新文档列表与可用状态；公式区的刷新重新读取当前文档公式。
+左侧顶部将当前文档的图标、文件名和下拉箭头居中排列。点开菜单就能选择 Word 当前打开的文档，同名文件也能区分。菜单里的“刷新”更新文档列表和可用状态；公式列表上方的“刷新”重新读取当前文档的公式。
 
-底部的“插入到 Word”提供行内、居中、右侧编号和左侧编号四种方式。顶部文件名决定目标文档；正在编辑已有公式时，新公式放在它所在段落之后。独立草稿使用所选文档在 Word 中的空光标位置，内容、字体字号和标尺一起带入。
+点底部的“插入到 Word”，可以选择行内、居中、右侧编号或左侧编号。顶部选中的文档就是插入目标。如果正在编辑已有公式，新公式会插在它所在段落的后面。独立草稿使用所选文档在 Word 中的空光标位置，内容、字体字号和标尺设置一起带入。
 
 从 Word 功能区开始插入时，会先打开空白编辑区。写好后点“完成并插入”，收到 Word 的保存结果后返回文档。编辑已有公式时，使用编辑模式栏右侧的“更新公式”。两个流程都可以点“取消”返回原文档。
 
@@ -18,9 +18,9 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 长文档先打开当前选中的公式，其余列表分批载入。缩略图随浏览逐项生成和更新，当前公式会自动滚动到可见位置。加载期间可以继续输入、调整字号或取消；文档内容变化时会保留当前草稿，之后可重新读取列表。
 
-多行公式可用 `\\` 换行，也可输入 `aligned`、`gathered` 或 `cases` 环境。保存时各行一起回到 Word。旧 MathType 公式可保留原结构替换字符，也可使用编辑器中的结构工具调整；黑板体、花体、颜色和多行排版都有对应显示。
+多行公式可以用 `\\` 换行，也可以输入 `aligned`、`gathered` 或 `cases` 环境，保存时所有行一起存回 Word。编辑旧版 MathType 公式时，可以保留原结构直接改字，也可以用编辑器里的结构工具调整。预览也会显示黑板体、花体、颜色和多行排版。
 
-手动填写分式和根式时，编辑区下方会显示光标所在的分子、分母或根号范围，蓝色虚线标出当前输入区域。点“移出根号”或“移出分式”即可继续填写外部内容；“选中结构”可选中整个结构一起替换。点击求和符号或它的上下限后，可把“上下限位置”设为“上下”或“右侧”，位置随公式一起保存到 Word。
+手动输入分式或根式时，编辑区下方会显示光标所在的分子、分母或根号范围，蓝色虚线标出当前输入区域。点“移出根号”或“移出分式”就能到外部继续输入。点“选中结构”先选中整个结构，再输入新内容替换。点击求和符号或它的上下限后，可以把“上下限位置”设为“上下”或“右侧”，位置会随公式一起保存到 Word。
 
 “Word 排版预览”和“LaTeX 源码”保持展开，可以并排对照。Word 预览使用公式的原生字体、字号和间距；写回 Word 时使用矢量呈现，缩放时保留线条与字符细节。
 
@@ -68,7 +68,7 @@ The editor offers templates and LaTeX input, fonts and sizes, fractions, radical
 
 ## Choose a document and insert an equation
 
-The sidebar title centers the document icon, filename, and menu arrow. Its menu lists open Word documents and distinguishes matching names. Refresh in this menu updates the document list; refresh in the equation area reloads the current document’s equations.
+The sidebar header centers the active document's icon, filename, and menu arrow. Open the menu to choose a document currently open in Word, even if several have the same filename. Refresh in this menu updates the document list and availability; the Refresh button above the equation list reloads the current document's equations.
 
 Insert into Word at the bottom offers inline, centered, right-numbered, and left-numbered placement. The filename at the top selects the destination. While editing an existing equation, insertion goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor, carrying its content, fonts, sizes, and ruler into the insertion session.
 
@@ -82,9 +82,9 @@ Long documents open the current equation first and load the rest in batches. Thu
 
 Use `\\` for line breaks, or enter an `aligned`, `gathered`, or `cases` environment. All lines save back to Word together. For legacy MathType equations, you can replace characters while preserving the original structure or use the editor’s structure tools. The preview includes blackboard and script characters, colors, and multiline layouts.
 
-When filling fractions and radicals by hand, the controls below the editor identify the current numerator, denominator, or root. A blue outline marks the input scope. Choose Exit Root or Exit Fraction to continue outside it, or Select Structure to replace the whole structure. Click a sum or one of its limits, then choose Above / below or Right side under Limits position. The placement saves with the equation in Word.
+When typing fractions or radicals manually, the controls below the canvas show whether the cursor is in the numerator, denominator, or root. A dashed blue outline marks the input area. Click Exit Root or Exit Fraction to continue outside it. Select Structure selects the whole structure so you can replace it. Click a sum or one of its limits to choose Above / below or Right side under Limits position. The placement saves with the equation in Word.
 
-Word Layout Preview and LaTeX Source remain expanded for comparison. The Word preview uses the equation’s native fonts, sizes, and spacing. Saving to Word uses vector artwork so lines and characters retain their detail when enlarged.
+Word Layout Preview and LaTeX Source stay expanded side by side for comparison. The Word preview uses the equation’s native fonts, sizes, and spacing. Saving to Word uses vector artwork to retain line and character detail when enlarged.
 
 ## Number formats, chapters, and sections
 

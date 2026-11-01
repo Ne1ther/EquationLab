@@ -24,7 +24,7 @@
 | `src/native-dimensions.mjs` | 字号和距离的单位换算 / Native dimensions |
 | `src/font-renderer.mjs` | 使用实际字体轮廓生成预览 / Font-based previews |
 | `src/legacy-glyphs.mjs` | 已核对的旧字符到预览轮廓映射，保留原生记录 / Verified legacy preview mappings |
-| `src/vector-pdf.mjs` | 矢量路径、裁切和 PDF 输出 / Vector export |
+| `src/vector-pdf.mjs` | 矢量路径、裁剪和 PDF 输出 / Vector export |
 | `src/integral-templates.mjs` | 伸缩积分的原生轮廓模板 / Integral outlines |
 | `src/typography-native.mjs` | 字体、字号、间距和相关原生设置 / Typography settings |
 | `src/document.mjs` | DOCX、嵌入公式、图片和文档编排 / Word documents |
@@ -50,7 +50,7 @@
 | `macos/Models/WorkbenchState.swift` | 侧栏、检查器和编辑器的共享状态 / Workbench state |
 | `macos/Models/InterfaceLanguage.swift` | 界面语言和翻译 / Interface language |
 | `macos/Services/DesktopBridge.swift` | 画布桥接、窗口复用和返回 Word / Canvas and Word handoff |
-| `macos/Services/WordFocusHandoff.swift` | 编辑器与 Word 之间的前台交接 / Cooperative focus handoff |
+| `macos/Services/WordFocusHandoff.swift` | 编辑器与 Word 间的前台交接 / Cooperative focus handoff |
 | `macos/Services/EquationEngine.swift` | 启动和调用打包引擎 / Engine process |
 | `macos/Services/WordHostInstallation.swift / macos/Services/WordPluginInstallation.swift` | Word 检测、插件安装、修复及连接检查 / Word installation |
 | `macos/Services/AppUpdater.swift` | 检查新版、下载和打开安装器 / Update UI and downloads |
@@ -121,4 +121,4 @@
 | `docs/examples/` | 三节三十公式的 Word 和 PDF 演示 / Public demo documents |
 | `docs/preview/` | 真实 App 截图和演示预览 / Actual screenshots |
 
-本地的 `research/`、`.local/`、`evidence/`、`output/` 保存原始材料、私钥和验证记录，已忽略；`dist/` 放当前安装包。它们不属于 GitHub 源码树。
+本地的 `research/`、`.local/`、`evidence/` 和 `output/` 用于存放原始资料、私钥与验证记录，已配置在忽略列表中；`dist/` 仅保留当前安装包。这些内容均不提交到 GitHub 仓库。

@@ -9,7 +9,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
-Save your documents, quit Word and Equation Lab, then open the installer. Reopen Word to find the **Equation Lab** ribbon. Double-click an equation to edit it in a separate window, then save it back in place.
+Save your documents, quit Word and Equation Lab, then open the installer. Open the app afterward and complete any Word plugin setup prompts. Reopen Word to use the **Equation Lab** ribbon. Double-click an equation to edit it in a separate window, then save it back in place.
 
 [![48-second feature walkthrough](docs/preview/demo-0.6.11.jpg)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
 
@@ -18,22 +18,22 @@ Save your documents, quit Word and Equation Lab, then open the installer. Reopen
 ## What it does
 
 - Choose a Word document, then browse, search, insert, and edit its MathType equations.
-- Enter templates or LaTeX, including multiple lines, cases, and matrices; adjust fonts, sizes, and spacing.
+- Write multiline equations, cases, and matrices using visual templates or LaTeX, then fine-tune fonts, sizes, and spacing.
 - Set equation numbers, chapters, and sections, and insert cross-references from a searchable list.
 - Check document numbering and references, preview batch style and numbering changes, and save a Word copy.
 - Store a document style preset for future equations, export PDF, SVG, or PNG, and copy LaTeX.
 
-Choose a document at the top of the sidebar, then use Insert into Word for inline, centered, or left/right numbered placement. While editing an existing equation, the new one goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor and carries its content and formatting into the insertion session. After you choose Finish and insert, the app shows the save result returned by Word.
+Select a document at the top of the sidebar, then click Insert into Word to choose inline, centered, or left/right numbered placement. If you are editing an existing equation, the new one is inserted after its paragraph. For a standalone draft, place the cursor in the selected Word document without selecting text or an object. The draft's content and formatting carry over. After you click Finish and insert, the app shows the save result returned by Word.
 
-The sidebar menu lists open Word documents and distinguishes files with the same name. Switching prompts you to handle unsaved drafts. Long documents open the current equation first and load the rest in batches. Thumbnails appear and update individually as you browse, and the current equation scrolls into view.
+The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. For large documents, it opens the selected equation first and loads the rest of the list in batches. Thumbnails appear and update as you browse, and the app scrolls to the equation you open.
 
 Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 
 The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving. Open the new file in Word and update its numbering and references to continue editing. [Read the document tools guide](docs/document-tools.md)
 
-Chinese input in Word and the formula editors waits for composition to finish before synchronization. Manual editing provides structure cues and controls for sum-limit placement.
+During Chinese input, the Word plugin defers macro calls until composition finishes. The formula editors also wait before updating previews. When typing formulas by hand, the controls below the canvas show the active structure. You can place sum limits above and below the symbol or to its right.
 
-The app checks daily by default and shows an update button when a newer version is available. Use **Equation Lab → Check for updates…** to check manually or set up automatic downloads. For connection issues, check the status and copy connection diagnostics from the **Office plugin** panel.
+The app checks for updates once a day by default and shows a toolbar button when a newer version is available. You can also open **Equation Lab → Check for updates…** to check manually or enable automatic downloads. If you run into connection trouble, open the **Office plugin** panel to check the status or copy connection diagnostics.
 
 ![Equation Lab workbench](docs/preview/workbench-0.6.10.png)
 
