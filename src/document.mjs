@@ -13,6 +13,7 @@ import {equationLayout, equationReference, chapterBreak, standaloneNumber,previe
 import {readTypography,patchTypography} from './typography-native.mjs';
 import {renderNative,rasterizeNativeSvg} from './font-renderer.mjs';
 import {scanWordNumberingPart} from './document-audit.mjs';
+import {documentGeometry} from './document-geometry.mjs';
 
 let genericPreviewContext;
 function previewContext(){if(!genericPreviewContext){const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);genericPreviewContext={adaptor,math:mathjax.document('',{InputJax:new TeX({packages:AllPackages}),OutputJax:new SVG({fontCache:'local'})})};}return genericPreviewContext;}
@@ -47,7 +48,7 @@ function objectRun(n,p) {
   return `<w:r><w:rPr><w:position w:val="${-Math.round(p.depth*2)}"/></w:rPr><w:object w:dxaOrig="${Math.round(p.width*20)}" w:dyaOrig="${Math.round(p.height*20)}">${equationPictureShapeType(typeId)}<v:shape id="_x0000_i${1024+n}" type="#${typeId}" style="width:${p.width.toFixed(3)}pt;height:${p.height.toFixed(3)}pt" o:ole=""><v:imagedata r:id="rImg${n}" o:title=""/></v:shape><o:OLEObject Type="Embed" ProgID="Equation.DSMT4" ShapeID="_x0000_i${1024+n}" DrawAspect="Content" ObjectID="_${1700000000+n}" r:id="rOle${n}"/></w:object></w:r>`;
 }
 
-export async function createDocx(equations,{fragment=false,references=[],initializeContext=true,numberingFamily='equationlab'}={}) {
+export async function createDocx(equations,{fragment=false,references=[],initializeContext=true,numberingFamily='equationlab',insertionBody=false}={}) {
   if(!['equationlab','mathtype'].includes(numberingFamily))throw Error('Invalid numbering family');
   if(!Array.isArray(equations)||equations.length>500)throw Error('需要最多 500 条公式');
   const zip = new JSZip(), paragraphs = [], relationships = [], anchors=[];
@@ -77,17 +78,32 @@ export async function createDocx(equations,{fragment=false,references=[],initial
   // replace preferences in its destination document.
   const formats=new Set(equations.filter(e=>e.layout?.mode?.startsWith('numbered-')).map(e=>e.layout.numberFormat??'(#E1)'));
   const numberingFormat=initializeContext&&formats.size===1?[...formats][0]:null;
-  return packageDocument(zip,paragraphs,relationships,{fragment,numberingFormat,numberingFamily});
+  return packageDocument(zip,paragraphs,relationships,{fragment,numberingFormat,numberingFamily,insertionBody});
 }
 
-function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFormat=null,numberingFamily='equationlab'}={}) {
+function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFormat=null,numberingFamily='equationlab',insertionBody=false}={}) {
   zip.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Default Extension="bin" ContentType="application/vnd.openxmlformats-officedocument.oleObject"/><Default Extension="png" ContentType="image/png"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/><Override PartName="/word/settings.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml"/>${numberingFamily==='mathtype'&&numberingFormat!==null?'<Override PartName="/docProps/custom.xml" ContentType="application/vnd.openxmlformats-officedocument.custom-properties+xml"/>':''}</Types>`);
   zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/></Relationships>`);
   zip.file('word/styles.xml',`<w:styles xmlns:w="${NS.w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>${equationStyle}</w:styles>`);
   const variables=numberingFormat===null?'':`<w:docVars><w:docVar w:name="EquationLabNumberFormat" w:val="${esc(numberingFormat)}"/></w:docVars>`;
   zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}"><w:updateFields w:val="true"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>${variables}</w:settings>`);
   zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rStyles" Type="${NS.r}/styles" Target="styles.xml"/><Relationship Id="rSettings" Type="${NS.r}/settings" Target="settings.xml"/>${relationships.join('')}</Relationships>`);
-  zip.file('word/document.xml',`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`);
+  const mainXml=`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  zip.file('word/document.xml',mainXml);
+  if(insertionBody){
+    // Insert only the bookmarked body. Word attaches a document's section
+    // settings to its final paragraph mark, which must remain outside it.
+    const doc=parseXml(mainXml),body=doc.getElementsByTagNameNS(NS.w,'body')[0];
+    const first=body.getElementsByTagNameNS(NS.w,'p')[0];
+    if(!fragment||!first)throw Error('An insertion body requires equation paragraphs');
+    const start=doc.createElementNS(NS.w,'w:bookmarkStart');
+    start.setAttributeNS(NS.w,'w:id','32760');start.setAttributeNS(NS.w,'w:name','EquationLabInsertBody');
+    first.insertBefore(start,first.firstChild?.localName==='pPr'?first.firstChild.nextSibling:first.firstChild);
+    const final=doc.createElementNS(NS.w,'w:p'),end=doc.createElementNS(NS.w,'w:bookmarkEnd');
+    end.setAttributeNS(NS.w,'w:id','32760');final.appendChild(end);
+    body.insertBefore(final,doc.getElementsByTagNameNS(NS.w,'sectPr')[0]);
+    zip.file('word/document.xml',new XMLSerializer().serializeToString(doc));
+  }
   if(numberingFamily==='mathtype'&&numberingFormat!==null){
     zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/><Relationship Id="rCustom" Type="${NS.r}/custom-properties" Target="docProps/custom.xml"/></Relationships>`);
     zip.file('docProps/custom.xml',`<Properties xmlns="http://schemas.openxmlformats.org/officeDocument/2006/custom-properties" xmlns:vt="http://schemas.openxmlformats.org/officeDocument/2006/docPropsVTypes"><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="2" name="MTEquationNumber2"><vt:lpwstr>${esc(numberingFormat)}</vt:lpwstr></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="3" name="MTWinEqns"><vt:bool>true</vt:bool></property><property fmtid="{D5CDD505-2E9C-101B-9397-08002B2CF9AE}" pid="4" name="MTEquationSection"><vt:lpwstr>1</vt:lpwstr></property></Properties>`);
@@ -329,6 +345,9 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
   const existingBookmarks=new Set(),existingBookmarkIds=new Set();
   for(const o of objects)for(const b of Array.from(o.partDoc.getElementsByTagNameNS(NS.w,'bookmarkStart'))){existingBookmarks.add(b.getAttributeNS(NS.w,'name'));existingBookmarkIds.add(b.getAttributeNS(NS.w,'id'));}
   const numberingScans=new WeakMap();
+  const styles=zip.file('word/styles.xml')?parseXml(await zip.file('word/styles.xml').async('string')):null;
+  const settings=zip.file('word/settings.xml')?parseXml(await zip.file('word/settings.xml').async('string')):null;
+  const geometries=new WeakMap();
   let first=true;
   for(const index of [...targets].sort((a,b)=>a-b)) {
     const o=objects[index];if(!o)throw Error('公式不存在');
@@ -359,7 +378,9 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
     }
     let name=o.layout.bookmarkName,id;
     if(name){const b=Array.from(p.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>b.getAttributeNS(NS.w,'name')===name);id=Number(b.getAttributeNS(NS.w,'id'));existingBookmarks.delete(name);existingBookmarkIds.delete(String(id));}
-    const opts={numberingFamily:o.layout.bookmarkName?(shared?'mathtype':'equationlab'):documentFamily,...layout,existingBookmarks,existingBookmarkIds};
+    if(!geometries.has(o.partDoc))geometries.set(o.partDoc,documentGeometry(o.partDoc,{styles,settings}));
+    const geometry=geometries.get(o.partDoc)(p,{style:layout.style??'EquationLab'});
+    const opts={numberingFamily:o.layout.bookmarkName?(shared?'mathtype':'equationlab'):documentFamily,...layout,...geometry,existingBookmarks,existingBookmarkIds};
     if(o.layout.bookmarkName&&opts.numberingFamily!==(shared?'mathtype':'equationlab'))throw Error('编号计数链需要在 Word 中统一后再更改');
     if(layout.mode?.startsWith('numbered-')){
       counterIndexes.delete(o.partDoc);

@@ -45,6 +45,14 @@ enum InterfaceLanguage: String, CaseIterable, Identifiable {
     ]
     private static let englishStrings: [String: String] = [
         "文档检查与批量处理":"Document checks and batch tools",
+        "搜索编号、公式或 LaTeX":"Search numbers, equations or LaTeX",
+        "试试正文编号、LaTeX 或位置序号；空格可组合搜索。":"Try a document number, LaTeX or list position. Combine terms with spaces.",
+        "编号来自文档快照；在 Word 更新后请刷新。":"Numbers use the document snapshot. Refresh after updating them in Word.",
+        "编号待载入":"Number pending", "无已读编号":"No saved number", "待刷新":"Refresh needed",
+        "文档位置序号":"Position in document",
+        "继续安装 / 更新 Word 插件…":"Continue Word add-in setup…",
+        "安装已暂停。请保存文档并完全退出 Word，然后点击“继续安装 / 更新 Word 插件…”。":"Setup paused. Save your documents and quit Word, then click Continue Word add-in setup.",
+        "安装已暂停。请点击“允许访问 Word 文件夹”，在系统窗口确认 Office 文件夹后会继续安装。":"Setup paused. Click Allow access to Word folder and confirm the Office folder to continue installation.",
         "切换到":"Switch to ", "切换 Word 文档":"Switch Word document",
         "刷新当前 Word 文档":"Refresh current Word document", "刷新 Word 文档列表":"Refresh Word document list",
         "没有打开的 Word 文档":"No open Word documents", "尚未连接 Word":"Word is not connected", "只读":"Read-only", "Word 文档":"Word document",

@@ -8,6 +8,11 @@ std::int32_t EquationLabBeginWordInsertion(NSURL* directory,NSDictionary* docume
 bool EquationLabWordInsertionActive();
 void EquationLabCancelWordInsertion();
 NSData* EquationLabClaimWordInsertion(std::int32_t* token);
+// Stage this claim under a fresh, exclusive filename. Word can otherwise use
+// an already-open document's old contents for a reused InsertFile path.
+std::int32_t EquationLabTakeWordInsertionFile();
+// Claimed basename, ASCII code unit + 1; 0 terminates, -1 means unavailable.
+std::int32_t EquationLabWordInsertionFileNameNext();
 // Valid only after the fragment claim; -1 means no claimed insertion.
 std::int32_t EquationLabWordInsertionInline();
 // Claimed fragment's validated format, one UTF-16 code unit + 1 per call;

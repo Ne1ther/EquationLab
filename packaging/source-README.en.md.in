@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.12 (build100)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.12/Equation-Lab-0.6.12.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.13 (build101)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -29,9 +29,9 @@ The sidebar menu lists open Word documents and distinguishes files that share th
 
 Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 
-The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving. Open the new file in Word and update its numbering and references to continue editing. [Read the document tools guide](docs/document-tools.md)
+The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving, then offer Open in Word and Show in Finder. Centered and numbered equations use the current page width and equal-column layout; inline insertion preserves the surrounding paragraph formatting. [Read the document tools guide](docs/document-tools.md)
 
-During Chinese input, the Word plugin defers macro calls until composition finishes. The formula editors also wait before updating previews. When typing formulas by hand, the controls below the canvas show the active structure. You can place sum limits above and below the symbol or to its right.
+During Chinese input, the Word plugin defers macro calls until composition finishes. The formula editors also wait before updating previews. When typing formulas by hand, the controls below the canvas show the active structure. You can place sum and integral limits above and below the symbol or to its right.
 
 The app checks for updates once a day by default and shows a toolbar button when a newer version is available. You can also open **Equation Lab → Check for updates…** to check manually or enable automatic downloads. If you run into connection trouble, open the **Office plugin** panel to check the status or copy connection diagnostics.
 

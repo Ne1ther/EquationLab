@@ -6,6 +6,14 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+struct DraftRecoveryState: Decodable {
+    var available = false
+    var restored: Bool? = nil
+    var updatedAt: Double? = nil
+    var outcomeUnknown: Bool? = nil
+    var error: String? = nil
+}
+
 struct SidebarFormula: Identifiable, Decodable {
     let id: Int
     var label: String = ""
@@ -14,6 +22,12 @@ struct SidebarFormula: Identifiable, Decodable {
     var image: String? = nil
     var readOnly: Bool = false
     var position: Int? = nil
+    var numberText: String? = nil
+    var numberStatus: String? = nil
+    func matchesSearch(_ query: String) -> Bool {
+        let content = "\(position ?? id + 1) \(numberText ?? "") \(latex) \(label) \(detail)"
+        return query.split(whereSeparator: \.isWhitespace).allSatisfy { content.localizedCaseInsensitiveContains(String($0)) }
+    }
     var thumbnail: NSImage? {
         guard let image else { return nil }
         return FormulaImageCache.shared.image(key: image)
@@ -127,6 +141,7 @@ struct WorkbenchState: Decodable {
     var numbering: DocumentNumbering? = nil
     var documentNumberFormat: String? = nil
     var wordNumberingRestarts = false
+    var draftRecovery = DraftRecoveryState()
     var statusTitle = "正在载入公式引擎…"
     var statusDetail = ""
     var statusError = false
@@ -198,6 +213,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("spaces", [EditorField].self) { spaces = v }
         if let v = try value("layout", [EditorField].self) { layout = v }
         if let v = try value("wordNumberingRestarts", Bool.self) { wordNumberingRestarts = v }
+        if let v = try value("draftRecovery", DraftRecoveryState.self) { draftRecovery = v }
         if payload["documentNumberFormat"] is NSNull { documentNumberFormat = nil } else if let v = try value("documentNumberFormat", String.self) { documentNumberFormat = v }
         if payload["numbering"] is NSNull { numbering = nil } else if let v = try value("numbering", DocumentNumbering.self) { numbering = v }
         if let v = try value("statusTitle", String.self) { statusTitle = v }

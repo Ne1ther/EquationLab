@@ -7,7 +7,7 @@ struct FormulaSidebar: View {
     private var allItems: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
     private var items: [SidebarFormula] {
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return search.isEmpty ? allItems : allItems.filter { "\($0.id + 1) \($0.latex) \($0.label) \($0.detail)".localizedCaseInsensitiveContains(search) }
+        return search.isEmpty ? allItems : allItems.filter { $0.matchesSearch(search) }
     }
     private var selectionUnavailable: Bool {
         bridge.state.busy || showingFavorites && bridge.wordSessionActive || !showingFavorites && bridge.state.wordDocumentUnavailable
@@ -122,10 +122,15 @@ struct FormulaSidebar: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8)
             }
+            if !showingFavorites && !allItems.isEmpty {
+                Text(bridge.t("编号来自文档快照；在 Word 更新后请刷新。"))
+                    .font(.caption2).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 6)
+            }
             if !allItems.isEmpty || !query.isEmpty {
                 HStack(spacing: 6) {
                     Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary)
-                    TextField(bridge.t("搜索公式或 LaTeX"), text: $query).textFieldStyle(.plain)
+                    TextField(bridge.t("搜索编号、公式或 LaTeX"), text: $query).textFieldStyle(.plain)
                     if !query.isEmpty {
                         Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
                             .buttonStyle(.plain).accessibilityLabel(bridge.t("清除搜索"))
@@ -138,7 +143,7 @@ struct FormulaSidebar: View {
                 ContentUnavailableView {
                     Label(bridge.t(!query.isEmpty ? "没有匹配的公式" : showingFavorites ? "暂无收藏" : "打开 Word 文档"), systemImage: !query.isEmpty ? "magnifyingglass" : showingFavorites ? "star" : "doc.text")
                 } description: {
-                    Text(bridge.t(!query.isEmpty ? "试试公式中的字母、LaTeX 命令或序号。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
+                    Text(bridge.t(!query.isEmpty ? "试试正文编号、LaTeX 或位置序号；空格可组合搜索。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
                 }
                 .font(.callout)
                 Spacer(minLength: 0)
@@ -152,17 +157,28 @@ struct FormulaSidebar: View {
                             HStack(spacing: 12) {
                                 Text("\(item.position ?? item.id + 1)")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .foregroundStyle(.secondary).frame(width: 17)
+                                    .foregroundStyle(.secondary).frame(minWidth: 17)
+                                    .help(bridge.t("文档位置序号"))
+                                VStack(alignment: .leading, spacing: 4) {
+                                if !showingFavorites {
+                                    HStack(spacing: 5) {
+                                        Text(item.numberText ?? bridge.t(item.numberStatus == "pending" ? "编号待载入" : "无已读编号"))
+                                            .font(.caption.weight(item.numberText == nil ? .regular : .semibold))
+                                            .foregroundStyle(item.numberText == nil ? .secondary : .primary)
+                                        if item.numberStatus == "stale" { Text(bridge.t("待刷新")).font(.caption2).foregroundStyle(.secondary) }
+                                    }
+                                }
                                 if let thumbnail = item.thumbnail {
                                     Image(nsImage: thumbnail).resizable().interpolation(.high)
-                                        .scaledToFit().frame(maxWidth: .infinity, minHeight: 43, maxHeight: 74)
+                                        .scaledToFit().frame(maxWidth: .infinity).frame(height: 62)
                                         .padding(6).background(.white, in: RoundedRectangle(cornerRadius: 5))
                                         .accessibilityLabel(item.latex)
                                 } else {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Image(systemName: "function").font(.title2)
                                         Text(bridge.t(item.readOnly ? "未能预览" : "正在生成预览")).font(.caption2)
-                                    }.frame(maxWidth: .infinity, alignment: .leading).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 74).foregroundStyle(.secondary)
+                                }
                                 }
                                 if item.readOnly { Image(systemName: "lock").font(.caption2).foregroundStyle(.secondary) }
                             }.frame(minHeight: 70).contentShape(Rectangle())
@@ -196,19 +212,13 @@ struct FormulaSidebar: View {
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
                 .onAppear {
-                    if !showingFavorites, let selected = bridge.state.selected, items.contains(where: { $0.id == selected }) {
-                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
-                    }
+                    revealSelection(using: scroll)
                 }
-                .onChange(of: bridge.state.selected) { _, selected in
-                    if !showingFavorites, let selected, items.contains(where: { $0.id == selected }) {
-                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
-                    }
+                .onChange(of: bridge.state.selected) { _, _ in
+                    revealSelection(using: scroll)
                 }
-                .onChange(of: items.map(\.id)) { _, newIDs in
-                    if !showingFavorites, let selected = bridge.state.selected, newIDs.contains(selected) {
-                        DispatchQueue.main.async { scroll.scrollTo(selected, anchor: .center) }
-                    }
+                .onChange(of: items.map(\.id)) { _, _ in
+                    revealSelection(using: scroll)
                 }
                 .onChange(of: bridge.wordPresentationRevision) { _, revision in
                     // A retained window can be hidden while its list is being
@@ -231,6 +241,15 @@ struct FormulaSidebar: View {
             .font(.system(size: 11))
             .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown).padding(.horizontal, 12)
             .modifier(WorkbenchFooter())
+        }
+    }
+    private func revealSelection(using scroll: ScrollViewProxy) {
+        guard !showingFavorites, let selected = bridge.state.selected, items.contains(where: { $0.id == selected }) else { return }
+        let path = bridge.state.documentPath, identity = bridge.state.wordDocumentIdentity
+        DispatchQueue.main.async {
+            guard !showingFavorites, bridge.state.documentPath == path, bridge.state.wordDocumentIdentity == identity,
+                  bridge.state.selected == selected, items.contains(where: { $0.id == selected }) else { return }
+            scroll.scrollTo(selected, anchor: .center)
         }
     }
     private func thumbnailVisibility(_ index: Int, document: String, visible: Bool) {

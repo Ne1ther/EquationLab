@@ -6,6 +6,7 @@
   const definitions = new Map();
   const installed = new WeakSet();
   const markerPrefix = 'equationlab-owner=';
+  const integralGlyphCommands = new Map([['\\int','∫'],['\\iint','∬'],['\\iiint','∭'],['\\oint','∮'],['\\oiint','∯'],['\\oiiint','∰'],['\\varointclockwise','∲'],['\\ointctrclockwise','∳']]);
 
   function directChildren(atom) {
     const children = [];
@@ -155,7 +156,7 @@
   host.syncEquationMacros = function syncEquationMacros(mathfield) {
     const root = mathfield?._mathfield?.model?.root;
     if (!root) return {changed:0,macros:0};
-    let changed = 0, macros = 0;
+    let changed = 0, macros = 0, layoutChanged = false;
     const visited = new Set();
     function commit(atom) {
       if (!atom || visited.has(atom)) return;
@@ -174,6 +175,17 @@
       if (!definition || definition.count === 0) return;
       macros++;
       const old = originalArguments(atom.macroArgs || '',definition.count), current = new Map();
+      if (name === 'mtbigop' && ['21','22'].includes(old[0])) {
+        // The shared macro definition cannot branch on its native selector.
+        // Reflect the original selector in the rendered operator while the
+        // macro continues to serialize its untouched native template fields.
+        const operators = directChildren(atom).filter(child => child.command === '\\mathop');
+        const placement = old[0] === '21' ? 'adjacent' : 'over-under';
+        if (operators.length === 1 && operators[0].subsupPlacement !== placement) {
+          operators[0].subsupPlacement = placement; operators[0].explicitSubsupPlacement = true;
+          operators[0].isDirty = true; layoutChanged = true;
+        }
+      }
       function collect(node) {
         const tag = marker(node);
         if (tag?.owner === name) {
@@ -188,7 +200,13 @@
       for (const child of directChildren(atom)) collect(child);
       const next = old.map((value,index) => {
         if (!definition.visible.has(index + 1)) return withoutMarkers(value);
-        const values = current.get(index + 1) || [''];
+        const values = (current.get(index + 1) || ['']).map(edited => {
+          // In a preserved big operator #3 is its original glyph, not a new
+          // integral template. MathLive canonicalizes a literal contour glyph
+          // to a command; retaining the original prevents an unedited glyph
+          // from becoming a nested integral during Native reconstruction.
+          return name === 'mtbigop' && index === 2 && integralGlyphCommands.get(edited.trim()) === value ? value : edited;
+        });
         const edits = [...new Set(values.filter(v => v !== value))];
         if (edits.length > 1) throw Error(`Conflicting edits in repeated macro argument ${name}#${index + 1}`);
         return edits[0] ?? values[0];
@@ -197,6 +215,9 @@
       if (serialized !== atom.macroArgs) { atom.macroArgs = serialized; atom.isDirty = true; changed++; }
     }
     commit(root);
+    // Reassigning the same public selection schedules a paint without moving
+    // the caret or changing the preserved macro/undo contents.
+    if (layoutChanged && mathfield.selection) mathfield.selection = mathfield.selection;
     return {changed,macros};
   };
 })(typeof window === 'undefined' ? globalThis : window);

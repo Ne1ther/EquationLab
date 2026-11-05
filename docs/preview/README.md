@@ -24,6 +24,14 @@ The workbench combines document selection, equation browsing, editing, and Word 
 
 ![字母库](letter-library.png)
 
+## 0.6.13 Word 功能区
+
+![新版 Word 功能区与编号公式](word-ribbon-0.6.13.png)
+
+新版图标和 30 条合成公式的实际 Word 界面。
+
+Refreshed ribbon artwork in Word, shown with 30 synthetic equations.
+
 ## 较早版本
 
 ![0.6.5 工作台](workbench-0.6.5.png)

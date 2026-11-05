@@ -614,6 +614,12 @@ RIBBON_EXPORT(MathTypeBridgeTakeInsertion,([&](){
     if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"ribbon-complete-insert.docx",data)){EquationLabFinishWordInsertion(false);return -2;}
     return token;
 })())
+RIBBON_EXPORT(MathTypeBridgeTakeInsertionV2,([&](){
+    if(!validHost())return -1;
+    EquationLabWordHostDidPoll();
+    return EquationLabTakeWordInsertionFile();
+})())
+RIBBON_EXPORT(MathTypeBridgeInsertionFileNameNext,EquationLabWordInsertionFileNameNext())
 RIBBON_EXPORT(MathTypeBridgeRibbonNumber,prepare(@"inline",@"ribbon-number"))
 RIBBON_EXPORT(MathTypeBridgeRibbonChapter,prepare(@"inline",@"ribbon-chapter"))
 RIBBON_EXPORT(MathTypeBridgeCaptureDocument,captureDocument())

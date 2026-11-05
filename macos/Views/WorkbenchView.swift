@@ -104,6 +104,21 @@ struct WorkbenchView: View {
                 .buttonStyle(WorkbenchButtonStyle())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 18).frame(height: 42)
+                if bridge.state.draftRecovery.available && bridge.state.draftRecovery.restored != true {
+                    HStack(spacing: 10) {
+                        Label(bridge.language.usesEnglish ? "A previous draft is available" : "有上次编辑的恢复草稿", systemImage: "clock.arrow.circlepath")
+                        Spacer()
+                        Button(bridge.language.usesEnglish ? "Restore draft" : "恢复草稿") { bridge.invoke("nativeRestoreDraft") }
+                        Button(bridge.language.usesEnglish ? "Discard" : "丢弃") { bridge.invoke("nativeDiscardRecovery") }
+                    }
+                    .font(.callout).padding(.horizontal, 18).padding(.vertical, 8)
+                    .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown)
+                    .help(bridge.language.usesEnglish ? "Stored on this Mac for 14 days; up to 10 recent editor drafts. Recovery never writes to Word automatically." : "仅在本机保留最近 10 份草稿，保存 14 天；恢复后不会自动写入 Word。")
+                }
+                if let error = bridge.state.draftRecovery.error, !error.isEmpty {
+                    Text(bridge.language.usesEnglish ? "Local draft backup is incomplete. Save or export this equation." : error)
+                        .font(.caption).foregroundStyle(.orange).padding(.horizontal, 18).padding(.vertical, 6)
+                }
                 if bridge.showRuler { EquationRuler(bridge: bridge).frame(height: 39).padding(.horizontal, 18) }
                 EquationWebView(bridge: bridge)
                     .frame(minHeight: 280)

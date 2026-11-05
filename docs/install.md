@@ -1,6 +1,6 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.6.12（build100）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.12/Equation-Lab-0.6.12.pkg)**
+**[下载 Equation Lab 0.6.13（build101）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
@@ -16,6 +16,8 @@
 要添加公式，在左侧顶部选择 Word 文档，再点底部“插入到 Word”，选择行内、居中、右侧编号或左侧编号。也可以从 Word 的 Equation Lab 功能区开始插入。写好后点“完成并插入”，App 会显示 Word 的保存结果；点“取消”返回原文档。
 
 正在编辑已有公式时，新公式插在它所在段落之后；独立草稿使用所选文档在 Word 中的空光标位置。**文件 → 新建独立草稿**和**打开文件副本…**可用于单独写公式或编辑文件副本。
+
+重开 App 后，可在编辑区上方恢复上次留在本机的草稿。[草稿恢复说明](draft-recovery.md)
 
 左侧文件名菜单列出 Word 打开的文档，并区分同名文件。切换前会提示处理未保存的草稿。菜单刷新更新文档列表；公式区刷新重新读取当前文档公式。长文档先打开当前公式，再分批补齐列表和缩略图，加载期间可继续输入和调整字号。
 
@@ -57,7 +59,7 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.6.12 (build100)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.12/Equation-Lab-0.6.12.pkg)**
+**[Download Equation Lab 0.6.13 (build101)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
@@ -73,6 +75,8 @@ Double-click a MathType equation in Word to open the editor window. Browse and s
 To add an equation, choose a Word document at the top of the sidebar and use Insert into Word at the bottom. Pick inline, centered, right-numbered, or left-numbered placement. You can also start from the Word ribbon. Choose Finish and insert when ready; the app displays Word’s save result. Cancel returns to the original document.
 
 While editing an existing equation, insertion goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor. **File → New standalone draft** and **Open a file copy…** let you write independently or edit a file copy.
+
+After reopening the app, use Restore draft above the editor to continue an unfinished local draft. [Draft recovery](draft-recovery.md)
 
 The filename menu lists open Word documents and distinguishes matching names. Switching prompts you to handle unsaved drafts. The menu refresh updates the document list; the formula-area refresh reloads the current document’s equations. Long documents open the current equation first and load the list and thumbnails in batches, so you can keep typing and adjusting sizes.
 

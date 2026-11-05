@@ -31,7 +31,7 @@ struct OfficePluginSheet: View {
                     }
                     Text(bridge.t(bridge.nativeWordStatus)).font(.callout).foregroundStyle(.secondary)
                     HStack {
-                        Button(bridge.t("安装 / 更新 Word 插件…")) { bridge.installWordPlugin() }
+                        Button(bridge.wordPluginInstallationPending ? (bridge.language.usesEnglish ? "Continue Word plugin setup…" : "继续安装 / 更新 Word 插件…") : bridge.t("安装 / 更新 Word 插件…")) { bridge.installWordPlugin() }
                             .buttonStyle(.borderedProminent)
                         Button(bridge.t("检查连接")) { bridge.verifyWordPlugin(showResult: true) }
                         Button(bridge.t("移除…")) { bridge.uninstallWordPlugin() }

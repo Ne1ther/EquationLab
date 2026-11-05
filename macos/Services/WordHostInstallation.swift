@@ -60,7 +60,7 @@ extension DesktopBridge {
             UserDefaults.standard.set(data, forKey: "EquationLab.WordOfficeBookmark")
         }
         wordOfficeAccessRequired = false
-        verifyWordPlugin(showResult: true)
+        continueWordPluginInstallationAfterOfficeAccess()
     }
 
     @discardableResult

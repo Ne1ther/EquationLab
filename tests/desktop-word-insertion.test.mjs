@@ -455,7 +455,7 @@ test('Unconfirmed insertion stays locked until explicit detach; safe Cancel pres
 test('A request rejected before acceptance keeps the insertion draft retryable',async()=>{
  const editor=createEditor(),{context:c}=editor,draft='\\alpha+\\beta';let attempts=0;
  editor.setNativeBehavior(async action=>{
-  if(action==='wordSessionInsert'){if(++attempts===1)throw Error('request rejected before acceptance');return {acknowledgement:true};}
+  if(action==='wordSessionInsert'){if(++attempts===1)throw Object.assign(Error('request rejected before acceptance'),{submissionState:'not-submitted'});return {acknowledgement:true};}
   if(action==='wordSessionStatus')return {state:'committed'};
   return {};
  });
@@ -466,6 +466,39 @@ test('A request rejected before acceptance keeps the insertion draft retryable',
  assert.equal(await c.window.nativeCommitWordSession(),true);
  assert.equal(attempts,2);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');
  assert.deepEqual(editor.calls.filter(call=>call.action==='wordSessionInsert').map(call=>call.payload.ticket),[ticket,ticket]);
+});
+
+for(const submissionState of ['unknown',undefined])test(`Lost insertion reply (${submissionState??'worker exit'}) reconciles the original receipt without submitting again`,async()=>{
+ const editor=createEditor(),c=editor.context;await c.window.nativeOpenWordSession(ticket);c.mf.value='x+lost_reply';
+ let submissions=0,statuses=0;
+ editor.setNativeBehavior(async action=>{
+  if(action==='wordSessionInsert'){submissions++;throw Object.assign(Error('reply was lost'),{submissionState});}
+  if(action==='wordSessionStatus'){statuses++;return {state:statuses===1?'delivered':'committed'};}
+  return {};
+ });
+ assert.equal(await c.window.nativeCommitWordSession(),true);assert.equal(submissions,1);assert.equal(statuses,2);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');
+});
+
+test('Lost submission and unavailable receipt keep the draft locked until explicit recovery',async()=>{
+ const editor=createEditor(),c=editor.context,started=deferred();await c.window.nativeOpenWordSession(ticket);c.mf.value='keep_unknown';let submissions=0;
+ editor.setNativeBehavior(async action=>{
+  if(action==='wordSessionInsert'){submissions++;throw Object.assign(Error('connection lost'),{submissionState:'unknown'});}
+  if(action==='wordSessionStatus'){started.resolve();return new Promise(()=>{});}
+  return {};
+ });
+ const saving=c.window.nativeCommitWordSession();await started.promise;await editor.advance(60_001);
+ assert.equal(await saving,false);assert.equal(c.wordOutcomeUnknown,true);assert.equal(c.mf.value,'keep_unknown');assert.equal(c.wordTicket,ticket);
+ assert.equal(await c.window.nativeCommitWordSession(),false);assert.equal(submissions,1);
+ assert.equal(await c.window.nativeCancelWordSession(),true);assert.equal(c.mf.value,'keep_unknown');
+ assert.equal(editor.calls.some(call=>call.action==='wordSessionCancel'),false);
+});
+
+test('a confirmed Word save stays successful when local recovery cleanup fails',async()=>{
+ const editor=createEditor(),c=editor.context;await c.window.nativeOpenWordSession(ticket);c.mf.value='confirmed';
+ c.window.clearSavedDrafts=async()=>{throw Error('local cleanup unavailable');};
+ editor.setNativeBehavior(async action=>action==='wordSessionInsert'?{acknowledgement:true}:action==='wordSessionStatus'?{state:'committed'}:{});
+ assert.equal(await c.window.nativeCommitWordSession(),true);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');
+ assert.ok(editor.messages.some(item=>item.text.includes('已保存回 Word；本地草稿清理')));
 });
 
 test('Failed validation keeps the insertion draft and still permits cancellation',async()=>{

@@ -946,6 +946,27 @@ Failed:
     Err.Raise vbObjectError + 7363, "Equation Lab", failure
 End Sub
 
+Private Function ELInsertionFileName() As String
+    Dim unit As Long, name As String, prefix As String, i As Long
+    prefix = "word-insert-"
+    Do
+        unit = EquationLabNativeCommand("MathTypeBridgeInsertionFileNameNext")
+        If unit < 0 Or (Len(name) >= 80 And unit <> 0) Then GoTo Failed
+        If unit = 0 Then Exit Do
+        If unit < 33 Or unit > 127 Then GoTo Failed
+        name = name & Chr$(unit - 1)
+    Loop
+    If Left$(name, Len(prefix)) <> prefix Or Right$(name, 5) <> ".docx" Then GoTo Failed
+    If Len(name) <> Len(prefix) + 32 + 5 Then GoTo Failed
+    For i = Len(prefix) + 1 To Len(name) - 5
+        If InStr(1, "0123456789abcdef", Mid$(name, i, 1), vbBinaryCompare) = 0 Then GoTo Failed
+    Next
+    ELInsertionFileName = name
+    Exit Function
+Failed:
+    Err.Raise vbObjectError + 7364, "Equation Lab", "The equation insertion file is unavailable. Update the Word add-in and reopen the equation."
+End Function
+
 Private Sub ApplyInsertion(ByVal token As Long)
     On Error GoTo Failed
     Dim Doc As Document, candidate As Document, isOpen As Boolean, result As Long
@@ -954,7 +975,9 @@ Private Sub ApplyInsertion(ByVal token As Long)
     Dim inlineMode As Long, mutationAttempted As Boolean, mutationCompleted As Boolean
     Dim cleanupFailed As Boolean, numberUpdateFailed As Boolean, finishAttempted As Boolean
     Dim failureNumber As Long, failureDescription As String
-    Dim numberFormat As String, codeUnit As Long
+    Dim numberFormat As String, codeUnit As Long, insertionFileName As String
+    Dim usableWidth As Single, leftIndent As Single, rightIndent As Single
+    Dim inlineFormatting As ParagraphFormat, inlineStyle As Variant
     If token <> mInsertionToken Or mInsertionToken <= 0 Then GoTo Failed
     Set Doc = mInsertionDocument
     If Doc Is Nothing Or mInsertionRange Is Nothing Then GoTo Failed
@@ -977,6 +1000,7 @@ Private Sub ApplyInsertion(ByVal token As Long)
     End If
     inlineMode = EquationLabNativeCommand("MathTypeBridgeInsertionInline")
     If inlineMode < 0 Then GoTo Failed
+    insertionFileName = ELInsertionFileName()
     Do
         codeUnit = EquationLabNativeCommand("MathTypeBridgeInsertionNumberingNext")
         If codeUnit < 0 Or Len(numberFormat) >= 128 And codeUnit <> 0 Then GoTo Failed
@@ -986,6 +1010,13 @@ Private Sub ApplyInsertion(ByVal token As Long)
         numberFormat = numberFormat & ChrW$(codeUnit)
     Loop
     Set target = mInsertionRange.Duplicate
+    ' The complete DOCX is an insertion fragment, so its sectPr says nothing
+    ' about the bound live target. Resolve this before any document mutation.
+    If inlineMode = 0 Then ELReadEquationParagraphGeometry target.Paragraphs(1).Range, usableWidth, leftIndent, rightIndent
+    If inlineMode = 1 Then
+        Set inlineFormatting = target.ParagraphFormat.Duplicate
+        inlineStyle = target.Paragraphs(1).Style
+    End If
     start = target.Start
     beforeEnd = Doc.Content.End
     If Selection.Document Is Doc Then
@@ -1001,9 +1032,13 @@ Private Sub ApplyInsertion(ByVal token As Long)
         start = target.Start
         beforeEnd = Doc.Content.End
     End If
-    target.InsertFile FileName:=directory & "/.EquationLab/ribbon-complete-insert.docx", ConfirmConversions:=False, Link:=False, Attachment:=False
+    target.InsertFile FileName:=directory & "/.EquationLab/" & insertionFileName, Range:="EquationLabInsertBody", ConfirmConversions:=False, Link:=False, Attachment:=False
     mutationCompleted = True
     Set insertedRange = Doc.Range(start, start + Doc.Content.End - beforeEnd)
+    If inlineMode = 0 Then
+        If insertedRange.InlineShapes.Count <> 1 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The inserted equation paragraph could not be resolved."
+        ELApplyEquationParagraphGeometry insertedRange.InlineShapes(1).Range.Paragraphs(1).Range, usableWidth, leftIndent, rightIndent, (Len(numberFormat) > 0)
+    End If
     On Error Resume Next
     ELInvalidateDocumentSnapshot
     Err.Clear
@@ -1012,7 +1047,16 @@ Private Sub ApplyInsertion(ByVal token As Long)
     ' object followed by that new mark, remove only the inserted mark so
     ' following body text stays in its original paragraph. Never delete an
     ' original paragraph boundary or infer the mode from the initial button.
-    If inlineMode = 1 Then cleanupFailed = Not ELTryCleanupInlineInsertion(Doc, start, beforeEnd)
+    If inlineMode = 1 Then
+        cleanupFailed = Not ELTryCleanupInlineInsertion(Doc, start, beforeEnd)
+        If Not cleanupFailed Then
+            If insertedRange.InlineShapes.Count <> 1 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The inline equation paragraph could not be resolved."
+            With insertedRange.InlineShapes(1).Range.Paragraphs(1).Range
+                .Style = inlineStyle
+                .ParagraphFormat = inlineFormatting
+            End With
+        End If
+    End If
     If inlineMode = 0 Then numberUpdateFailed = Not ELTryUpdateInsertedNumbers(Doc, start, beforeEnd, numberFormat)
     If advanceCursor Then ELAdvanceInsertionCursor Doc, insertedRange
     ' Completion does not select or activate the new OLE object. Its content
@@ -1066,7 +1110,7 @@ Public Sub ELPollNavigation()
     mPollScheduled = False
     ELReconcileKnownDocuments
     Dim insertionToken As Long, workspaceRefreshResult As Long
-    insertionToken = EquationLabNativeCommand("MathTypeBridgeTakeInsertion")
+    insertionToken = EquationLabNativeCommand("MathTypeBridgeTakeInsertionV2")
     If mWorkspaceRefreshRecheck Then
         mWorkspaceRefreshRecheck = False
         workspaceRefreshResult = EquationLabNativeCommand("MathTypeBridgeQueueWorkspaceRefresh")

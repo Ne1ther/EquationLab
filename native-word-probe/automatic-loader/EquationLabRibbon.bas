@@ -633,19 +633,79 @@ Private Sub RequireCounterContext(ByVal Doc As Document, ByVal pattern As String
 End Sub
 
 Private Sub ValidateNumberParagraphLayout(ByVal paragraph As Range)
+    Dim usableWidth As Single, leftIndent As Single, rightIndent As Single
+    ELReadEquationParagraphGeometry paragraph, usableWidth, leftIndent, rightIndent
+End Sub
+
+' Read the live destination before InsertFile imports a fragment's paragraph
+' formatting. Word supplies the section and equal-column width in points.
+' Tables and nonuniform columns require host layout work
+' beyond this bounded path; fail before the insertion/numbering mutation.
+Public Sub ELReadEquationParagraphGeometry(ByVal paragraph As Range, ByRef usableWidth As Single, ByRef leftIndent As Single, ByRef rightIndent As Single)
+    Dim columnWidth As Single, count As Long, layoutXml As String
+    If paragraph.StoryType <> wdMainTextStory Or paragraph.Information(wdWithInTable) Or paragraph.Frames.Count > 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Use a body paragraph outside tables and text frames for equation layout."
+    If paragraph.Sections.Count <> 1 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The equation paragraph crosses a section boundary."
     With paragraph.Sections(1).PageSetup
-        If .TextColumns.Count <> 1 Or .PageWidth - .LeftMargin - .RightMargin - .Gutter <= 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Use a single-column body paragraph for equation numbering."
+        count = .TextColumns.Count
+        If count < 1 Or count > 2 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Equation layout supports one column or two equal-width columns."
+        If count = 2 And Not .TextColumns.EvenlySpaced Then Err.Raise vbObjectError + 7360, "Equation Lab", "Unequal columns require layout in Word."
+        If .SectionDirection <> wdSectionDirectionLtr Then Err.Raise vbObjectError + 7360, "Equation Lab", "Bidirectional sections require layout in Word."
+        ' Mac Word exposes these PageSetup members but can reject their getter
+        ' at runtime. An empty bound range includes live document settings,
+        ' without exporting the document body or its embedded equations.
+        layoutXml = paragraph.Document.Range(0, 0).WordOpenXML
+        If InStr(1, layoutXml, "<w:settings", vbBinaryCompare) = 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Word's page layout settings are unavailable."
+        If ELLayoutXmlFlag(layoutXml, "bookFoldPrinting") Or ELLayoutXmlFlag(layoutXml, "bookFoldRevPrinting") Or ELLayoutXmlFlag(layoutXml, "printTwoOnOne") Then Err.Raise vbObjectError + 7360, "Equation Lab", "Book-fold and two-page layouts require layout in Word."
+        If count = 1 Then
+            columnWidth = .PageWidth - .LeftMargin - .RightMargin
+            If .GutterPos <> wdGutterPosTop Or .MirrorMargins Then columnWidth = columnWidth - .Gutter
+        Else
+            columnWidth = .TextColumns(1).Width
+        End If
+    End With
+    With paragraph.ParagraphFormat
+        If .ReadingOrder <> wdReadingOrderLtr Or .MirrorIndents Then Err.Raise vbObjectError + 7360, "Equation Lab", "Bidirectional or mirrored paragraph indents require layout in Word."
+        ' The isolated equation paragraph is normalized below. A body style's
+        ' first-line indent must not prevent an ordinary centered insertion.
+        leftIndent = .LeftIndent: rightIndent = .RightIndent
+    End With
+    usableWidth = columnWidth - leftIndent - rightIndent
+    If Abs(leftIndent) > 1584 Or Abs(rightIndent) > 1584 Or usableWidth < 72 Or usableWidth > 1584 Then Err.Raise vbObjectError + 7360, "Equation Lab", "The usable equation width could not be determined."
+End Sub
+
+Private Function ELLayoutXmlFlag(ByVal xml As String, ByVal name As String) As Boolean
+    Dim first As Long, last As Long, tag As String, following As String
+    first = InStr(1, xml, "<w:" & name, vbBinaryCompare)
+    If first = 0 Then Exit Function
+    following = Mid$(xml, first + Len(name) + 3, 1)
+    If following <> " " And following <> "/" And following <> ">" Then Exit Function
+    last = InStr(first, xml, ">", vbBinaryCompare)
+    If last = 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Word's page layout settings are incomplete."
+    tag = Mid$(xml, first, last - first + 1)
+    ELLayoutXmlFlag = InStr(tag, "w:val=""0""") = 0 And InStr(tag, "w:val=""false""") = 0 And InStr(tag, "w:val=""off""") = 0
+End Function
+
+Public Sub ELApplyEquationParagraphGeometry(ByVal paragraph As Range, ByVal usableWidth As Single, ByVal leftIndent As Single, ByVal rightIndent As Single, ByVal numbered As Boolean)
+    With paragraph.ParagraphFormat
+        .LeftIndent = leftIndent: .RightIndent = rightIndent: .FirstLineIndent = 0
+        If numbered Then
+            .Alignment = wdAlignParagraphLeft
+            .TabStops.ClearAll
+            .TabStops.Add Position:=leftIndent + usableWidth / 2, Alignment:=wdAlignTabCenter, Leader:=wdTabLeaderSpaces
+            .TabStops.Add Position:=leftIndent + usableWidth, Alignment:=wdAlignTabRight, Leader:=wdTabLeaderSpaces
+        End If
     End With
 End Sub
 
 Private Sub NormalizeNumberParagraph(ByVal Doc As Document, ByVal equation As InlineShape, ByVal numberRange As Range, ByVal bookmarkName As String, ByVal rightSide As Boolean, ByRef changed As Boolean)
     Dim paragraph As Range, embedded As Field, oleRange As Range, trimRange As Range
     Dim firstStart As Long, lastEnd As Long, gapStart As Long, gapEnd As Long
-    Dim numberLength As Long, paragraphStart As Long, finalNumberStart As Long, usableWidth As Single
+    Dim numberLength As Long, paragraphStart As Long, finalNumberStart As Long, usableWidth As Single, leftIndent As Single, rightIndent As Single
     Dim originalNumberText As String, originalNumberFields As Long
     originalNumberText = numberRange.Text
     originalNumberFields = numberRange.Fields.Count
     Set paragraph = NumberingEquationParagraph(Doc, equation)
+    ELReadEquationParagraphGeometry paragraph, usableWidth, leftIndent, rightIndent
     For Each embedded In paragraph.Fields
         If embedded.Type = wdFieldEmbed Then
             Set oleRange = Doc.Range(RibbonEmbeddedEquationFieldStart(embedded, Doc), embedded.Result.End + 1)
@@ -690,16 +750,7 @@ Private Sub NormalizeNumberParagraph(ByVal Doc As Document, ByVal equation As In
     With Doc.Bookmarks(bookmarkName).Range
         If .Text <> originalNumberText Or .Fields.Count <> originalNumberFields Then Err.Raise vbObjectError + 7360, "Equation Lab", "Word changed the number boundary; this numbering operation was rolled back."
     End With
-    With paragraph.Sections(1).PageSetup
-        usableWidth = .PageWidth - .LeftMargin - .RightMargin - .Gutter
-    End With
-    With paragraph.ParagraphFormat
-        .Alignment = wdAlignParagraphLeft
-        .LeftIndent = 0: .RightIndent = 0: .FirstLineIndent = 0
-        .TabStops.ClearAll
-        .TabStops.Add Position:=usableWidth / 2, Alignment:=wdAlignTabCenter, Leader:=wdTabLeaderSpaces
-        .TabStops.Add Position:=usableWidth, Alignment:=wdAlignTabRight, Leader:=wdTabLeaderSpaces
-    End With
+    ELApplyEquationParagraphGeometry paragraph, usableWidth, leftIndent, rightIndent, True
 End Sub
 
 Private Sub ValidateExistingRibbonNumber(ByVal Doc As Document, ByVal paragraph As Range, ByVal bookmarkName As String)

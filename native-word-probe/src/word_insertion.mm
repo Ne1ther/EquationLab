@@ -3,6 +3,10 @@
 #include "word_insertion.hpp"
 #include "word_document_requests.hpp"
 #include <cstring>
+#include <cerrno>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 typedef NS_ENUM(NSUInteger, ELWordInsertionOutcome) {
     ELWordInsertionOutcomeFailed,
@@ -26,6 +30,8 @@ void EquationLabDiscardDocumentParts();
 @property(nonatomic) NSUInteger documentRequestFailures;
 @property(nonatomic,strong) NSDate* deadline;
 @property(nonatomic,strong) NSData* fragment;
+@property(nonatomic,strong) NSURL* fragmentFile;
+@property(nonatomic) NSUInteger fileNameCursor;
 @property(nonatomic,copy) NSString* mode;
 @property(nonatomic,copy) NSString* numberFormat;
 @property(nonatomic) NSUInteger numberFormatCursor;
@@ -115,6 +121,7 @@ static void retireInsertionTicket(NSString* ticket,NSString* session,std::uint64
 static void endInsertion(ELWordInsertion* state,std::int32_t error,bool cancel) {
     if(!state||state.ended)return;
     state.ended=YES;state.fragment=nil;state.request=nil;state.enrichmentFinished=YES;
+    if(state.fragmentFile){unlink(state.fragmentFile.fileSystemRepresentation);state.fragmentFile=nil;}
     if(state.enrichmentClaimed)EquationLabDiscardDocumentParts();
     id enrichmentRequest=state.enrichmentRequest;state.enrichmentRequest=nil;
     if([enrichmentRequest respondsToSelector:@selector(cancel)])[enrichmentRequest cancel];
@@ -288,6 +295,33 @@ void EquationLabCancelWordInsertion(){if(NSThread.isMainThread&&insertion){if(in
 NSData* EquationLabClaimWordInsertion(std::int32_t* token){
     if(!NSThread.isMainThread||!insertion.fragment||insertion.claimed)return nil;
     insertion.claimed=YES;if(token)*token=insertion.token;return insertion.fragment;
+}
+std::int32_t EquationLabTakeWordInsertionFile(){
+    std::int32_t token=0;NSData* data=EquationLabClaimWordInsertion(&token);
+    if(!data)return 0;
+    ELWordInsertion* state=insertion;
+    NSString* nonce=[NSUUID.UUID.UUIDString.lowercaseString stringByReplacingOccurrencesOfString:@"-" withString:@""];
+    NSURL* file=[state.directory URLByAppendingPathComponent:[NSString stringWithFormat:@"word-insert-%@.docx",nonce]];
+    // Never replace an earlier path, even if its file is still open in Word.
+    int fd=open(file.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
+    if(fd<0){EquationLabFinishWordInsertion(false);return -2;}
+    state.fragmentFile=file;
+    struct stat stat{};bool ok=!fstat(fd,&stat)&&S_ISREG(stat.st_mode)&&stat.st_uid==geteuid()&&!fchmod(fd,0600);
+    const auto* bytes=static_cast<const unsigned char*>(data.bytes);std::size_t used=0;
+    while(ok&&used<data.length){
+        const auto count=write(fd,bytes+used,data.length-used);
+        if(count<0&&errno==EINTR)continue;
+        if(count<=0)ok=false;else used+=static_cast<std::size_t>(count);
+    }
+    if(close(fd))ok=false;
+    if(!ok){EquationLabFinishWordInsertion(false);return -2;}
+    state.fileNameCursor=0;return token;
+}
+std::int32_t EquationLabWordInsertionFileNameNext(){
+    if(!NSThread.isMainThread||!insertion.claimed||!insertion.fragmentFile)return -1;
+    NSString* name=insertion.fragmentFile.lastPathComponent;
+    if(insertion.fileNameCursor>=name.length)return 0;
+    return static_cast<std::int32_t>([name characterAtIndex:insertion.fileNameCursor++])+1;
 }
 std::int32_t EquationLabWordInsertionInline(){
     if(!NSThread.isMainThread||!insertion.claimed||!insertion.fragment)return -1;

@@ -6,6 +6,8 @@ import {execFileSync, spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 import {createDiskImage,createApplicationZip} from './disk-image.mjs';
 import {readArtifacts} from './word-native-installer/installer.mjs';
+import {validateCurrentRibbonArtwork} from './word-native-installer/artifacts.mjs';
+import JSZip from 'jszip';
 import {buildIconAssets} from './icon-assets.mjs';
 import {buildWorkbenchAssets} from './workbench-assets.mjs';
 import {pruneDependencies} from './prune-dependencies.mjs';
@@ -45,6 +47,7 @@ const nativeArtifactsDirectory = process.env.EQUATIONLAB_NATIVE_WORD_ARTIFACTS_D
 if(purpose==='release'&&!nativeArtifactsDirectory)throw Error('A release requires EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR with real Word cold-start acceptance. Use --purpose qa for an explicitly unavailable installation candidate.');
 if(purpose==='release'&&!process.env.EQUATIONLAB_UPDATE_PRIVATE_KEY)throw Error('A release requires EQUATIONLAB_UPDATE_PRIVATE_KEY to sign its update manifest.');
 const preparedNativeArtifacts = nativeArtifactsDirectory ? await readArtifacts(resolve(nativeArtifactsDirectory)) : null;
+if(preparedNativeArtifacts)await validateCurrentRibbonArtwork(await JSZip.loadAsync(await readFile(preparedNativeArtifacts.template)));
 if(await exists(output)&&(await readdir(output)).length)throw Error(`Use a new empty output directory; frozen applications and packages are never replaced: ${output}`);
 await mkdir(output,{recursive:true});
 const temp = await realpath(await mkdtemp(join(tmpdir(),'equationlab-release-')));

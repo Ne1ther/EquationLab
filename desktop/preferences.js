@@ -4,13 +4,13 @@
   let generation=0,displayed='';
   return async url=>{
    const current=++generation;
-   if(!url){displayed='';image.removeAttribute('src');visibility(false);return;}
-   if(url===displayed){visibility(true);return;}
+   if(!url){displayed='';image.removeAttribute('src');visibility(false);return false;}
+   if(url===displayed){visibility(true);return true;}
    const next=makeImage();next.decoding='async';next.src=url;
    try{await next.decode();}
-   catch{if(current===generation){displayed='';image.removeAttribute('src');visibility(false);}return;}
-   if(current!==generation)return;
-   image.src=url;displayed=url;visibility(true);
+   catch{if(current===generation){displayed='';image.removeAttribute('src');visibility(false);}return false;}
+   if(current!==generation)return false;
+   image.src=url;displayed=url;visibility(true);return true;
   };
  }
  let base=null,defaults=null,descriptors=null,factory=null,original=null;
@@ -91,5 +91,5 @@
   const preset=snapshot();await native('validate',{latex:'x',typography:preset});
   localStorage.setItem('equationlab.native-defaults',JSON.stringify(preset));defaults=preset;message('已保存新公式的默认字体、字号与已知间距。');
  });
- native('typography-default').then(result=>{factory=result.profile;descriptors=result;if(selected?.typography)load(selected.typography);else load(factory,defaults);changed();}).catch(error=>message(error.message,true));
+ window.desktopTypographyReady=native('typography-default').then(result=>{factory=result.profile;descriptors=result;if(selected?.typography)load(selected.typography);else load(factory,defaults);changed();}).catch(error=>message(error.message,true));
 })();

@@ -8,6 +8,7 @@ import JSZip from '../../node_modules/jszip/lib/index.js';
 import CFB from '../../node_modules/cfb/cfb.js';
 import {DOMParser} from '../../node_modules/@xmldom/xmldom/lib/index.js';
 import {FIXED_LIBRARIES, treeInventory,isMainModule} from './installer.mjs';
+import '../../word-ribbon/command-registry.js';
 const sha = b => createHash('sha256').update(b).digest('hex');
 const PACKAGE_REL_NS='http://schemas.openxmlformats.org/package/2006/relationships';
 const CUSTOM_UI_NS='http://schemas.microsoft.com/office/2009/07/customui';
@@ -67,6 +68,23 @@ export async function validateRibbonTemplateZip(zip){
 }
 export function validateRibbonAcceptance(oracle){
   if(oracle?.ribbonVerified!==true)throw Error('Require real Word confirmation that the Equation Lab Ribbon tab and permanent open-pane button are visible.');
+}
+
+export async function validateCurrentRibbonArtwork(zip){
+  await validateRibbonTemplateZip(zip);
+  const doc=xmlDocument(await zip.file('customUI/customUI.xml').async('string'),'customUI');
+  const buttons=Array.from(doc.getElementsByTagNameNS(CUSTOM_UI_NS,'button'));
+  const commands=[...globalThis.EquationLabCommands.commands,{id:'open-pane',icon:'app'}];
+  const large=new Set(['insert-inline','insert-display','insert-right','open-pane']);
+  for(const command of commands){
+    const button=buttons.find(node=>node.getAttribute('tag')===command.id);
+    const size=large.has(command.id)?80:32;
+    if(!button||button.getAttribute('image')!==command.icon)throw Error(`Outdated Word Ribbon artwork: ${command.id}`);
+    const actual=await zip.file(`customUI/icons/${command.icon}.png`)?.async('nodebuffer');
+    const expected=await fs.readFile(new URL(`../../word-ribbon/icons/${command.icon}-${size}.png`,import.meta.url));
+    if(!actual?.equals(expected))throw Error(`Outdated Word Ribbon artwork: ${command.icon}`);
+  }
+  return {current:true,buttons:commands.length};
 }
 
 export function validateStartupSource(source){

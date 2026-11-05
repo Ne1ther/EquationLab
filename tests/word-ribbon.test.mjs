@@ -8,11 +8,12 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import sharp from 'sharp';
 import JSZip from 'jszip';
-import {validateRibbonAcceptance,validateRibbonTemplateZip} from '../packaging/word-native-installer/artifacts.mjs';
+import {validateRibbonAcceptance,validateRibbonTemplateZip,validateCurrentRibbonArtwork} from '../packaging/word-native-installer/artifacts.mjs';
 
 await import('../word-ribbon/command-registry.js');
 const registry=globalThis.EquationLabCommands;
 const execFileAsync=promisify(execFile);
+
 
 test('App insertion uses a verified document or retained range without inserting before commit',async()=>{
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
@@ -48,6 +49,26 @@ test('Word and editor numbering changes retain a document-bound default for subs
  assert.match(format,/PreferenceForDocument\(Doc, "EquationLabNumberFormat", ""\)/);assert.match(format,/If bestCount \* 2 > total/);
  assert.doesNotMatch(format,/ActiveDocument|Selection\./,'a document B format cannot be redirected to document A');
  const save=procedure(ribbon,'Private Sub SavePreferenceForDocument');assert.doesNotMatch(save,/On Error Resume Next|ActiveDocument/);
+});
+
+test('live insertion geometry comes from the bound Word range before fragment import',async()=>{
+ const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const apply=context.slice(context.indexOf('Private Sub ApplyInsertion'),context.indexOf('Private Sub ELAdvanceInsertionCursor'));
+ assert.ok(apply.indexOf('Set target = mInsertionRange.Duplicate')<apply.indexOf('ELReadEquationParagraphGeometry target.Paragraphs(1).Range'));
+ assert.ok(apply.indexOf('ELReadEquationParagraphGeometry target.Paragraphs(1).Range')<apply.indexOf('mutationAttempted = True'));
+ assert.ok(apply.indexOf('target.InsertFile')<apply.indexOf('ELApplyEquationParagraphGeometry insertedRange.InlineShapes(1).Range.Paragraphs(1).Range'));
+ assert.match(ribbon,/If count = 2 And Not \.TextColumns.EvenlySpaced Then Err.Raise/);
+ assert.match(ribbon,/columnWidth = \.TextColumns\(1\).Width/);
+ assert.match(ribbon,/If \.GutterPos <> wdGutterPosTop Or \.MirrorMargins Then columnWidth = columnWidth - \.Gutter/);
+ assert.match(ribbon,/usableWidth = columnWidth - leftIndent - rightIndent/);
+ assert.match(ribbon,/paragraph.Information\(wdWithInTable\)/);
+ assert.match(apply,/target.InsertFile[^\n]*Range:="EquationLabInsertBody"/,'exclude the source final section mark');
+ assert.match(ribbon,/layoutXml = paragraph.Document.Range\(0, 0\).WordOpenXML/);
+ assert.doesNotMatch(ribbon,/\.BookFoldPrinting|\.BookFoldRevPrinting|\.TwoPagesOnOne/,'Mac Word rejects these page-setup getters');
+ assert.doesNotMatch(apply,/ELReadEquationParagraphGeometry insertedRange/,'fragment section properties never supply destination geometry');
+ assert.ok(apply.indexOf('Set inlineFormatting = target.ParagraphFormat.Duplicate')<apply.indexOf('mutationAttempted = True'));
+ assert.ok(apply.indexOf('.ParagraphFormat = inlineFormatting')>apply.indexOf('ELTryCleanupInlineInsertion(Doc, start, beforeEnd)'));
 });
 
 test('native Word Ribbon registry contains complete, taskpane-free command metadata',async()=>{
@@ -112,6 +133,16 @@ test('native Word template builder embeds the retained Ribbon ABI and icons with
   const legacy=await JSZip.loadAsync(outputBytes);
   for(const name of largeImages)legacy.file(`customUI/icons/${name}.png`,await readFile(new URL(`../word-ribbon/icons/${name}-32.png`,import.meta.url)));
   assert.deepEqual(await validateRibbonTemplateZip(legacy),await validateRibbonTemplateZip(built),'previously accepted 32 px templates remain valid');
+  assert.deepEqual(await validateCurrentRibbonArtwork(built),{current:true,buttons:20});
+  await assert.rejects(validateCurrentRibbonArtwork(legacy),/Outdated Word Ribbon artwork/);
+  legacy.file('customUI/icons/obsolete.png',Buffer.from('old artwork'));
+  const refreshInput=join(temp,'old-artwork.dotm'),refreshed=join(temp,'refreshed.dotm');
+  await writeFile(refreshInput,await legacy.generateAsync({type:'nodebuffer'}));
+  await execFileAsync(process.execPath,[fileURLToPath(new URL('../native-word-probe/automatic-loader/build-ribbon-template.mjs',import.meta.url)),refreshInput,refreshed]);
+  const refreshedZip=await JSZip.loadAsync(await readFile(refreshed));
+  assert.deepEqual(await validateCurrentRibbonArtwork(refreshedZip),{current:true,buttons:20});
+  assert.equal(refreshedZip.file('customUI/icons/obsolete.png'),null);
+  assert.deepEqual(await refreshedZip.file('word/vbaProject.bin').async('nodebuffer'),await built.file('word/vbaProject.bin').async('nodebuffer'));
   const oversizedSmall=await JSZip.loadAsync(outputBytes);
   oversizedSmall.file('customUI/icons/number.png',await readFile(new URL('../word-ribbon/icons/number-80.png',import.meta.url)));
   await assert.rejects(validateRibbonTemplateZip(oversizedSmall),/invalid Ribbon PNG size/);
@@ -423,7 +454,7 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.ok(mutate.indexOf('ValidateRibbonNumberFormat pattern')<mutate.indexOf('Options.SmartCutPaste = False'),'format is validated before new-number Word changes');
  assert.match(mutate,/RequireCounterContext Doc, pattern, oleStart/,'chapter and section sequence context is checked before mutation');
  assert.match(source,/ELInvalidateDocumentSnapshot/,'successful numbering invalidates the cached document layout');
- assert.match(source,/TabStops\.Add Position:=usableWidth \/ 2, Alignment:=wdAlignTabCenter[\s\S]*?TabStops\.Add Position:=usableWidth, Alignment:=wdAlignTabRight/,'numbered paragraphs get center and right tab stops');
+ assert.match(source,/TabStops\.Add Position:=leftIndent \+ usableWidth \/ 2, Alignment:=wdAlignTabCenter[\s\S]*?TabStops\.Add Position:=leftIndent \+ usableWidth, Alignment:=wdAlignTabRight/,'numbered paragraphs get tab stops relative to the target column margin and preserved indent');
  assert.match(source,/Private Sub NormalizeNumberParagraph[\s\S]*?gapEnd > gapStart[\s\S]*?firstStart > paragraph\.Start[\s\S]*?InsertAfter vbTab[\s\S]*?InsertBefore vbTab/,'normalize all layout whitespace to prevent repeated side-switch drift');
  assert.match(source,/Case "C"[\s\S]*?Case "S"[\s\S]*?Case "E"/);
  assert.match(source,/Case "1": fmt = "ARABIC"[\s\S]*?Case "A": fmt = "ALPHABETIC"[\s\S]*?Case "a": fmt = "alphabetic"[\s\S]*?Case "I": fmt = "ROMAN"[\s\S]*?Case "i": fmt = "roman"/);

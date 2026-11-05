@@ -7,6 +7,8 @@ import {nativeSessionOperation as operation} from '../src/word-native-session.mj
 import {createDocx,flatOpc,inspectDocx,hash} from '../src/document.mjs';
 import {inspectOle,makeOle,patchRuler} from '../src/native.mjs';
 import {makeNewOle} from '../src/new-formula.mjs';
+import {readTypography} from '../src/typography-native.mjs';
+import {renderNative} from '../src/font-renderer.mjs';
 
 const originalFetch=globalThis.fetch,live=new Set(),calls=[];
 let next=920000n;
@@ -49,6 +51,35 @@ async function gone(path){await assert.rejects(access(path),error=>error.code===
 function insertionPayload(opened,read,patch={}){
  return {ticket:opened.ticket,input:read.activePath,latex:'u^2+1',layout:read.insertionLayout,...patch};
 }
+
+test('Repeated insertions keep the reported H formula, typography and DOCX picture identical to the validated preview',async()=>{
+ const reported=String.raw`H_{\mathrm{pos},\tau}=H_{\mathrm{init},\tau}+PE_\tau`;
+ const cases=[
+  [reported,undefined],
+  [reported,{fullSize:18,styles:{3:{font:'Arial',style:1}}}],
+  [String.raw`\frac{a}{b}\times\frac{c}{d}=\frac{ac}{bd}`,undefined],
+  [reported,{fullSize:16}]
+ ];
+ for(const [latex,typography] of cases){
+  const opened=await openInsertion([],{...defaultLayout,mode:'numbered-right',chapter:3,equation:11});
+  const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:opened.ticket}});
+  const preview=await desktopRequest({action:'validate',payload:{latex,typography,previewOnly:true}});
+  await desktopRequest({action:'wordSessionInsert',payload:insertionPayload(opened,read,{latex,typography})});
+  const completed=await operation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
+  const fragment=await inspectDocx(Buffer.from(completed.docx,'base64')),object=fragment.objects[0],expected=makeNewOle(latex,typography);
+  const insertionXml=await fragment.zip.file('word/document.xml').async('string');
+  assert.match(insertionXml,/<w:bookmarkStart w:id="32760" w:name="EquationLabInsertBody"\/>/);
+  assert.match(insertionXml,/<w:p><w:bookmarkEnd w:id="32760"\/><\/w:p><w:sectPr>/,'the final paragraph and section remain outside the imported bookmark');
+  assert.equal(fragment.objects.length,1);assert.equal(object.nativeSha256,preview.nativeSha256);
+  assert.equal(inspectOle(object.ole).native.toString('base64'),completed.native);
+  assert.deepEqual(readTypography(object.ole),readTypography(expected));
+  const rendered=await renderNative(object.ole);
+  assert.equal(rendered.svg,preview.svg);
+  assert.deepEqual(await fragment.zip.file(object.imagePath).async('nodebuffer'),rendered.png);
+  assert.equal(object.layout.numberText,'(11)');
+  await operation('native-ack',{ticket:opened.ticket,session:opened.session,ok:true});
+ }
+});
 
 test('Insertion sessions read zero or many document equations with no active formula and keep normalized layout metadata',async()=>{
  const empty=await openInsertion([]),emptyRead=await operation('native-read',{ticket:empty.ticket});

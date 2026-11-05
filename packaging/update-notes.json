@@ -1,5 +1,5 @@
 {
-  "version": "0.6.12",
-  "zh": "改善安装时的 Office 文件夹授权流程：App 先完成安装，再按提示授权并安装 Word 插件。App 内现在也能为当前用户首次安装插件，无需重新打开系统安装器。保留已有 Word 组件和其他加载项，包含此前的长拼音组字保护与 Word 自动启动修复。",
-  "en": "Improves Office folder consent during installation: install the app first, then grant folder access and finish Word plugin setup from the app. First-time plugin setup now runs for the current user without reopening macOS Installer. Preserves existing Word components and other add-ins, and includes the previous Chinese composition and Word startup fixes."
+  "version": "0.6.13",
+  "zh": "修复插入时可能带入上一条公式的问题，并保留 Word 原来的页边距、分栏与正文段落格式。加入本机草稿恢复、侧栏正文编号搜索和积分上下限设置，完善文档检查与副本操作，优化长文档加载。打开靠后的公式会自动定位到对应行，缩略图载入后位置保持稳定。恢复新版 Word 功能区图标。",
+  "en": "Fixes insertions that could reuse an earlier equation, while preserving Word margins, columns and paragraph formatting. Adds local draft recovery, document-number search and integral-limit controls, improves document checks and copy actions, and refines loading for long documents. Opening an equation brings its sidebar row into view, with stable positions as thumbnails arrive. Restores the refreshed Word ribbon artwork."
 }

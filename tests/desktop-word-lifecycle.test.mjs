@@ -117,7 +117,7 @@ test('Cancel during an actual Word save keeps the draft until the bounded acknow
 test('Closing a valid formula with an expired save binding offers recovery instead of locking the window',async()=>{
  const p=editor(),c=p.context;await c.window.nativeOpenWordSession('a'.repeat(64));installCommit(c);c.mf.value='important draft';
  c.ensureValid=async()=>{};c.sourceEditMode=()=> 'rebuild';c.rulerPatch=()=>({});
- const originalNative=c.native;c.native=async(action,payload)=>{if(action==='wordSessionSave')throw Error('Native session is no longer editing');return originalNative(action,payload);};
+ const originalNative=c.native;c.native=async(action,payload)=>{if(action==='wordSessionSave')throw Object.assign(Error('Native session is no longer editing'),{submissionState:'not-submitted'});return originalNative(action,payload);};
  assert.equal(await c.window.nativePrepareToClose(),false);assert.equal(c.mf.value,'important draft');assert.equal(c.wordTicket,'a'.repeat(64));assert.equal(c.busy,false);
  assert.ok(p.calls.some(call=>call.action==='confirmWordSessionSwitch'&&call.payload.closing));
  p.discard(true);assert.equal(await c.window.nativePrepareToClose(),true);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');

@@ -3,7 +3,10 @@
 // into LaTeX or Equation Native records.
 (function (host) {
  'use strict';
- const operators = new Map([['\\sum',['求和','Sum']],['\\prod',['乘积','Product']],['\\coprod',['余积','Coproduct']],['\\bigcup',['大并集','Union']],['\\bigcap',['大交集','Intersection']]]);
+ const operators = new Map([['\\sum',['求和','Sum']],['\\prod',['乘积','Product']],['\\coprod',['余积','Coproduct']],['\\bigcup',['大并集','Union']],['\\bigcap',['大交集','Intersection']],['\\int',['积分','Integral']],['\\iint',['二重积分','Double integral']],['\\iiint',['三重积分','Triple integral']],['\\oint',['围道积分','Contour integral']],['\\oiint',['曲面积分','Surface integral']],['\\oiiint',['体积分','Volume integral']],['\\varointclockwise',['顺时针围道积分','Clockwise contour integral']],['\\ointctrclockwise',['逆时针围道积分','Counterclockwise contour integral']]]);
+ const composing = new WeakSet();
+ const compositionVersions = new WeakMap();
+ const isComposing = mathfield=>!!host.editorIsComposing?.()||composing.has(mathfield);
  const structures = {surd:['根号','Root'],genfrac:['分式','Fraction'],array:['矩阵','Matrix'],leftright:['括号','Fence']};
  const placements = {'above-below':'\\limits',adjacent:'\\nolimits'};
  function atomRange(model,atom) {
@@ -41,17 +44,20 @@
   const target=region?.atom,scope=target&&region.branch?target.branch(region.branch):null;
   const scopeRange=scope?.length?[model.offsetOf(scope[0]),model.offsetOf(scope[scope.length-1])]:null;
   const operatorRange=operator?atomRange(model,operator):null;
+  // Native-preserving integral macros encode placement in hidden template
+  // fields. Editing only their rendered operator would be lost on save.
+  const preservedIntegral=ancestors.some(candidate=>candidate.type==='macro'&&/^\\mt(?:int[A-Z]|bigop)$/.test(candidate.command));
   const context={path:[english?'Equation':'整条公式',...path],rootScope:model.atoms.some(a=>a.type==='surd')?(insideRoot?'inside':'outside'):null,
    placeholder:!!model.selectionIsPlaceholder||atom.type==='placeholder',selectedStructure:!!selectedStructure,structureType:target?.type||null,structureLabel:target?(structures[target.type]||operators.get(target.command)||['上下标结构','Scripted expression'])[english?1:0]:null,
-   canExit:!!target,canSelect:!!target&&!!atomRange(model,target),scopeRange,
-   operator:operatorRange?{command:operator.command,label:operators.get(operator.command)[english?1:0],placement:operator.explicitSubsupPlacement?(operator.subsupPlacement==='over-under'?'above-below':operator.subsupPlacement==='adjacent'?'adjacent':null):null}:null};
+   canExit:!!target,canSelect:!!target&&!!atomRange(model,target),scopeRange,preservedIntegral,
+   operator:operatorRange?{command:operator.command,label:operators.get(operator.command)[english?1:0],canSetPlacement:!preservedIntegral,placement:operator.explicitSubsupPlacement?(operator.subsupPlacement==='over-under'?'above-below':operator.subsupPlacement==='adjacent'?'adjacent':null):null}:null};
   return {context,model,region,operator,operatorRange,collapsed};
  }
  host.equationEditorContext=(mathfield,english=false)=>inspect(mathfield,english).context;
  host.setEquationOperatorLimits=function(mathfield,placement) {
   if(!Object.hasOwn(placements,placement))throw Error('Unknown operator limits placement');
-  if(mathfield.readOnly)return false;
-  const {operator,operatorRange}=inspect(mathfield);if(!operatorRange)return false;
+  if(mathfield.readOnly||isComposing(mathfield))return false;
+  const {operator,operatorRange,context}=inspect(mathfield);if(!operatorRange||!context.operator.canSetPlacement)return false;
   // Re-serialize the operator atom only. Its complete, potentially nested
   // limits and styles are retained; the summand and every other sum stay put.
   const latex=mathfield.getValue(operatorRange,'latex');
@@ -70,6 +76,7 @@
   return true;
  };
  host.navigateEquationStructure=function(mathfield,action) {
+  if(isComposing(mathfield))return false;
   const {model,region}=inspect(mathfield);if(!region)return false;
   if(action==='exit')mathfield.selection=model.offsetOf(region.atom);
   else if(action==='select'){const range=atomRange(model,region.atom);if(!range)return false;mathfield.selection={ranges:[range]};}
@@ -102,10 +109,12 @@
     context.rootScope==='outside'?text('当前在根号外，输入不会扩大根号范围。','Outside the root. Typing will not extend its contents.'):
     text('蓝色虚线标出当前输入范围。','The blue outline marks the current input scope.');
    exit.textContent=context.structureLabel?text('移出'+context.structureLabel,'Exit '+context.structureLabel):text('移出结构','Exit structure');select.textContent=context.structureLabel?text('选中'+context.structureLabel,'Select '+context.structureLabel):text('选中结构','Select structure');
-   exit.disabled=mathfield.readOnly||!context.canExit;select.disabled=!context.canSelect;
-   label.textContent=text('上下限位置','Limits position');picker.setAttribute('aria-label',text('求和上下限位置','Sum limits position'));
+   exit.disabled=mathfield.readOnly||isComposing(mathfield)||!context.canExit;select.disabled=isComposing(mathfield)||!context.canSelect;
+   label.textContent=text('上下限位置','Limits position');picker.setAttribute('aria-label',text('运算符上下限位置','Operator limits position'));
    for(const option of picker.options)option.textContent=({'':text('选择位置','Choose position'),'above-below':text('上下','Above / below'),adjacent:text('右侧','Right side')})[option.value];
-   picker.value=context.operator?.placement||'';picker.disabled=mathfield.readOnly||!context.operator;picker.title=context.operator?(context.operator.placement?context.operator.label:text('选择后只修改当前运算符的上下限位置。','Choose a position to change this operator only.')):text('点击求和符号或它的上下限后设置。','Click a sum or one of its limits to set placement.');
+   picker.value=context.operator?.placement||'';picker.disabled=mathfield.readOnly||isComposing(mathfield)||!context.operator?.canSetPlacement;picker.title=context.preservedIntegral?text('此原生保留结构的上下限可编辑，位置保持原样。','Edit this preserved native structure’s limits; its placement is retained.'):context.operator?(context.operator.placement?context.operator.label:text('选择后只修改当前运算符的上下限位置。','Choose a position to change this operator only.')):text('点击积分、求和等运算符或它的上下限后设置。','Click an integral, sum or one of its limits to set placement.');
+   if(context.preservedIntegral)hint.textContent=picker.title;
+   else if(context.operator)hint.textContent=text('当前运算符：'+context.operator.label+'；Tab 切换输入组，方向键移动，也可用“移出结构”。','Current operator: '+context.operator.label+'. Tab changes groups; arrow keys move. You can also use Exit structure.');
    // MathLive renders on its next frame. Paint the independent scope outline
    // afterwards, including when WebKit suspends rAF in a background window.
    if(frame===null)frame=setTimeout(paint,32);return context;
@@ -113,6 +122,8 @@
   for(const button of [exit,select]){button.addEventListener('mousedown',event=>event.preventDefault());button.addEventListener('click',()=>{host.navigateEquationStructure(mathfield,button.dataset.structure);refresh();onSelection();});}
   picker.addEventListener('change',()=>{if(host.setEquationOperatorLimits(mathfield,picker.value)){mathfield.focus();onChange();}refresh();onSelection();});
   for(const event of ['input','selection-change','focus','blur'])mathfield.addEventListener(event,refresh);
+  mathfield.addEventListener('compositionstart',()=>{compositionVersions.set(mathfield,(compositionVersions.get(mathfield)||0)+1);composing.add(mathfield);refresh();});
+  mathfield.addEventListener('compositionend',()=>{const version=compositionVersions.get(mathfield);setTimeout(()=>{if(compositionVersions.get(mathfield)===version){composing.delete(mathfield);refresh();}},0);});
   mathfield.closest('.math-wrap')?.addEventListener('scroll',refresh,{passive:true});
   const observer=typeof ResizeObserver==='function'?new ResizeObserver(refresh):null;observer?.observe(mathfield);if(viewport)observer?.observe(viewport);
   if(mathfield.shadowRoot&&typeof MutationObserver==='function')new MutationObserver(refresh).observe(mathfield.shadowRoot,{childList:true,subtree:true});

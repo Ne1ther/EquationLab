@@ -1,6 +1,15 @@
 import AppKit
 import Foundation
 
+enum WordPluginInstallationInterruption {
+    case officeAccess, wordRunning
+    static func classify(code: String?, message: String) -> Self? {
+        if ["WORD_SETTINGS_ACCESS_DENIED", "WORD_STARTUP_ACCESS_DENIED", "EPERM", "EACCES"].contains(code ?? "") || message.localizedCaseInsensitiveContains("operation not permitted") || message.localizedCaseInsensitiveContains("permission denied") { return .officeAccess }
+        if code == "WORD_RUNNING" || message == "请先保存文档并退出 Microsoft Word，然后重新运行安装器。" { return .wordRunning }
+        return nil
+    }
+}
+
 extension DesktopBridge {
     func presentDeferredWordSetup() {
         guard !deferredWordSetupPresented else { return }
@@ -21,28 +30,40 @@ extension DesktopBridge {
     }
 
     func installWordPlugin() {
+        guard !installationRunning else { return }
         lastWordPluginVerification = nil
         restoreWordOfficeAccess()
         guard refreshWordApplication() else {
+            wordPluginInstallationPending = false
             installationMessage = "没有找到桌面版 Microsoft Word。请先安装 Word，或在插件窗口中选择 Word 应用。"
             return
         }
         installUserWordPlugin()
     }
 
+    func continueWordPluginInstallationAfterOfficeAccess() {
+        guard !installationRunning else { return }
+        if wordPluginInstallationPending { installWordPlugin() }
+        else { verifyWordPlugin(showResult: true) }
+    }
+
     private func installUserWordPlugin() {
         guard !installationRunning else { return }
         guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty else {
-            installationMessage = "请先保存文档并完全退出 Word，再安装或更新插件。"
+            wordPluginInstallationPending = true
+            showOfficePlugins = true
+            installationMessage = "安装已暂停。请保存文档并完全退出 Word，然后点击“继续安装 / 更新 Word 插件…”。"
             return
         }
         guard let node = bundledNodeURL(), let script = Bundle.main.resourceURL?
             .appendingPathComponent("installer/word-native-installer/automatic-install.mjs"),
               FileManager.default.fileExists(atPath: script.path) else {
+            wordPluginInstallationPending = false
             installationMessage = "此构建未包含 Word 插件安装器。"
             return
         }
         installationRunning = true
+        wordPluginInstallationPending = false
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             var message: String
             var succeeded = false
@@ -64,13 +85,17 @@ extension DesktopBridge {
                 message = succeeded ? "Word 插件已安装。重新打开 Word 即可使用固定顶栏。"
                     : failure?["message"] as? String ?? String(data: errorData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "Word 插件安装未完成。"
             } catch { message = error.localizedDescription }
-            let accessDenied = !succeeded && (["WORD_SETTINGS_ACCESS_DENIED", "WORD_STARTUP_ACCESS_DENIED", "EPERM", "EACCES"].contains(errorCode ?? "") || message.localizedCaseInsensitiveContains("operation not permitted") || message.localizedCaseInsensitiveContains("permission denied"))
+            let interruption = succeeded ? nil : WordPluginInstallationInterruption.classify(code: errorCode, message: message)
+            let accessDenied = interruption == .officeAccess
             let completedMessage = accessDenied
-                ? "macOS 尚未允许访问 Word 文件夹。请点击“允许访问 Word 文件夹”，在系统文件窗口中确认已定位的 Office 文件夹，然后重试。" : message
+                ? "安装已暂停。请点击“允许访问 Word 文件夹”，在系统窗口确认 Office 文件夹后会继续安装。"
+                : interruption == .wordRunning ? "安装已暂停。请保存文档并完全退出 Word，然后点击“继续安装 / 更新 Word 插件…”。" : message
             let completedSuccess = succeeded
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.installationRunning = false
+                self.wordPluginInstallationPending = interruption != nil
+                if interruption != nil { self.showOfficePlugins = true }
                 if accessDenied {
                     self.wordOfficeAccessRequired = true
                 } else if completedSuccess {
@@ -84,6 +109,7 @@ extension DesktopBridge {
     }
 
     func uninstallWordPlugin() {
+        wordPluginInstallationPending = false
         lastWordPluginVerification = nil
         openWordPackage(removing: true)
     }

@@ -3,13 +3,17 @@
  // replacement or explicit row changes produce a bridge payload.
  root.createSidebarPublisher=function(){
   const origin=root.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2));
-  let current,rows=[],epoch=0,revision=0,reset=true;const dirty=new Set();
-  const row=(object,document)=>({id:object.index,position:document.documentPosition===undefined?object.index+1:document.documentPosition+1,label:'公式 '+(object.index+1),detail:object.error||'原生 MathType · '+object.application,latex:object.latex||'',image:object.image||null,readOnly:!!object.error});
+  let current,metadataState,rows=[],epoch=0,revision=0,reset=true;const dirty=new Set();
+  const row=(object,document)=>{
+   const numberText=typeof object.layout?.numberText==='string'?object.layout.numberText.trim():'';
+   return {id:object.index,position:document.documentPosition===undefined?object.index+1:document.documentPosition+1,label:'公式 '+(object.index+1),detail:object.error||'原生 MathType · '+object.application,latex:object.latex||'',image:object.image||null,readOnly:!!object.error,numberText:numberText||null,numberStatus:document.numberingRefreshNeeded?'stale':!numberText&&document.documentLoading?'pending':'snapshot'};
+  };
   return {
    reset(){reset=true;},
    invalidate(document,indices){if(document!==current)return;if(indices)for(const index of indices)dirty.add(index);else reset=true;},
    snapshot(document){
-    if(document!==current){current=document;reset=true;}
+    const nextMetadataState=!!document?.numberingRefreshNeeded+':'+!!document?.documentLoading+':'+!!document?.documentLoadFailed;
+    if(document!==current||nextMetadataState!==metadataState){current=document;metadataState=nextMetadataState;reset=true;}
     let delta=null;
     if(reset){rows=(document?.objects||[]).map(object=>row(object,document));epoch++;revision=1;delta={generation:origin+':'+epoch,baseRevision:0,revision,reset:rows};reset=false;dirty.clear();}
     else if(dirty.size){

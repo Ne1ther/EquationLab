@@ -4,6 +4,9 @@ import JSZip from 'jszip';
 import '../../word-ribbon/command-registry.js';
 const [input,output]=process.argv.slice(2);if(!input||!output)throw Error('Usage: build-ribbon-template.mjs compiled.dotm new-ribbon.dotm');
 const zip=await JSZip.loadAsync(await fs.readFile(input));
+// Refresh the artwork when compiling from an accepted older template too.
+// The VBA project is retained byte-for-byte; only the Ribbon parts change.
+for(const name of Object.keys(zip.files))if(/^customUI\/icons\/[^/]+\.png$/.test(name))zip.remove(name);
 const escape=value=>String(value).replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;');
 const images=new Map(),button=(id,label,icon)=>{const large=['insert-inline','insert-display','insert-right','open-pane'].includes(id);images.set(icon,Math.max(images.get(icon)||0,large?80:32));return `<button id="EL.${id}" label="${escape(label)}" tag="${id}" image="${icon}" onAction="EquationLabRibbon.ELRibbonAction"${large?' size="large"':''}/>`;};
 const registry=globalThis.EquationLabCommands;
@@ -12,8 +15,12 @@ const xml=`<?xml version="1.0" encoding="UTF-8"?><customUI xmlns="http://schemas
 zip.file('customUI/customUI.xml',xml);
 zip.file('customUI/_rels/customUI.xml.rels',`<?xml version="1.0" encoding="UTF-8"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${[...images.keys()].map(name=>`<Relationship Id="${name}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="icons/${name}.png"/>`).join('')}</Relationships>`);
 for(const [name,size] of images)zip.file(`customUI/icons/${name}.png`,await fs.readFile(new URL(`../../word-ribbon/icons/${name}-${size}.png`,import.meta.url)));
-let rels=await zip.file('_rels/.rels').async('string');if(rels.includes('/ui/extensibility'))throw Error('Input template already contains a Ribbon.');
-rels=rels.replace('</Relationships>','<Relationship Id="EquationLabRibbon" Type="http://schemas.microsoft.com/office/2007/relationships/ui/extensibility" Target="customUI/customUI.xml"/></Relationships>');zip.file('_rels/.rels',rels);
+let rels=await zip.file('_rels/.rels').async('string');
+if(rels.includes('/ui/extensibility')){
+ const ribbon=rels.match(/<Relationship\b[^>]*Type="http:\/\/schemas\.microsoft\.com\/office\/2007\/relationships\/ui\/extensibility"[^>]*\/>/g);
+ if(ribbon?.length!==1||!ribbon[0].includes('Target="customUI/customUI.xml"'))throw Error('Input template has an unexpected Ribbon relationship.');
+}else rels=rels.replace('</Relationships>','<Relationship Id="EquationLabRibbon" Type="http://schemas.microsoft.com/office/2007/relationships/ui/extensibility" Target="customUI/customUI.xml"/></Relationships>');
+zip.file('_rels/.rels',rels);
 let types=await zip.file('[Content_Types].xml').async('string');if(!types.includes('Extension="png"'))types=types.replace('</Types>','<Default Extension="png" ContentType="image/png"/></Types>');zip.file('[Content_Types].xml',types);
 await fs.mkdir(path.dirname(output),{recursive:true});await fs.writeFile(output,await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'}));
 console.log(JSON.stringify({template:output,groups:registry.groups.length,commands:registry.commands.length,permanentNativeEntry:true}));

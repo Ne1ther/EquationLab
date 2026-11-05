@@ -1,5 +1,23 @@
 # 版本记录
 
+## 0.6.13 · build101
+
+这版加入了保存结果核对、本机草稿恢复、侧栏正文编号和组合搜索、按版心与分栏编排、积分上下限与文档工具，以及长文档分批加载和缓存优化。
+
+修复了插入时可能带入上一条公式的问题。每次插入使用独立文件，只导入公式正文，保留 Word 原来的页边距和分栏。行内公式还会保留正文的样式、缩进和行距。预览图准备好后才能提交；打开靠后的公式时，侧栏会定位到所选行，缩略图载入后也保持位置。
+
+Word 功能区恢复新版图标。打包时会核对模板中的图标资源，避免更新宏时又带回旧图标。
+
+[下载 0.6.13](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.13)
+
+### English
+
+This build brings together save-result recovery, local drafts, sidebar number search, page and column layout, integral controls and document tools, and staged loading and caching for longer documents.
+
+Each insertion now uses its own file and imports only the equation body, preserving Word’s margins and columns. Inline insertion also keeps the surrounding paragraph’s style, indents, and line spacing. Submission waits for the preview image to be ready. Opening an equation later in a document brings its sidebar row into view, with stable row heights as thumbnails arrive.
+
+The refreshed Word ribbon artwork is included again. Packaging checks the actual template images so that updating the macros cannot silently restore older icons.
+
 ## 0.6.12 · build100
 
 这次调整了安装时的 Office 授权流程。如果 macOS 暂时不允许访问 Word 文件夹，先把 App 装好，再从 App 按提示授权、完成插件安装。App 内的“安装 / 更新 Word 插件”也支持首次安装，不用再打开一次系统安装器。

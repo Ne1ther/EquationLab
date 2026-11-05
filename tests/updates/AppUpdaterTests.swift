@@ -202,7 +202,9 @@ final class AppUpdaterTests: XCTestCase {
     }
     func testLivePublishedUpdateCheck() async throws {
         guard let expected=ProcessInfo.processInfo.environment["EQUATIONLAB_LIVE_RELEASE_VERSION"] else { throw XCTSkip("Opt-in published update check") }
-        let updater=AppUpdater(defaults:defaults(),installed:("0.5.7",40))
+        let previous=ProcessInfo.processInfo.environment["EQUATIONLAB_LIVE_PREVIOUS_VERSION"] ?? "0.5.7"
+        let previousBuild=Int(ProcessInfo.processInfo.environment["EQUATIONLAB_LIVE_PREVIOUS_BUILD"] ?? "") ?? 40
+        let updater=AppUpdater(defaults:defaults(),installed:(previous,previousBuild))
         XCTAssertTrue(updater.automaticChecks)
         updater.checkAutomaticallyIfDue();await updater.operation?.value
         XCTAssertEqual(updater.phase,.available,updater.errorMessage)

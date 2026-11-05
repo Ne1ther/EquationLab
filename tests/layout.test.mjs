@@ -55,6 +55,13 @@ test('Left and right numbered equations use tab stops and bookmark only their nu
  }
 });
 
+test('container width and paragraph indents produce margin-relative tabs and suppress inherited custom stops',()=>{
+ const doc=parse(equationLayout(run,{mode:'numbered-right',widthTwips:4000,leftIndentTwips:200,rightIndentTwips:300,clearTabPositions:[720,720,2200,4200]}).xml);
+ assert.deepEqual(elements(doc,'tab').filter(n=>attr(n,'val')).map(n=>[attr(n,'val'),attr(n,'pos')]),[['clear','720'],['center','2200'],['right','4200']]);
+ const indent=elements(doc,'ind')[0];assert.equal(attr(indent,'left'),'200');assert.equal(attr(indent,'right'),'300');assert.equal(attr(indent,'firstLine'),'0');
+ for(const options of [{leftIndentTwips:0.5},{rightIndentTwips:'300'},{clearTabPositions:'720'},{clearTabPositions:[NaN]},{widthTwips:31680,leftIndentTwips:1}])assert.throws(()=>equationLayout(run,options));
+});
+
 test('Chapter/section numbering uses nearest live context fields and each format switch',()=>{
  const mixed=equationLayout(run,{mode:'numbered-right',numberFormat:'(#CA.#Si.#EI)',chapter:2,section:4,equation:9});
  assert.equal(mixed.numberText,'(B.iv.IX)');

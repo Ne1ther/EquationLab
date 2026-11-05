@@ -103,7 +103,7 @@ function anchor(options,numberingFamily='equationlab'){
  else {do{id=randomBytes(4).readUInt32BE(0)&0x7fffffff;}while(issuedIds.has(id)||idExists(id));}
  return {name,id,commit(){issuedNames.add(name.toLowerCase());issuedIds.add(id);existing?.add(name);existingIds?.add(id);}};
 }
-const LAYOUT_OPTIONS=new Set(['mode','numberFormat','equation','chapter','section','bookmarkName','bookmarkId','widthTwips','style','resetEquation','numberingFamily','existingBookmarks','existingBookmarkIds']);
+const LAYOUT_OPTIONS=new Set(['mode','numberFormat','equation','chapter','section','bookmarkName','bookmarkId','widthTwips','leftIndentTwips','rightIndentTwips','clearTabPositions','style','resetEquation','numberingFamily','existingBookmarks','existingBookmarkIds']);
 
 function checkedFamily(value){if(!['equationlab','mathtype'].includes(value))throw Error('Invalid numbering family');return value;}
 function macroButton(name,contents){return `<w:r><w:fldChar w:fldCharType="begin"/></w:r><w:r><w:instrText xml:space="preserve"> MACROBUTTON ${name} </w:instrText></w:r>${contents}<w:r><w:fldChar w:fldCharType="end"/></w:r>`;}
@@ -124,17 +124,25 @@ function markedNumber(a,tokens,values,options){
  */
 export function equationLayout(runXml,options={}){
  optionsObject(options,LAYOUT_OPTIONS);validateRuns(runXml);
- const {mode='inline',numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1,widthTwips=9026,style='EquationLab',resetEquation=false,numberingFamily='equationlab'}=options;
+ const {mode='inline',numberFormat:pattern='(#E1)',equation=1,chapter=1,section=1,widthTwips=9026,leftIndentTwips=0,rightIndentTwips=0,clearTabPositions=[],style='EquationLab',resetEquation=false,numberingFamily='equationlab'}=options;
  checkedFamily(numberingFamily);
  if(!['inline','display','numbered-right','numbered-left'].includes(mode))throw Error('Invalid equation layout mode');
  int(equation,'equation');int(chapter,'chapter');int(section,'section');int(widthTwips,'widthTwips',1440,31680);boolean(resetEquation,'resetEquation');
+ int(leftIndentTwips,'leftIndentTwips',-31680,31680);int(rightIndentTwips,'rightIndentTwips',-31680,31680);
+ if(!Array.isArray(clearTabPositions)||clearTabPositions.length>1000)throw Error('Invalid clearTabPositions');
+ for(const position of clearTabPositions)int(position,'clearTabPositions',-31680,31680);
+ const center=leftIndentTwips+Math.floor(widthTwips/2),end=leftIndentTwips+widthTwips;
+ int(center,'center tab position',-31680,31680);int(end,'right tab position',-31680,31680);
  if(typeof style!=='string'||!/^[A-Za-z_][A-Za-z0-9_-]{0,63}$/.test(style))throw Error('Invalid paragraph style id');
  const tokens=numberFormat(pattern),numbered=mode.startsWith('numbered-');
  if(!numbered&&(options.bookmarkName!==undefined||options.bookmarkId!==undefined||resetEquation))throw Error('Bookmarks and equation resets require a numbered layout');
  registry(options.existingBookmarks,'existingBookmarks');registry(options.existingBookmarkIds,'existingBookmarkIds');
- const spaced=mode!=='inline',center=Math.floor(widthTwips/2);
- const tabs=numbered?`<w:tabs><w:tab w:val="center" w:pos="${center}"/><w:tab w:val="right" w:pos="${widthTwips}"/></w:tabs>`:'';
- const props=`<w:pPr><w:pStyle w:val="${esc(style)}"/><w:keepNext w:val="0"/><w:keepLines/>${tabs}<w:spacing w:before="${spaced?120:0}" w:after="${spaced?120:0}"/><w:jc w:val="${mode==='display'?'center':'left'}"/></w:pPr>`;
+ const spaced=mode!=='inline';
+ // Tab positions are measured from the column's text margin, not its indent.
+ const clears=[...new Set(clearTabPositions)].filter(position=>position!==center&&position!==end).map(position=>`<w:tab w:val="clear" w:pos="${position}"/>`).join('');
+ const tabs=numbered?`<w:tabs>${clears}<w:tab w:val="center" w:pos="${center}"/><w:tab w:val="right" w:pos="${end}"/></w:tabs>`:'';
+ const indent=`<w:ind w:left="${leftIndentTwips}" w:right="${rightIndentTwips}" w:start="${leftIndentTwips}" w:end="${rightIndentTwips}" w:firstLine="0" w:hanging="0" w:firstLineChars="0" w:hangingChars="0"/>`;
+ const props=`<w:pPr><w:pStyle w:val="${esc(style)}"/><w:keepNext w:val="0"/><w:keepLines/>${tabs}<w:spacing w:before="${spaced?120:0}" w:after="${spaced?120:0}"/>${indent}<w:jc w:val="${mode==='display'?'center':'left'}"/></w:pPr>`;
  if(!numbered)return {xml:`<w:p>${props}${runXml}</w:p>`,bookmarkName:null,bookmarkId:null,numberText:null};
  const a=anchor(options,numberingFamily),number=markedNumber(a,tokens,{E:equation,C:chapter,S:section},{resetEquation,numberingFamily}),tab='<w:r><w:tab/></w:r>';
  const contents=mode==='numbered-right'?tab+runXml+tab+number.xml:number.xml+tab+runXml;

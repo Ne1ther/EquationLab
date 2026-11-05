@@ -63,6 +63,18 @@ test('A real matrix-cell AST edit updates its saved macro argument and preserves
  const ole=makeOle(value);await renderNative(ole,{raster:false});let matrix;function walk(ns){for(const n of ns){if(n.type===5)matrix=n;if(n.children)walk(n.children);}}walk(inspectOle(ole).parsed.records);assert.equal(matrix.hjust,129);assert.equal(matrix.vjust,129);assert.match(oleLatex(ole),/z&b/);
  assert.equal(context.window.syncEquationMacros(state.mf).changed,0,'a second synchronization is idempotent');
 });
+
+test('Actual MathLive integral glyph normalization preserves Native decorations while lower limits remain editable',()=>{
+ for(const command of ['int','iint','iiint','oint','oiint','oiiint','varointclockwise','ointctrclockwise'])for(const placement of ['limits','nolimits']){
+  const ole=makeOle('\\'+command+'\\'+placement+'_{a}^{b}x'),reopened=oleLatex(ole),state=parse(reopened);
+  context.window.syncEquationMacros(state.mf);
+  assert.deepEqual(makeOle(state.value()),ole,`${command}/${placement}: canonical glyph commands must not create nested integral templates`);
+  const preserved=all(state.root).find(atom=>atom.type==='macro'&&atom.command==='\\mtbigop');
+  if(preserved)assert.equal(direct(preserved).find(atom=>atom.command==='\\mathop').subsupPlacement,placement==='limits'?'over-under':'adjacent','the editor paints the original native placement');
+  editLiteral(state.root,'a','q');context.window.syncEquationMacros(state.mf);
+  assert.deepEqual(makeOle(state.value()),makeOle(reopened.replace('{a}','{q}')),`${command}/${placement}: editing a bound retains the original decoration and placement`);
+ }
+});
 test('Nested same-name macros and the editable sfrac helper commit inside-out without leaking markers',async()=>{
  const state=parse(tex`\mtfrac{3}{\mtfrac{6}{a}{b}}{c}`);editLiteral(state.root,'a','z');context.window.syncEquationMacros(state.mf);
  const value=state.value();assert.match(value,/\\mtfrac\{3\}\{\\mtfrac\{6\}\{z\}\{b\}\}\{c\}/);assert.doesNotMatch(value,/htmlData|equationlab-/);await renderNative(makeOle(value),{raster:false});

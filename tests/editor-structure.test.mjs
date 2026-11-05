@@ -7,24 +7,26 @@ import {execFile} from 'node:child_process';
 import {promisify} from 'node:util';
 import {buildMathLiveEditor} from '../packaging/mathlive-editor.mjs';
 import {makeOle,oleLatex,inspectOle} from '../src/native.mjs';
+import {renderNative} from '../src/font-renderer.mjs';
 
 const execute=promisify(execFile),root=resolve(new URL('..',import.meta.url).pathname);
-test('Actual MathLive editing exposes root scope and changes only the selected sum limits',{skip:process.platform!=='darwin',timeout:60000},async t=>{
+test('Actual MathLive edits nested structure and integral limits with Native round trips',{skip:process.platform!=='darwin',timeout:60000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'equationlab-editor-structure-'));t.after(()=>rm(directory,{recursive:true,force:true}));
  await cp(join(root,'node_modules/mathlive/fonts'),join(directory,'fonts'),{recursive:true});
  await buildMathLiveEditor({root,mathliveDirectory:join(root,'node_modules/mathlive'),output:join(directory,'editor.js')});
- for(const file of ['editor-structure.js','native.css','style.css'])await cp(join(root,'desktop',file),join(directory,file));
+ for(const file of ['editor-structure.js','editable-macros.js','catalog-macros.js','native.css','style.css'])await cp(join(root,'desktop',file),join(directory,file));
  const index=await readFile(join(root,'desktop/index.html'),'utf8'),panel=index.split('\n').find(line=>line.includes('id="editor-structure"'));
  assert.ok(panel,'the native-layout editor includes visible structure controls');
  const script=String.raw`
  const field=document.getElementById('formula');field.mathVirtualKeyboardPolicy='manual';
+ field.macros={...field.macros,...prepareEquationMacros(window.equationCatalogMacros)};installEquationMacroEditing(field);
  const controls=installEquationStructureControls(field),picker=document.querySelector('#editor-structure select'),exit=document.querySelector('[data-structure="exit"]'),select=document.querySelector('[data-structure="select"]');
  const settle=()=>new Promise(r=>setTimeout(r,80));
  const check=(condition,message)=>{if(!condition)throw Error(message)};
  const at=value=>field._mathfield.model.atoms.find(a=>a.value===value&&a.type!=='first');
  const place=atom=>{field.selection=field._mathfield.model.offsetOf(atom);controls.refresh();};
  const context=()=>equationEditorContext(field);
- const snapshots={};
+ const snapshots={integrals:[],reopened:[],reopenedEdited:[]};
  globalThis.ready=(async()=>{
   await document.fonts.ready;await new Promise(r=>setTimeout(r,1000));
   check(MathfieldElement.version==='0.111.1','the adapter must run against its pinned MathLive version');
@@ -61,10 +63,47 @@ test('Actual MathLive editing exposes root scope and changes only the selected s
   field.readOnly=true;controls.refresh();check(picker.disabled&&exit.disabled,'read-only formulas cannot change structure');
   check(setEquationOperatorLimits(field,'adjacent')===false,'the programmatic command also respects read-only mode');
   field.readOnly=false;window.workbenchEnglish=true;controls.refresh();check(picker.options[2].textContent==='Right side','control labels follow the workbench language');
+  const originalKeybindings=JSON.stringify(field.keybindings);
+  for(const command of ['int','iint','iiint','oint','oiint','oiiint','varointclockwise','ointctrclockwise']){
+   field.value='\\frac{x+\\'+command+'_{a}^{b}y}{r}+\\sum_{j=1}^{n}z';place(at('a'));
+   check(context().operator?.command==='\\'+command,command+': actual MathLive exposes the owning operator');
+   check(context().path.includes('下限'),command+': integral limits are labelled as limits');
+   const selection=JSON.stringify(field.selection);
+   check(setEquationOperatorLimits(field,'above-below'),command+': stacked placement is supported');
+   check(field.value.includes('\\'+command+'\\limits'),command+': only the selected integral is stacked');
+   check(!field.value.includes('\\sum\\limits'),command+': other operators retain their placement');
+   check(JSON.stringify(field.selection)===selection,command+': limit selection is retained');snapshots.integrals.push(field.value);
+   check(setEquationOperatorLimits(field,'adjacent'),command+': right-side placement is supported');snapshots.integrals.push(field.value);
+   check(field.value.includes('\\'+command+'\\nolimits'),command+': right-side placement is serialized');
+   const before=field.value;window.editorIsComposing=()=>true;controls.refresh();
+   check(picker.disabled&&!setEquationOperatorLimits(field,'above-below')&&!navigateEquationStructure(field,'exit'),command+': composing input cannot be changed or moved');
+   check(field.value===before&&JSON.stringify(field.selection)===selection,command+': composition preserves content and selection');window.editorIsComposing=()=>false;
+   controls.refresh();field.executeCommand('moveToNextGroup');check(field.value===before,command+': existing Tab navigation retains content');
+   field.executeCommand('moveToNextChar');check(field.value===before,command+': existing arrow navigation retains content');
+  }
+  check(JSON.stringify(field.keybindings)===originalKeybindings,'structure controls do not replace MathLive keybindings');
+  for(const [index,input] of window.nativeReopenedIntegrals.entries()){
+   field.value=safeEquationMacroLatex(input);place(at('a'));syncEquationMacros(field);snapshots.reopened.push(field.value);
+   await settle();const symbols=[...field.shadowRoot.querySelectorAll('.ML__op-symbol, [data-equationlab-owner="mtbigop"][data-equationlab-arg="3"]')].map(symbol=>symbol.getBoundingClientRect()),upper=field.shadowRoot.querySelector('[data-equationlab-owner="mtbigop"][data-equationlab-arg="6"]')?.getBoundingClientRect()??field.getElementInfo(field._mathfield.model.offsetOf(at('b')))?.bounds;
+   check(symbols.length>0,'reopened integral '+index+' has painted operator glyphs');
+   check(!!upper,'reopened integral '+index+' has a painted upper limit');
+   const glyph={left:Math.min(...symbols.map(rect=>rect.left)),right:Math.max(...symbols.map(rect=>rect.right)),top:Math.min(...symbols.map(rect=>rect.top)),bottom:Math.max(...symbols.map(rect=>rect.bottom))};
+   check(index%2===0?(upper.top+upper.bottom)/2<(glyph.top+glyph.bottom)/2-(glyph.bottom-glyph.top)/4:upper.left>=glyph.right-2,'reopened integral '+index+' paints its native limits placement: '+JSON.stringify({upper:upper.toJSON?upper.toJSON():upper,glyph}));
+   const lower=field._mathfield.model.offsetOf(at('a'));field.selection={ranges:[[lower-1,lower]]};field.insert('q',{selectionMode:'after'});syncEquationMacros(field);snapshots.reopenedEdited.push(field.value);
+  }
+  field.value='\\mtintB{1}{x}{a}{b}';place(at('a'));const preserved=field.value;
+  check(picker.disabled&&!setEquationOperatorLimits(field,'adjacent'),'a native integral template does not offer a placement edit that would be lost');
+  syncEquationMacros(field);snapshots.preservedIntegral=field.value;check(field.value===preserved,'a disabled placement action retains all original native fields');
+  field.value='\\int_{a}^{b}x';place(at('a'));field.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));
+  check(!setEquationOperatorLimits(field,'above-below')&&!navigateEquationStructure(field,'select'),'local composition events also block structural changes');
+  field.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));field.dispatchEvent(new CompositionEvent('compositionstart',{bubbles:true}));await settle();
+  check(!setEquationOperatorLimits(field,'above-below'),'a previous composition commit cannot unlock a newly started composition');
+  field.dispatchEvent(new CompositionEvent('compositionend',{bubbles:true}));await settle();check(setEquationOperatorLimits(field,'above-below'),'controls resume after composition commits');
   field.value=snapshots.root;place(at('q'));await settle();snapshots.finalContext=context();
  })().catch(error=>{snapshots.error=error.message;snapshots.stack=error.stack;});
  globalThis.readout=()=>snapshots;`;
- const html=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="native.css"><script>window.requestAnimationFrame=cb=>setTimeout(()=>cb(performance.now()),16);window.cancelAnimationFrame=clearTimeout;</script><script src="editor.js"></script><script>MathfieldElement.fontsDirectory='fonts';MathfieldElement.soundsDirectory=null;</script><body class="native-layout"><main><section class="editor-card"><div class="math-viewport"><div class="math-wrap"><math-field id="formula"></math-field></div></div>${panel}</section></main><script src="editor-structure.js"></script><script>${script}</script>`;
+ const reopened=['int','iint','iiint','oint','oiint','oiiint','varointclockwise','ointctrclockwise'].flatMap(command=>['limits','nolimits'].map(placement=>oleLatex(makeOle('\\'+command+'\\'+placement+'_{a}^{b}x'))));
+ const html=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="native.css"><script>window.requestAnimationFrame=cb=>setTimeout(()=>cb(performance.now()),16);window.cancelAnimationFrame=clearTimeout;window.nativeReopenedIntegrals=${JSON.stringify(reopened)};</script><script src="editor.js"></script><script>MathfieldElement.fontsDirectory='fonts';MathfieldElement.soundsDirectory=null;</script><script src="catalog-macros.js"></script><script src="editable-macros.js"></script><body class="native-layout"><main><section class="editor-card"><div class="math-viewport"><div class="math-wrap"><math-field id="formula"></math-field></div></div>${panel}</section></main><script src="editor-structure.js"></script><script>${script}</script>`;
  await writeFile(join(directory,'fixture.html'),html);
  const binary=join(directory,'webkit');await execute('/usr/bin/swiftc',[join(root,'tests/fixtures/radical-webkit.swift'),'-o',binary],{timeout:25000});
  await execute(binary,[join(directory,'fixture.html'),join(directory,'rendered')],{timeout:30000});
@@ -79,4 +118,10 @@ test('Actual MathLive editing exposes root scope and changes only the selected s
  assert.deepEqual(variations(result.stacked),[0x70,0x70],'the native record stores above/below placement');
  assert.deepEqual(variations(result.fractionAdjacent),[0x30],'right-side placement survives inside a numerator');
  assert.deepEqual(variations(result.fractionStacked),[0x70],'stacked placement survives inside a numerator');
+ assert.equal(result.integrals.length,16);
+ for(const latex of result.integrals){const ole=makeOle(latex);assert.deepEqual(makeOle(oleLatex(ole)),ole);assert.ok((await renderNative(ole,{raster:false})).svg.includes('<svg'),'edited integral has a native preview');}
+ assert.equal(result.reopened.length,reopened.length);
+ for(let index=0;index<reopened.length;index++)assert.deepEqual(makeOle(result.reopened[index]),makeOle(reopened[index]),`actual MathLive reopen preserves the integral Native record ${index}: ${reopened[index]} -> ${result.reopened[index]}`);
+ for(let index=0;index<reopened.length;index++)assert.deepEqual(makeOle(result.reopenedEdited[index]),makeOle(reopened[index].replace('{a}','{q}')),'editing a reopened lower limit preserves the original integral glyph/template');
+ assert.deepEqual(makeOle(result.preservedIntegral),makeOle('\\mtintB{1}{x}{a}{b}'));
 });

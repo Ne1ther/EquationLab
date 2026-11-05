@@ -57,10 +57,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return false
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
-        guard let bridge, bridge.hasWordSessionOrRequest else { bridge?.stopEngine(); bridge?.stopOwnedNativeService(); return .terminateNow }
+        guard let bridge else { return .terminateNow }
+        guard bridge.hasWordSessionOrRequest else {
+            bridge.prepareDraftToQuit { accepted in
+                if accepted { bridge.stopEngine(); bridge.stopOwnedNativeService() }
+                sender.reply(toApplicationShouldTerminate: accepted)
+            }
+            return .terminateLater
+        }
         bridge.prepareToClose { [weak self] saved in
-            if saved { self?.bridge?.stopEngine(); self?.bridge?.stopOwnedNativeService() }
-            sender.reply(toApplicationShouldTerminate: saved)
+            guard saved else { sender.reply(toApplicationShouldTerminate: false); return }
+            self?.bridge?.prepareDraftToQuit { accepted in
+                if accepted { self?.bridge?.stopEngine(); self?.bridge?.stopOwnedNativeService() }
+                sender.reply(toApplicationShouldTerminate: accepted)
+            }
         }
         return .terminateLater
     }

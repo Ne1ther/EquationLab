@@ -83,6 +83,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     @Published var wordApplicationVersion = ""
     @Published var wordOfficeAccessRequired = false
     @Published var wordPluginSetupPending = false
+    @Published var wordPluginInstallationPending = false
     var deferredWordSetupPresented = false
     var wordOfficeAccessURL: URL?
     @Published var wordSessionActive = false
@@ -419,6 +420,19 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             }
         }
     }
+    func prepareDraftToQuit(_ completion: @escaping (Bool) -> Void) {
+        guard let webView, editorReady else { completion(true); return }
+        webView.callAsyncJavaScript("return await window.nativeFlushDraft?.() ?? true", arguments: [:], in: nil, in: .page) { [weak self] result in
+            if case .success(let value) = result, value as? Bool == true { completion(self?.hasWordSessionOrRequest != true); return }
+            guard let self else { completion(false); return }
+            let alert = NSAlert()
+            alert.messageText = self.language.usesEnglish ? "Draft backup is incomplete" : "草稿备份尚未完成"
+            alert.informativeText = self.language.usesEnglish ? "Finish composing text or save the equation before quitting. You can also quit without this backup." : "可以完成输入、保存或导出公式后再退出，也可以放弃本次备份并退出。"
+            alert.addButton(withTitle: self.language.usesEnglish ? "Keep editing" : "继续编辑")
+            alert.addButton(withTitle: self.language.usesEnglish ? "Quit without backup" : "放弃备份并退出")
+            completion(alert.runModal() == .alertSecondButtonReturn)
+        }
+    }
     func action(_ action: String, _ payload: [String: Any] = [:]) {
         if action == "category", let name = payload["name"] as? String, state.categories.contains(name) { state.activeCategory = name }
         let start = DispatchTime.now().uptimeNanoseconds
@@ -493,6 +507,14 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         }
         guard let id = body["id"] as? String else { return }
         var payload = body["payload"] as? [String: Any] ?? [:]
+        if action == "confirmDraftDiscard" {
+            let alert = NSAlert()
+            alert.messageText = language.usesEnglish ? "Discard the recovery draft?" : "丢弃这份恢复草稿？"
+            alert.informativeText = language.usesEnglish ? "This removes only the local recovery copy. Your Word document and current editor are unchanged." : "仅删除本机的这份恢复副本，不修改 Word 文档或当前编辑内容。"
+            alert.addButton(withTitle: language.usesEnglish ? "Keep draft" : "保留草稿")
+            alert.addButton(withTitle: language.usesEnglish ? "Discard" : "丢弃")
+            reply(id, ["ok": true, "data": ["discard": alert.runModal() == .alertSecondButtonReturn]]); return
+        }
         if action == "documentToolsResult" {
             documentToolKind = payload["kind"] as? String ?? "audit"
             documentToolResult = payload["result"] as? [String: Any] ?? [:]

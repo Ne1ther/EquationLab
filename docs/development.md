@@ -10,6 +10,27 @@ swift build
 
 `macos/` 是原生界面，`desktop/` 是编辑画布，`src/` 是公式引擎与本地服务，`native-word-probe/` 是 Word 插件，`updater/` 处理更新。具体入口见[文件说明](file-guide.md)。
 
+## 当前开发中的改进
+
+侧栏现在可以显示并搜索文档里保存的公式编号，例如 `(3.28)`。编号属于载入快照；Word 重编号后会重新读取。编辑器也增加了[本机草稿恢复](draft-recovery.md)，保存请求丢失响应时会继续核对原操作，不自动重复插入。
+
+文档副本编排会读取公式所在节的纸张、页边距和等宽双栏宽度，保留左右缩进，清除独立公式段落的首行或悬挂缩进。Word 内插入和编号使用对应的宿主宏；修改后须在 Word 中编译、保存并验收，再冻结发行组件。
+
+每次原生插入使用独立文件，通过 `EquationLabInsertBody` 书签导入正文，排除源文件最后一个段落标记及其节设置。行内插入会在清除临时段落标记后恢复原正文的样式和 `ParagraphFormat`。回归时同时检查公式 Native、正文、段落样式、缩进、分栏和编号，不能只看公式是否出现。
+
+`native-word-probe/automatic-loader/build-ribbon-template.mjs` 可以刷新已编译模板中的功能区资源，保留 VBA 项目字节。图标更新后仍需核对新模板哈希和 Word 冷启动；打包入口会拒绝与当前图标资源不一致的模板。
+
+长文档性能测试可使用项目脚本，输入文件按只读方式处理：
+
+```sh
+node scripts/benchmark-document.mjs --output .local/document-benchmark
+node scripts/benchmark-document.mjs --document /path/to/local-copy.docx --counts none --scenario sidebar --output /path/to/private-report
+```
+
+脚本测量后台解析、列表缓存、缩略图、只读预检和预览排队，不操作 Word。报告中的后台耗时不能代替 Word 首次可编辑或保存耗时。私人论文和结果保留在本地，不作为公开测试夹具。
+
+The development build adds number search, local draft recovery and receipt reconciliation after a lost save response. Copy arrangement reads section geometry, including two equal-width columns. Native insertion imports a bookmarked body from a unique file, keeping the source’s final section mark out of Word; inline insertion restores the surrounding paragraph’s style and formatting. Compile and verify the matching macros in Word before freezing them. Refreshing ribbon artwork preserves the compiled VBA but changes the template hash, so cold-start evidence must use the refreshed file. Offline benchmarks measure backend work separately from live Word behavior.
+
 ## Word 联调
 
 本地迭代直接部署用户可写的测试 App，不反复使用安装器或管理员密码：
