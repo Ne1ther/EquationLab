@@ -28,12 +28,15 @@
 | `src/integral-templates.mjs` | 伸缩积分的原生轮廓模板 / Integral outlines |
 | `src/typography-native.mjs` | 字体、字号、间距和相关原生设置 / Typography settings |
 | `src/document.mjs` | DOCX、嵌入公式、图片和文档编排 / Word documents |
+| `src/document-geometry.mjs` | 读取公式所在节的版心、分栏及段落缩进 / Section, column and paragraph geometry |
 | `src/layout.mjs` | 公式位置、编号样式和引用域 / Equation placement and numbering |
 | `src/word-numbering.mjs` | 从 Word 文档读取章、节、编号和引用详情 / Document numbering context |
 | `src/word-native-session.mjs` | Word 编辑与空白插入会话、回存确认、取消和公式切换 / Word edit and insertion sessions |
 | `src/word-snapshot.mjs / src/word-snapshot-parts.mjs` | 读取保存文档的精简快照、合并分批正文与资源关系 / Compact saved snapshots and joined range captures |
 | `src/word-document-requests.mjs` | 文档重开与精确公式请求、状态和取消 / Document reopen requests and cancellation |
 | `src/desktop-rpc.mjs` | 原生 App 与引擎之间的命令接口 / App-to-engine commands |
+| `src/draft-store.mjs` | 本机草稿的保存、读取和清理 / Local draft storage |
+| `src/render-scheduler.mjs` | 安排预览任务、并发和缓存 / Preview scheduling and caching |
 | `src/app-services.mjs / src/server.mjs` | 本机后台服务和 Word 通信 / Local services |
 | `src/cli.mjs / src/cli-entry.mjs` | 命令行入口与路径识别 / CLI entry points |
 | `src/eqp.mjs` | 公式偏好文件的读写 / Preference files |
@@ -71,7 +74,7 @@
 | 文件或目录 / Path | 做什么 / Purpose |
 | --- | --- |
 | `native-word-probe/automatic-loader/EquationLabDynamicStartupLoader.bas` | 在 Word Startup 位置加载自带原生组件 / Native component loading |
-| `native-word-probe/automatic-loader/EquationLabEntryPoints.bas` | 自动启动和文档事件初始化 / Startup entry points |
+| `native-word-probe/automatic-loader/AutoExec.bas` | Word 自动启动入口，调用加载器初始化 / Word startup entry point |
 | `native-word-probe/automatic-loader/EquationLabDocumentContext.bas` | 整篇公式捕获、字段选区定位、单次激活、插入和后台保存 / Document capture, field selection, single activation, insertion and background saves |
 | `native-word-probe/automatic-loader/EquationLabWordEvents.cls` | Word 文档、窗口和选择事件 / Word events |
 | `native-word-probe/automatic-loader/EquationLabRibbon.bas` | 插入、编辑、编号、引用等功能区命令 / Ribbon commands |
@@ -90,6 +93,7 @@
 | `scripts/build/word-test.mjs` | 组装、部署和核对本地 Word 测试副本 / Local Word test bundle and deployment checks |
 | `scripts/package_release.sh` | 构建独立 App 和完整安装包 / Release entry point |
 | `scripts/build/build-word-demo.mjs` | 生成公开的 30 公式演示 / Demo generator |
+| `scripts/benchmark-document.mjs` | 只读测试文档解析、列表和缩略图的后台耗时 / Read-only document benchmarks |
 | `scripts/build/` | 生成模板预览、渲染资源和演示文档 / Build-time resources |
 | `packaging/release.json / packaging/update-notes.json` | 发布版本、构建号和中英文更新内容 / Release settings and notes |
 | `packaging/build-release.mjs` | 组装 App、运行时、依赖和 PKG / App and package builder |
@@ -115,10 +119,13 @@
 | `docs/install.md / docs/features.md` | 安装、使用、编号及间距设置 / User guides |
 | `docs/development.md / packaging/README.md` | 编译、测试和完整打包 / Developer guides |
 | `docs/updates.md / docs/releases.md` | 更新方式和当前版本记录 / Update and release notes |
+| `docs/draft-recovery.md` | 找回本机未完成的公式 / Recovering unfinished equations |
 | `docs/source-publication.md` | 源码、发布附件和本地材料的维护方式 / Source and release workflow |
 | `docs/feature-parity.md` | 当前功能入口与相关测试 / Feature and test map |
 | `docs/ocr.md` | 图片识别的后续计划 / OCR plan |
 | `docs/examples/` | 三节三十公式的 Word 和 PDF 演示 / Public demo documents |
 | `docs/preview/` | 真实 App 截图和演示预览 / Actual screenshots |
 
-本地的 `research/`、`.local/`、`evidence/` 和 `output/` 用于存放原始资料、私钥与验证记录，已配置在忽略列表中；`dist/` 仅保留当前安装包。这些内容均不提交到 GitHub 仓库。
+本地的 `research/`、`.local/`、`evidence/` 和 `output/` 用于存放原始资料、私钥与验证记录，已配置在忽略列表中；`dist/` 保留当前发行包。`.local/README.md` 汇总本机当前版本、Word 编译输入和验收记录的位置。这些本地内容不提交到 GitHub 仓库。
+
+Local inputs and validation records stay in the ignored directories above. `dist/` holds the current release, and the local `.local/README.md` points to the matching Word inputs and test records.

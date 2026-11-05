@@ -10,7 +10,7 @@ swift build
 
 `macos/` 是原生界面，`desktop/` 是编辑画布，`src/` 是公式引擎与本地服务，`native-word-probe/` 是 Word 插件，`updater/` 处理更新。具体入口见[文件说明](file-guide.md)。
 
-## 当前开发中的改进
+## 0.6.13 维护要点
 
 侧栏现在可以显示并搜索文档里保存的公式编号，例如 `(3.28)`。编号属于载入快照；Word 重编号后会重新读取。编辑器也增加了[本机草稿恢复](draft-recovery.md)，保存请求丢失响应时会继续核对原操作，不自动重复插入。
 
@@ -29,7 +29,7 @@ node scripts/benchmark-document.mjs --document /path/to/local-copy.docx --counts
 
 脚本测量后台解析、列表缓存、缩略图、只读预检和预览排队，不操作 Word。报告中的后台耗时不能代替 Word 首次可编辑或保存耗时。私人论文和结果保留在本地，不作为公开测试夹具。
 
-The development build adds number search, local draft recovery and receipt reconciliation after a lost save response. Copy arrangement reads section geometry, including two equal-width columns. Native insertion imports a bookmarked body from a unique file, keeping the source’s final section mark out of Word; inline insertion restores the surrounding paragraph’s style and formatting. Compile and verify the matching macros in Word before freezing them. Refreshing ribbon artwork preserves the compiled VBA but changes the template hash, so cold-start evidence must use the refreshed file. Offline benchmarks measure backend work separately from live Word behavior.
+Version 0.6.13 includes number search, local draft recovery and receipt reconciliation after a lost save response. Copy arrangement reads section geometry, including two equal-width columns. Native insertion imports a bookmarked body from a unique file, keeping the source’s final section mark out of Word; inline insertion restores the surrounding paragraph’s style and formatting. Compile and verify the matching macros in Word before freezing them. Refreshing ribbon artwork preserves the compiled VBA but changes the template hash, so cold-start evidence must use the refreshed file. Offline benchmarks measure backend work separately from live Word behavior.
 
 ## Word 联调
 

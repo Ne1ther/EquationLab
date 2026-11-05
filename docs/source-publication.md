@@ -20,6 +20,8 @@
 
 `dist/` 只保留当前安装包。旧构建、缓存和已替换的 App 可以清理；原始材料、宿主编译模板、验证记录和活动 Git 检查点保留。
 
+发布后在 `.local/README.md` 记下当前发行包、配套 Word 组件和验收记录的位置。清理旧 App 或安装包前，先保留其中的编译模板、helper、版本元数据和散列；测试收据按当时的构建保留，旧路径不再当作当前运行入口。视频成片和工程源文件也保留，依赖及渲染缓存可重新生成。
+
 如果需要打包一份干净的源码 ZIP，可以运行 `node packaging/export-source.mjs --review --output <新目录>`。该脚本会根据白名单清单导出，自动排除本地材料、依赖目录和私钥；它只是辅助打包脚本，不会替代主仓库的日常提交与推送。
 
 资源来源与许可见 [THIRD_PARTY_NOTICES.md](../THIRD_PARTY_NOTICES.md)。
@@ -27,3 +29,5 @@
 ---
 
 Maintain and push the source from this checkout. Publish the installer, signed update metadata, and checksums through GitHub Releases. Keep both README languages and their export templates in sync. Original inputs, host-compiled templates, validation records, private keys, and active Git checkpoints stay local; only replaceable old builds are cleaned up.
+
+After a release, update the local index with the package, Word components, and validation records. Preserve compiled inputs and metadata before removing old bundles. Keep video exports and project sources; dependencies and render caches can be rebuilt.
