@@ -86,17 +86,17 @@ Numbering preflight still skips the extra hidden VML shapes that Word creates wh
 
 ### 清理后恢复开发输入
 
-本地清理可移除 `node_modules/`、旧测试 App、展开包和独立运行时缓存；继续开发先运行 `npm ci`。`dist/` 保留当前 PKG、签名更新清单、校验值和报告，展开的 App 可按需恢复。以下仅示例恢复旧版 0.6.13/build101 正式发行 seed；如果旧包已清理，请改用实际保留的匹配版本：
+本地清理可移除 `node_modules/`、旧测试 App、展开包和独立运行时缓存；继续开发先运行 `npm ci`。`dist/` 保留当前 PKG、签名更新清单、校验值和报告，展开的 App 可按需恢复。需要发行 App 作为 seed 时，可解包当前安装包：
 
 ```sh
 equationlab_pkg_tmp="$(mktemp -d "${TMPDIR:-/tmp}/equationlab-seed.XXXXXX")"
-pkgutil --expand-full dist/0.6.13-build101/Equation-Lab-0.6.13.pkg "$equationlab_pkg_tmp/expanded"
+pkgutil --expand-full dist/0.6.14-build102/Equation-Lab-0.6.14.pkg "$equationlab_pkg_tmp/expanded"
 export EQUATIONLAB_WORD_TEST_SEED="$equationlab_pkg_tmp/expanded/component.pkg/Payload/Applications/Equation Lab.app"
 ```
 
 然后使用上面的 `--word-test --build-only`；完成构建后可清除这份临时解包目录，并取消 `EQUATIONLAB_WORD_TEST_SEED`。解包不运行安装器，也不修改已安装 App 或 Word 插件。具体版本、配套组件、保留原稿及重复夹具的旧路径映射，以本机 `.local/README.md` 为准。重跑历史验证前，从保留文件复制独立夹具，不直接修改归档原稿。
 
-上例 0.6.13 PKG 复原的是原来的 0.0.39 组件；0.6.14 使用 0.0.40 和重新编译的模板，不能直接将旧 PKG 作为匹配 seed。请使用当前完整测试 App、匹配的新发行包，或本机保留的新宿主验收资源。构建入口会核对版本和组件身份。
+0.6.14 使用 0.0.40 和重新编译的模板；旧版 0.6.13 PKG 中的 0.0.39 组件不能作为当前匹配 seed。也可直接使用已安装的完整 0.6.14 App。构建入口会核对版本和组件身份。
 
 本机历史 DOCX 和大型报告、日志还可无损归档。常用原稿、已验收 Word 组件和小型收据直接保留；已归档文件的原路径和散列保存在 `.local/archives/20261109-evidence/manifest.json`。恢复工具不依赖 npm 包：
 
