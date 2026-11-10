@@ -7,6 +7,13 @@ struct WorkbenchCommands: Commands {
         bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
     }
     var body: some Commands {
+        commandsPart1
+        commandsPart2
+        commandsPart3
+        commandsPart4
+    }
+
+    @CommandsBuilder private var commandsPart1: some Commands {
         CommandGroup(after: .appInfo) {
             Button(bridge.t("检查更新…")) { updater.check() }
         }
@@ -31,6 +38,9 @@ struct WorkbenchCommands: Commands {
             Divider()
             Button(bridge.t("关闭窗口")) { bridge.editorWindow?.performClose(nil) }.keyboardShortcut("w")
         }
+    }
+
+    @CommandsBuilder private var commandsPart2: some Commands {
         CommandGroup(replacing: .undoRedo) {
             Button(bridge.t("撤销公式编辑")) { bridge.action("click", ["id": "undo"]) }.keyboardShortcut("z").disabled(bridge.state.busy || bridge.state.readOnly)
             Button(bridge.t("重做公式编辑")) { bridge.action("click", ["id": "redo"]) }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(bridge.state.busy || bridge.state.readOnly)
@@ -79,6 +89,9 @@ struct WorkbenchCommands: Commands {
             Divider()
             Button(bridge.t("收藏当前公式")) { bridge.action("click", ["id": "add-favorite"]) }.disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
         }
+    }
+
+    @CommandsBuilder private var commandsPart3: some Commands {
         CommandMenu(bridge.t("格式")) {
             Button(bridge.t("字体与样式…")) { bridge.inspectorTab = .style; bridge.showInspector = true }
             Button(bridge.t("定义字号…")) { bridge.inspectorTab = .style; bridge.showInspector = true }
@@ -105,6 +118,9 @@ struct WorkbenchCommands: Commands {
         CommandMenu(bridge.t("大小")) {
             Button(bridge.t("定义标准与额外字号…")) { bridge.inspectorTab = .style; bridge.showInspector = true }
         }
+    }
+
+    @CommandsBuilder private var commandsPart4: some Commands {
         CommandMenu("Word") {
             Button(bridge.t("安装 / 管理 Office 插件…")) { bridge.showOfficePlugins = true }
             Divider()
