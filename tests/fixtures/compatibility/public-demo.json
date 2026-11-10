@@ -1,0 +1,12 @@
+{
+  "schema": "equationlab.public-demo-regression.v1",
+  "document": "docs/examples/equation-lab-30-formulas.docx",
+  "sha256": "24f1d2a3a58b654da64dbb889bc9071d121ee7b2c9df0b37ac872386a0e5ba68",
+  "provenance": {
+    "kind": "project-generated-public-demo",
+    "generator": "scripts/build/build-word-demo.mjs",
+    "claim": "Published project demo; not established as an independently captured host save."
+  },
+  "count": 30,
+  "referenceTargets": [9, 26]
+}

@@ -9,6 +9,9 @@ test('benchmark refuses unbounded fixture sizes and duplicate cases',()=>{
  const sidebar=parseArguments(['--counts','none','--document','authorized-copy.docx','--scenario','sidebar']);
  assert.deepEqual(sidebar.counts,[]);assert.equal(sidebar.scenario,'sidebar');
  assert.throws(()=>parseArguments(['--scenario','unknown']),/Unknown benchmark scenario/);
+ const frozen=parseArguments(['--counts','none','--reuse-report','baseline/report.json']);
+ assert.deepEqual(frozen.counts,[]);assert.ok(frozen.reuseReport.endsWith('/baseline/report.json'));
+ assert.throws(()=>parseArguments(['--reuse-report','baseline.json','--document','new.docx']),/either frozen report/);
 });
 
 test('benchmark distributions count superseded work without pretending it executed',()=>{

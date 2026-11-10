@@ -41,7 +41,6 @@ globalThis.readout=()=>out;
 
 test('real WebKit and pinned MathLive deliver internal IME events to production editor',{skip:process.platform!=='darwin',timeout:65000},async t=>{
  const directory=await mkdtemp(join(tmpdir(),'equationlab-ime-webkit-'));t.after(()=>rm(directory,{recursive:true,force:true}));
- const evidence=join(root,'.local/ime-20261031/r2/webkit');await mkdir(evidence,{recursive:true});
  await cp(join(root,'desktop'),directory,{recursive:true});await mkdir(join(directory,'vendor'),{recursive:true});
  const adapter=await buildMathLiveEditor({root,mathliveDirectory:join(root,'node_modules/mathlive'),output:join(directory,'vendor/mathlive.min.js')});
  await cp(join(root,'node_modules/mathlive/fonts'),join(directory,'vendor/fonts'),{recursive:true});
@@ -51,8 +50,7 @@ test('real WebKit and pinned MathLive deliver internal IME events to production 
  html=html.replace('<script src="app.js">',`<script>window.imeSyncs=0;const imeSync=window.syncEquationMacros;window.syncEquationMacros=(...args)=>{window.imeSyncs++;return imeSync(...args)};</script><script src="app.js">`);
  html=html.replace('</body>',`<script>${fixture}</script></body>`);await writeFile(join(directory,'index.html'),html);
  const binary=join(directory,'webkit');await run('/usr/bin/swiftc',[join(root,'tests/fixtures/ime-webkit.swift'),'-o',binary],{timeout:25000});
- try{await run(binary,[join(directory,'index.html'),join(directory,'result.json')],{timeout:35000});}
- catch(error){try{await cp(join(directory,'result.json'),join(evidence,'timeout-partial.json'));}catch{}throw error;}
+ await run(binary,[join(directory,'index.html'),join(directory,'result.json')],{timeout:35000});
  const result=JSON.parse(await readFile(join(directory,'result.json'),'utf8'));
  const versions=await run('/usr/libexec/PlistBuddy',['-c','Print :CFBundleVersion','/System/Library/Frameworks/WebKit.framework/Resources/Info.plist']);
  result.webkitFrameworkVersion=versions.stdout.trim();result.adapter=adapter;result.appSha256=createHash('sha256').update(await readFile(join(directory,'app.js'))).digest('hex');
@@ -62,7 +60,6 @@ test('real WebKit and pinned MathLive deliver internal IME events to production 
   try{const native=await desktopRequest({action:'validate',payload:{previewOnly:true,latex:row.formula}});result.nativeValidation.push({label,latex:row.formula,ok:true,nativeBytes:native.nativeBytes,warnings:native.warnings});}
   catch(error){result.nativeValidation.push({label,latex:row.formula,ok:false,error:String(error)});}
  }
- await writeFile(join(evidence,'result.json'),JSON.stringify(result,null,2)+'\n');
  assert.equal(result.error,undefined,result.error+'\n'+result.stack);assert.deepEqual(result.errors,[]);
  const get=label=>{const x=result.states.find(s=>s.label===label);assert.ok(x,label);return x;};
  assert.equal(result.mathlive,'0.111.1');assert.equal(result.sink.editable,'true');

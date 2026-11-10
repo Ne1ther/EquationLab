@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertStopped,assertBuildSafe,dependencyIdentity,requireResolvedApplication,wordTestAction,validateWordTestConfig,requireAcceptedNativeVersion,wordReceiptMatches,WORD_TEST_DESTINATION,applicationSwapPaths,validateSwapPaths,isMissingWordTestRegistration,classifyPreviousApplication,replaceApplicationAtomically} from '../scripts/build/word-test.mjs';
+import {assertStopped,assertBuildSafe,dependencyIdentity,requireResolvedApplication,wordTestAction,validateWordTestConfig,requireAcceptedNativeVersion,wordReceiptMatches,WORD_TEST_DESTINATION,applicationSwapPaths,validateSwapPaths,isMissingWordTestRegistration,classifyPreviousApplication,wordTestBaselineState,replaceApplicationAtomically} from '../scripts/build/word-test.mjs';
 
 const app='/Users/developer/Equation Lab/.local/word-test/Equation Lab.app';
 test('build-only allows other app copies but never replaces its running test copy',()=>{
@@ -69,6 +69,18 @@ function swapOperations(fault){const calls=[];let failure;
  ops.rename=async(from,to)=>{calls.push(['rename',from,to]);if(fault==='promote'&&from===swap.stage)throw Error('promote failed');};
  ops.failure=async value=>{calls.push(['failure']);failure=value;};return {ops,calls,get failure(){return failure;}};
 }
+test('an exact root or user-owned QA or release seed migrates stale state without losing either baseline',()=>{
+ const root='/Users/developer/Equation Lab',info={CFBundleIdentifier:'app.equationlab.mac',CFBundleExecutable:'EquationLab',EquationLabNode:'runtime/bin/node',CFBundleShortVersionString:'0.6.13',CFBundleVersion:'101'},old={path:'/old-baseline',bundleSha256:'old'},record={seed:{bundleSha256:'qa-hash'},baselineBackup:old},previous={info,release:{purpose:'qa'},uid:501,bundleSha256:'qa-hash'};
+ assert.equal(classifyPreviousApplication(previous,record,root,501),'baseline');
+ assert.equal(classifyPreviousApplication({...previous,uid:0},record,root,501),'baseline');
+ for(const uid of [0,501])assert.equal(classifyPreviousApplication({...previous,uid,release:{purpose:'release'}},record,root,501),'baseline');
+ for(const changed of [{uid:502},{bundleSha256:'tampered'}])assert.throws(()=>classifyPreviousApplication({...previous,...changed,release:{purpose:'release'}},record,root,501));
+ for(const changed of [{uid:502},{bundleSha256:'tampered'},{release:{purpose:'unknown'}}])assert.throws(()=>classifyPreviousApplication({...previous,...changed},record,root,501));
+ const adopted=wordTestBaselineState(record,previous,swap,'baseline');
+ assert.equal(adopted.baselineBackup.path,swap.backup);assert.equal(adopted.baselineBackup.bundleSha256,'qa-hash');assert.equal(adopted.baselineBackup.purpose,'qa');assert.deepEqual(adopted.historicalBaselines,[old]);
+ const repeated=wordTestBaselineState({...record,...adopted},previous,swap,'managed');assert.deepEqual(repeated,adopted);
+ assert.equal(record.baselineBackup,old,'classification does not rewrite the prior receipt');
+});
 test('the first release baseline is retained; managed previous copies are removed only after commit',async()=>{
  const baseline=swapOperations();await replaceApplicationAtomically(swap,true,baseline.ops);
  assert.equal(baseline.calls.some(([name])=>name==='removePrevious'),false);

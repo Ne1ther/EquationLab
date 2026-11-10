@@ -1,0 +1,31 @@
+name: Offline checks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '24.21.0'
+          cache: npm
+      - run: npm ci
+      # Node rendering tests start this CoreText helper from .build/debug.
+      - run: swift build --product EquationFontMetrics
+      - name: Node tests, including offscreen WebKit
+        run: npm test
+      - name: Swift tests
+        run: swift test
+      - name: Offline installer logic
+        run: node --test packaging/word-native-installer/installer.test.mjs

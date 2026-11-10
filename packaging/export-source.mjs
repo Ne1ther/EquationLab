@@ -16,9 +16,10 @@ for(let i=0;i<args.length;i++){
 const output = path.resolve(root, outputArgument ?? 'dist/source-review');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const roots = [
-  '.gitignore', 'AGENTS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Package.swift', 'package.json', 'package-lock.json',
+  '.gitignore', '.github', 'AGENTS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Package.swift', 'package.json', 'package-lock.json',
   'macos', 'updater', 'desktop', 'src', 'word-ribbon', 'assets/fonts', 'assets/licenses', 'font-metrics', 'tests',
   'scripts/build_and_run.sh', 'scripts/package_release.sh',
+  'scripts/benchmark-document.mjs', 'scripts/benchmark-snapshot-cache.mjs',
   'packaging', 'native-word-probe/src', 'native-word-probe/include', 'native-word-probe/Info.plist',
   'native-word-probe/script', 'native-word-probe/automatic-loader',
   'native-word-probe/transport-contract.md', 'native-word-probe/startup-receipt-contract.md',
@@ -28,6 +29,7 @@ const roots = [
   'scripts/build/check-catalog-library.mjs', 'scripts/build/check-catalog-library.swift',
   'docs/install.md', 'docs/features.md', 'docs/development.md', 'docs/releases.md', 'docs/updates.md', 'docs/ocr.md', 'docs/file-guide.md',
   'docs/source-publication.md', 'docs/feature-parity.md', 'docs/document-tools.md', 'docs/new-formula-defaults.md', 'docs/examples', 'docs/preview',
+  'docs/compatibility-regression.md',
   'design/office-product-icons',
   'design/workbench-concepts/assets/equationlab-header-mark.svg',
   'design/equation-lab-icons/v5/svg/e2-lab-orange-paper.svg',

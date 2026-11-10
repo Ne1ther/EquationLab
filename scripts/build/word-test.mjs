@@ -48,8 +48,17 @@ export function classifyPreviousApplication(previous,record,root,uid){
   if(previous.uid!==uid||!record.baselineBackup||info.EquationLabDevelopmentRoot!==root||release.developmentRoot!==root||release.purpose!=='local-word-test'||release.developmentBuild!==info.EquationLabDevelopmentBuild||record.actualInstallation?.buildId!==info.EquationLabDevelopmentBuild||record.actualInstallation?.bundleSha256!==previous.bundleSha256)throw Error('拒绝覆盖未登记或已更改的开发应用。');
   return 'managed';
  }
- if(record.baselineBackup||record.seed.bundleSha256!==previous.bundleSha256||release.purpose!=='release')throw Error('拒绝覆盖与已验收 seed 不符的发行应用。');
- return 'baseline';
+ // Adopt only a root- or current-user-owned QA/release bundle that exactly
+ // matches the complete accepted seed. A formal upgrade may supersede the
+ // recorded development installation; retain it and every earlier baseline.
+ if(['qa','release'].includes(release.purpose)&&[0,uid].includes(previous.uid)&&record.seed.bundleSha256===previous.bundleSha256)return 'baseline';
+ throw Error('拒绝覆盖与已验收 seed 不符的发行应用或 QA 应用。');
+}
+export function wordTestBaselineState(record,original,swap,kind){
+ const historicalBaselines=[...(record.historicalBaselines??[])];
+ if(kind!=='baseline')return {baselineBackup:record.baselineBackup,historicalBaselines};
+ if(record.baselineBackup&&!historicalBaselines.some(item=>item.path===record.baselineBackup.path))historicalBaselines.push(record.baselineBackup);
+ return {baselineBackup:{path:swap.backup,ownerUid:original.uid,bundleSha256:original.bundleSha256,version:original.info.CFBundleShortVersionString,build:original.info.CFBundleVersion,purpose:original.release.purpose,createdAt:new Date().toISOString()},historicalBaselines};
 }
 // All filesystem/service actions are injected so failure boundaries can be
 // tested without touching Applications, LaunchServices, Word or launchd.
@@ -170,7 +179,7 @@ export async function buildWordTestBundle({root,buildDirectory}){
   const engineVersion=await command(path.join(resources,'runtime/bin/node'),['--input-type=module','-e','const {pathToFileURL}=await import("node:url");const {APP_VERSION}=await import(pathToFileURL(process.argv[1]));process.stdout.write(APP_VERSION);',path.join(engine,'src/version.mjs')],{cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'}});
   if(engineVersion!==config.version)throw Error('Bundled engine and App versions differ.');
   const previousRecord=await readJson(paths.record).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
-  const built={schema:'equationlab.word-test-deployment.v1',id,status:'built-not-deployed',builtAt:new Date().toISOString(),buildApp:paths.app,app:paths.destination,developmentRoot:root,bundleIdentifier:WORD_TEST_BUNDLE_ID,version:config.version,build:config.build,configuration:'release',appExecutableSha256:sha(await fs.readFile(path.join(stage,'Contents/MacOS/EquationLab'))),bundle:await inventory(stage),runtime:{version:config.nodeVersion,sha256:seed.runtimeSha256},seed:{app:seed.app,version:seed.info.CFBundleShortVersionString,build:seed.info.CFBundleVersion,bundleSha256:seed.bundleSha256,lockSha256:seed.lockSha256},native:{version:native.manifest.nativeVersion,sourceVersion:seed.sourceNativeVersion,reusedAcceptedArtifacts:true,helperSha256:native.manifest.bundle.binarySha256,templateSha256:native.manifest.template.sha256,templateBuildId:native.manifest.template.buildId,artifactManifestSha256:native.manifestSha256},checks:{strictSignature:true,relocatedEngine:true,engineVersionBound:true,nativeInputsPreserved:true,bundledRuntimePreserved:true,actualWordUsed:false,installerRun:false,launchServicesModified:false},baselineBackup:previousRecord?.baselineBackup??null,actualInstallation:previousRecord?.actualInstallation??null,deployment:null};
+  const built={schema:'equationlab.word-test-deployment.v1',id,status:'built-not-deployed',builtAt:new Date().toISOString(),buildApp:paths.app,app:paths.destination,developmentRoot:root,bundleIdentifier:WORD_TEST_BUNDLE_ID,version:config.version,build:config.build,configuration:'release',appExecutableSha256:sha(await fs.readFile(path.join(stage,'Contents/MacOS/EquationLab'))),bundle:await inventory(stage),runtime:{version:config.nodeVersion,sha256:seed.runtimeSha256},seed:{app:seed.app,version:seed.info.CFBundleShortVersionString,build:seed.info.CFBundleVersion,bundleSha256:seed.bundleSha256,lockSha256:seed.lockSha256},native:{version:native.manifest.nativeVersion,sourceVersion:seed.sourceNativeVersion,reusedAcceptedArtifacts:true,helperSha256:native.manifest.bundle.binarySha256,templateSha256:native.manifest.template.sha256,templateBuildId:native.manifest.template.buildId,artifactManifestSha256:native.manifestSha256},checks:{strictSignature:true,relocatedEngine:true,engineVersionBound:true,nativeInputsPreserved:true,bundledRuntimePreserved:true,actualWordUsed:false,installerRun:false,launchServicesModified:false},historicalBaselines:previousRecord?.historicalBaselines??[],baselineBackup:previousRecord?.baselineBackup??null,actualInstallation:previousRecord?.actualInstallation??null,deployment:null};
   // Recheck just before replacing a previous user test copy. Never overwrite
   // a running editor, even when the build was started with --build-only.
   await assertBuildTargetIdle(paths.app);
@@ -264,8 +273,8 @@ async function deploy(root){
   rename:async(from,to)=>{if(await present(to))throw Error('拒绝覆盖已存在的目标：'+to);await fs.rename(from,to);if(to===swap.destination)publishedAt=new Date().toISOString();},
   refreshRegistration,updateUserInstallation:()=>updateExisting(swap.destination),
   verifyInstalled:async installed=>{
-   const baselineBackup=record.baselineBackup??{path:swap.backup,ownerUid:original.uid,bundleSha256:original.bundleSha256,version:original.info.CFBundleShortVersionString,build:original.info.CFBundleVersion,createdAt:new Date().toISOString()};
-   pending={...record,status:'deployed',baselineBackup,actualInstallation:{app:swap.destination,buildId:record.id,bundleSha256:record.bundle.sha256,ownerUid:process.getuid()},deployment:{publishedAt,installedAt:new Date().toISOString(),buildId:record.id,installId:installed.installId,startup:installed.startup,app:swap.destination,buildApp:paths.app,helperSha256:record.native.helperSha256,templateSha256:record.native.templateSha256,previousBackup:kind==='managed'?swap.backup:null}};
+   const baselines=wordTestBaselineState(record,original,swap,kind);
+   pending={...record,status:'deployed',...baselines,actualInstallation:{app:swap.destination,buildId:record.id,bundleSha256:record.bundle.sha256,ownerUid:process.getuid()},deployment:{publishedAt,installedAt:new Date().toISOString(),buildId:record.id,installId:installed.installId,startup:installed.startup,app:swap.destination,buildApp:paths.app,helperSha256:record.native.helperSha256,templateSha256:record.native.templateSha256,previousBackup:kind==='managed'?swap.backup:null}};
    pending.verification=await verifyWordTest(root,{recordOverride:pending,persist:false});
   },commit:()=>atomicJson(paths.record,pending),
   restoreUserInstallation:async failed=>{await refreshRegistration(failed);await updateExisting(swap.destination);},

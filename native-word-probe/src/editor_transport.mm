@@ -309,6 +309,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 - (NSDictionary*)documentForOwner:(ProbeEditState*)state;
 - (void)rememberCaptureOwner:(std::uint64_t)owner context:(NSDictionary*)context digest:(NSString*)digest;
 - (void)requestCapture:(ProbeEditState*)state;
+- (BOOL)captureFailed:(ProbeEditState*)state;
 - (std::int32_t)takeCaptureRequest;
 - (std::int32_t)finishCaptureRequest:(BOOL)success;
 - (void)scheduleCaptureDeadline:(ProbeEditState*)state;
@@ -395,14 +396,14 @@ static ProbeEditorTransport* transport=nil;
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||request.claimed||self.applying||self.backgroundSave.claimed)return 0;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return 0;}
-    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;[self captureFailed:state];if(!enriching)lastCaptureState=CaptureTimedOut;return 0;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;BOOL ownerOpened=[self captureFailed:state];if(!enriching&&!ownerOpened)lastCaptureState=CaptureTimedOut;return 0;}
     request.claimed=YES;request.serial=self.captureSerial;++state.captureAttempts;return request.token;
 }
 - (std::int32_t)finishCaptureRequest:(BOOL)success {
     ProbeCaptureRequest* request=self.captureRequest;ProbeEditState* state=request.state;
     if(!request||!request.claimed||self.applying||self.backgroundSave.claimed)return -1;
     if(!state||![self active:state]||!state.awaitingDocument||state.activation!=self.activation||request.activation!=state.activation||request.epoch!=self.documentEpoch){self.captureRequest=nil;return -2;}
-    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;[self captureFailed:state];if(!enriching)lastCaptureState=CaptureTimedOut;return -4;}
+    if(state.documentDeadline.timeIntervalSinceNow<=0){self.captureRequest=nil;BOOL enriching=state.enrichingDocument;BOOL ownerOpened=[self captureFailed:state];if(!enriching&&!ownerOpened)lastCaptureState=CaptureTimedOut;return -4;}
     NSDictionary* context=self.testDocumentContext?:EquationLabCapturedDocumentContext();NSDictionary* binding=request.binding;
     BOOL hasBinding=[binding[@"identity"] isKindOfClass:NSString.class]&&[binding[@"snapshot"] isKindOfClass:NSNumber.class]&&[binding[@"index"] isKindOfClass:NSNumber.class]&&[binding[@"digest"] isEqual:state.openDigest];
     BOOL commonMatch=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"captureToken"] isKindOfClass:NSNumber.class]&&[context[@"captureToken"] intValue]==request.token&&[context[@"identity"] isKindOfClass:NSString.class]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&[context[@"snapshot"] intValue]>0&&[context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] intValue]>=0;
@@ -431,14 +432,15 @@ static ProbeEditorTransport* transport=nil;
     state.preCapturedActivation=NO;state.awaitingDocument=NO;state.captureRequested=NO;state.requiresDocumentCapture=NO;state.enrichingDocument=NO;
     lastCaptureState=CaptureReady;logOpenPhase("retained-owner-ready",state.started);[self openState:state];return YES;
 }
-- (void)captureFailed:(ProbeEditState*)state {
-    if(!state.enrichingDocument){if([self openRetainedOwner:state])return;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return;}
+- (BOOL)captureFailed:(ProbeEditState*)state {
+    if(!state.enrichingDocument){if([self openRetainedOwner:state])return YES;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return NO;}
     // Metadata failure must never cancel an already editable OLE transaction.
     // The user can continue writing or save the original owner immediately.
     state.awaitingDocument=NO;state.captureRequested=NO;state.enrichingDocument=NO;lastCaptureState=CaptureReady;
     if(self.captureRequest.state==state){self.captureRequest=nil;EquationLabDiscardDocumentParts();}
-    if(![self active:state]||!state.ticket)return;
+    if(![self active:state]||!state.ticket)return NO;
     [self request:@"/api/native-enrich" body:@{@"ticket":state.ticket,@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"initialSnapshot":state.bindingContext[@"snapshot"],@"failed":@YES} reply:^(NSDictionary*,NSError*){}];
+    return NO;
 }
 - (void)enrichDocument:(ProbeEditState*)state {
     NSDictionary* context=state.documentContext;

@@ -14,6 +14,15 @@ test('Busy dispatch rejects edits before touching the editor while leaving navig
  assert.equal(await context.window.workbenchAction('category',{name:'Greek'}),true);assert.deepEqual(actions,['Greek']);
 });
 
+test('preflight editing allows insertion commands without allowing file or navigation actions',async()=>{
+ const code=source.slice(source.indexOf('window.workbenchAction=async'),source.indexOf("document.body.classList.add('workbench-canvas')")),events=[];
+ const context=vm.createContext({window:{documentPreflightEditing:true},wordNavigating:false,busy:true,mf:{readOnly:false,focus(){events.push('focus');},insert(value){events.push(value);}},changed(){events.push('changed');},requestWorkbenchSync(){}});
+ vm.runInContext(code,context);
+ assert.equal(await context.window.workbenchAction('insertLetter',{latex:'x'}),true);assert.deepEqual(events,['focus','x','changed']);
+ for(const [action,payload]of [['click',{id:'save-edit'}],['field',{id:'layout-format'}],['exportGraphic',{format:'pdf'}],['preferencesImport',{}]])assert.equal(await context.window.workbenchAction(action,payload),false,action);
+ context.wordNavigating=true;assert.equal(await context.window.workbenchAction('insertLetter',{latex:'y'}),false);assert.deepEqual(events,['focus','x','changed']);
+});
+
 test('A busy New action is blocked; Word completion waits for the native window to hide before clearing the editor',async()=>{
  const names=['function resetNewFormula()','window.nativeNew=','async function finishWordSave()'];
  const code=names.map(name=>source.split('\n').find(line=>line.startsWith(name))).join('\n');

@@ -1,5 +1,19 @@
 # 版本记录
 
+## 0.6.14 · build102
+
+长文档的字号和编号预检现在会给编辑预览让出执行时间，预检期间仍可输入；侧栏使用更精简的文档快照，按需读取旧预览。修复新 Word 会话与文档状态竞争、宿主回退成功后被误判超时，以及后台目标更新后 Word 普通保存可能漏写的问题。
+
+Word 16.114.4 测试中，300 公式副本的末条公式通过普通保存、关闭和重开，其他公式 Native、编号及书签保持。112 公式原稿副本也通过单条保存重开；其样式预检因未知字体编码而安全跳过。Word 重存的 300 公式样本含额外隐藏图形，整篇编号预检会保守跳过；未重存的原始结构可预检 300 条。预检结果不代表已执行批量修改。
+
+[0.6.14 安装包](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.14/Equation-Lab-0.6.14.pkg)
+
+### English
+
+Long-document style and numbering preflights now make room for editor previews, and typing remains available while they run. The sidebar keeps more compact document snapshots and loads stored previews when needed. This build also fixes a Word session identity race, a false timeout after a successful host fallback, and a case where Word could omit a background equation update from an ordinary save.
+
+In Word 16.114.4 testing, the last equation in a 300-equation copy survived an ordinary save, close, and reopen; the other Native payloads, numbers, and bookmarks stayed unchanged. A separate 112-equation copy also passed a single-equation save and reopen, while its style preflight safely skipped unsupported font encodings. The Word-resaved 300-equation sample contains extra hidden shapes, so whole-document numbering preflight skips those equations; the original, unresaved structure has 300 eligible targets. A preflight does not apply changes.
+
 ## 0.6.13 · build101
 
 这版加入了保存结果核对、本机草稿恢复、侧栏正文编号和组合搜索、按版心与分栏编排、积分上下限与文档工具，以及长文档分批加载和缓存优化。

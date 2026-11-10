@@ -9,8 +9,8 @@ const bootstrap=app.slice(app.indexOf('window.wordDocumentWorkspace='),app.index
 const requestId='b'.repeat(64),oldTicket='a'.repeat(64),newTicket='c'.repeat(64);
 const document=identity=>({hasDocumentContext:true,documentIdentity:identity,documentSnapshot:1,documentName:identity+'.docx',objects:[{index:0,latex:'x',editorBaseline:'x',nativeSha256:'d'.repeat(64)}]});
 
-function editor(cancel,workspaceStatus={connected:true,revision:2,active:{identity:'B',name:'B.docx'}}){
- const calls=[],messages=[],elements=new Map(),source=document('A');
+async function editor(cancel,workspaceStatus={connected:true,revision:2,active:{identity:'B',name:'B.docx'}},{confirmed=true}={}){
+ const calls=[],messages=[],elements=new Map(),source=document('A');let publishingInitial=confirmed;
  const context=vm.createContext({
   window:{},Date,setTimeout(){},busy:false,wordNavigating:false,wordCommitRunning:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordTicket:oldTicket,source,selected:source.objects[0],mode:'rebuild',editingRuler:undefined,mf:{value:'x',readOnly:false},
   $(id){if(!elements.has(id))elements.set(id,{});return elements.get(id);},
@@ -19,7 +19,7 @@ function editor(cancel,workspaceStatus={connected:true,revision:2,active:{identi
   message:(message,error)=>messages.push({message,error}),
   native:async(action,payload)=>{
    calls.push({action,payload});
-   if(action==='wordWorkspaceStatus')return workspaceStatus;
+   if(action==='wordWorkspaceStatus')return publishingInitial?{connected:true,revision:1,active:{identity:'A',name:'A.docx'},retiredIdentities:[]}:workspaceStatus;
    if(action==='wordSessionCancel')return cancel(context);
    if(action==='confirmWordSessionSwitch')return {discard:true};
    if(action==='wordDocumentOpen')return {requestId};
@@ -29,11 +29,27 @@ function editor(cancel,workspaceStatus={connected:true,revision:2,active:{identi
  });
  vm.runInContext(workspace,context);vm.runInContext(bootstrap,context);
  context.window.wordDocumentWorkspace.accepted(source);
+ // Existing-session tests start after the host has published the accepted
+ // identity; otherwise their first status is ambiguous with a stale snapshot.
+ if(confirmed){assert.equal(await context.window.wordDocumentWorkspace.syncCurrent(),false);publishingInitial=false;}
  return {context,calls,messages,workspace:context.window.wordDocumentWorkspace};
 }
 
+test('a newly accepted ticket is not cancelled by a stale retirement before publication',async()=>{
+ const status={connected:true,revision:1,active:null,retiredIdentities:['A']};
+ const e=await editor(()=>{throw Error('Unknown or expired native session');},status,{confirmed:false});
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.equal(e.context.wordTicket,oldTicket);assert.equal(e.context.source.documentIdentity,'A');assert.equal(e.context.mf.value,'x');
+ assert.equal(e.calls.some(x=>x.action==='wordSessionCancel'||x.action==='wordDocumentOpen'),false);
+ status.revision=2;status.active={identity:'A',name:'A.docx'};status.retiredIdentities=[];
+ assert.equal(await e.workspace.syncCurrent(),false);
+ status.revision=3;status.active=null;status.retiredIdentities=['A'];
+ assert.equal(await e.workspace.syncCurrent(),true);
+ assert.equal(e.calls.filter(x=>x.action==='wordSessionCancel').length,1);assert.equal(e.context.wordTicket,null);assert.equal(e.context.mf.value,'');
+});
+
 test('Closing the source document lets a clean expired ticket detach and read the remaining document',async()=>{
- const e=editor(()=>{throw Error('Unknown or expired native session');});
+ const e=await editor(()=>{throw Error('Unknown or expired native session');});
  assert.equal(await e.workspace.syncCurrent(),true);
  assert.equal(e.context.wordTicket,null);
  assert.equal(e.context.source,null);
@@ -44,7 +60,7 @@ test('Closing the source document lets a clean expired ticket detach and read th
 });
 
 test('A closed source document does not discard a dirty draft without an explicit switch',async()=>{
- const e=editor(()=>{throw Error('Unknown or expired native session');});
+ const e=await editor(()=>{throw Error('Unknown or expired native session');});
  e.context.mf.value='x+1';
  assert.equal(await e.workspace.syncCurrent(),false);
  assert.equal(e.context.wordTicket,oldTicket);
@@ -59,7 +75,7 @@ test('A closed source document does not discard a dirty draft without an explici
 
 test('A detached blank draft with only font or ruler changes is not replaced by workspace polling',async()=>{
  for(const settings of ['font','ruler']){
-  const e=editor(()=>({}));e.context.wordTicket=null;e.context.source=null;e.context.selected=null;e.context.mf.value='';
+  const e=await editor(()=>({}));e.context.wordTicket=null;e.context.source=null;e.context.selected=null;e.context.mf.value='';
   if(settings==='font')e.context.window.desktopTypographyPatch=()=>({sizes:{0:{value:'14',unit:'pt'}}});
   else e.context.editingRuler=[{position:40,align:0}];
   assert.equal(await e.workspace.syncCurrent(),false);
@@ -68,7 +84,7 @@ test('A detached blank draft with only font or ruler changes is not replaced by 
 });
 
 test('Other cancellation failures retain the old binding and do not open another document',async()=>{
- const e=editor(()=>{throw Error('Connection refused');});
+ const e=await editor(()=>{throw Error('Connection refused');});
  assert.equal(await e.workspace.syncCurrent(),false);
  assert.equal(e.context.wordTicket,oldTicket);
  assert.equal(e.context.source.documentIdentity,'A');
@@ -78,7 +94,7 @@ test('Other cancellation failures retain the old binding and do not open another
 });
 
 test('An expired cancellation reply cannot clear a newer accepted ticket',async()=>{
- const e=editor(context=>{
+ const e=await editor(context=>{
   context.window.wordSessionGeneration++;
   context.wordTicket=newTicket;context.source=document('C');context.selected=context.source.objects[0];context.mf.value='new formula';
   throw Error('Unknown or expired native session');
@@ -91,7 +107,7 @@ test('An expired cancellation reply cannot clear a newer accepted ticket',async(
 });
 
 test('Retired dirty source detaches its expired ticket, keeps the draft settings and removes staging identity',async()=>{
- const e=editor(()=>{throw Error('Unknown or expired native session');},{connected:true,revision:3,active:{identity:'B',name:'B.docx'},retiredIdentities:['A']});
+ const e=await editor(()=>{throw Error('Unknown or expired native session');},{connected:true,revision:3,active:{identity:'B',name:'B.docx'},retiredIdentities:['A']});
  e.context.mf.value='x+1';e.context.editingRuler=[{position:3,type:1}];
  const priorChanges=e.context.changedCalls||0;
  assert.equal(await e.workspace.syncCurrent(),true);
@@ -106,7 +122,7 @@ test('Retired dirty source detaches its expired ticket, keeps the draft settings
 
 test('Closing the last clean source clears its formula so a newly opened document can be followed',async()=>{
  const status={connected:true,revision:3,active:null,retiredIdentities:['A']};
- const e=editor(()=>{throw Error('Unknown or expired native session');},status);
+ const e=await editor(()=>{throw Error('Unknown or expired native session');},status);
  assert.equal(await e.workspace.syncCurrent(),true);
  assert.equal(e.context.wordTicket,null);assert.equal(e.context.source,null);
  assert.equal(e.context.mf.value,'');assert.equal(e.context.resetCalls,1);

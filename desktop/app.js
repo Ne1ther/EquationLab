@@ -110,7 +110,7 @@ function status(title,detail,error=false,bytes='',warning=false){$('status-title
 let validationRunning=null,validationRequested=false,validationPending=false,validatedFormulaKey=null;
 function formulaKey(){return JSON.stringify([mf.value,editingRuler,source?.path??null,selected?.index??null,selected?.nativeSha256??null,selected?.error??null,mode,[...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])]);}
 function exportAvailable(){return !window.editorIsComposing?.()&&(valid||validationPending&&validatedFormulaKey!==null&&formulaKey()===validatedFormulaKey);}
-function controls(){const unavailableBinding=wordSourceUnavailable(),blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending||unavailableBinding||!exportAvailable();for(const id of ['export','save-edit','copy-png'])$(id).disabled=blocked;$('arrange-source').disabled=blocked;$('word-session-save').disabled=blocked||wordOutcomeUnknown;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending;window.syncWordEditorControls?.();window.editorStructure?.refresh();requestWorkbenchSync();}
+function controls(){const unavailableBinding=wordSourceUnavailable(),blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending||unavailableBinding||!exportAvailable();for(const id of ['export','save-edit','copy-png'])$(id).disabled=blocked;$('arrange-source').disabled=blocked;$('word-session-save').disabled=blocked||wordOutcomeUnknown;$('copy-latex').disabled=busy||wordNavigating||!mf.value.trim();document.querySelector('.editor-card').inert=busy&&!window.documentPreflightEditing||wordNavigating||!!window.wordDocumentWorkspace?.pending;window.syncWordEditorControls?.();window.editorStructure?.refresh();requestWorkbenchSync();}
 window.syncWordEditorControls=()=>{
  const english=!!window.workbenchEnglish,blocked=busy||wordNavigating||!!window.wordDocumentWorkspace?.pending,unavailable=wordSourceUnavailable();
  const cancel=english?(wordOutcomeUnknown?'Close':'Cancel'):(wordOutcomeUnknown?'关闭':'取消');
@@ -189,7 +189,7 @@ const groups={
 for(const name of Object.keys(groups)){const b=document.createElement('button');b.textContent=name;b.onclick=()=>palette(name);$('categories').append(b);}
 function palette(name){[...$('categories').children].forEach(b=>b.classList.toggle('selected',b.textContent===name));$('palette').replaceChildren();for(const [label,latex,hint]of groups[name]){const b=document.createElement('button');b.textContent=label;b.title=hint||label;b.disabled=!!selected&&(mode==='characters'||!!selected.error);if(hint){const s=document.createElement('small');s.textContent=hint;b.append(s);}b.onclick=()=>{mf.focus();mf.insert(latex,{selectionMode:'placeholder'});changed();};$('palette').append(b);}}
 palette('常用结构');$('undo').onclick=()=>editorUndo();$('redo').onclick=()=>editorUndo(true);$('keyboard').onclick=()=>{if(window.mathVirtualKeyboard.visible)window.mathVirtualKeyboard.hide();else{mf.focus();window.mathVirtualKeyboard.show();}};
-async function perform(fn,acceptWordNavigation=false){if(busy||wordNavigating&&!acceptWordNavigation)return false;busy=true;controls();message('正在处理…');try{return await fn()!==false;}catch(e){message(e.message,true);return false;}finally{busy=false;controls();for(const wake of [...idleWaiters])wake();}}
+async function perform(fn,acceptWordNavigation=false,{allowPreflightEditing=false}={}){if(busy||wordNavigating&&!acceptWordNavigation)return false;busy=true;window.documentPreflightEditing=allowPreflightEditing;controls();message('正在处理…');try{return await fn()!==false;}catch(e){message(e.message,true);return false;}finally{window.documentPreflightEditing=false;busy=false;controls();for(const wake of [...idleWaiters])wake();}}
 async function waitForEditorIdle(timeoutMs=25000){
  while(busy)await new Promise((resolve,reject)=>{
   const wake=()=>{clearTimeout(timeout);idleWaiters.delete(wake);resolve();};
@@ -538,7 +538,7 @@ function publishWorkbenchState(){
   fonts:workbenchFields('desktop-fonts','font'),sizes:workbenchFields('desktop-sizes','sizes'),extraSizes:workbenchFields('desktop-extra-sizes','extraSizes'),spaces:workbenchFields('desktop-spaces','spaces'),layout,
   numbering:selected?{hasDocumentContext:!!source.hasDocumentContext||!wordTicket,actualNumber:selected.layout?.numberText||null,chapter:selected.layout?.chapter??null,section:selected.layout?.section??null,equation:selected.layout?.equation??null,bookmark:selected.layout?.bookmarkName??null,referenceCount:selected.layout?.referenceCount??null,position:(source.documentPosition??selected.index)+1,total:source.documentTotal??source.objects.length,format:selected.layout?.numberFormat??null,mode:selected.layout?.mode??'unknown'}:null,
   statusTitle:$('status-title').textContent,statusDetail:$('status-detail').textContent,statusError:$('native-status').classList.contains('error'),statusWarning:$('native-status').classList.contains('warning'),matrix:matrixContext(),
-  draftRecovery:window.draftRecoveryState??{available:false},message:$('message').textContent,messageError:$('message').classList.contains('error'),valid,canExport:!wordNavigating&&exportAvailable(),wordOutcomeUnknown,busy:busy||wordNavigating||!!window.wordDocumentWorkspace?.pending,mode:selected?mode:'rebuild',readOnly:!!mf.readOnly||busy||wordNavigating,
+  draftRecovery:window.draftRecoveryState??{available:false},message:$('message').textContent,messageError:$('message').classList.contains('error'),valid,canExport:!wordNavigating&&exportAvailable(),wordOutcomeUnknown,busy:busy||wordNavigating||!!window.wordDocumentWorkspace?.pending,mode:selected?mode:'rebuild',readOnly:!!mf.readOnly||busy&&!window.documentPreflightEditing||wordNavigating,
   canSaveEdit:!$('save-edit').hidden,canArrange:!$('arrange-source').hidden,canFactoryReset:!$('desktop-factory-fonts').disabled,arrangeAll:$('arrange-all').checked,zoom:workbenchZoom,effectiveZoom:editorViewport.effectiveZoom,keyboardVisible:!!window.mathVirtualKeyboard?.visible,ruler:editingRuler??[]
  };
  const delta={};for(const [key,value]of Object.entries(state)){const encoded=JSON.stringify(value);if(encoded!==workbenchLastFields.get(key)){workbenchLastFields.set(key,encoded);delta[key]=value;}}
@@ -572,7 +572,8 @@ function workbenchField(id){
  return document.querySelector(kind==='font'?`.preference-font[data-id="${index}"]`:`.preference-dimension[data-kind="${kind}"][data-id="${index}"]`);
 }
 window.workbenchAction=async(action,payload={})=>{
- if((busy||wordNavigating)&&!['language','category','zoom'].includes(action))return false;
+ const passive=['language','category','zoom'].includes(action),editing=window.documentPreflightEditing&&(['template','insertCatalog','matrixInsert','editorCommand','operatorLimits','editorStructure','insertLetter'].includes(action)||action==='click'&&['undo','redo','keyboard'].includes(payload.id));
+ if((wordNavigating||busy&&!editing)&&!passive)return false;
  if(action==='click'){
   const el=$(payload.id);if(!el)throw Error('此命令尚不可用');if(el.disabled)return false;el.click();
  }else if(action==='category'){

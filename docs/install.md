@@ -1,8 +1,10 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.6.13（build101）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)**
+**[下载 Equation Lab 0.6.14（build102）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.14/Equation-Lab-0.6.14.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
+
+此安装包中的 App 使用 ad-hoc 签名，未经过 Apple 公证；macOS 可能提示无法验证开发者。请从本项目的 GitHub Releases 获取安装包，并先核对同一版本提供的 SHA256SUMS。
 
 1. 保存文档，退出 Word 和 Equation Lab。
 2. 双击安装包，按 macOS 安装器提示完成安装。
@@ -35,6 +37,8 @@
 
 先查看预检结果，再点“另存应用后的副本…”。这些工具生成新文件。保存后在 Word 中打开副本，检查排版，再点“更新编号”刷新序号和引用。[详细用法](document-tools.md)
 
+预检期间可以继续输入和更新公式预览。无法安全处理的字体编码会被跳过；Word 保存后的部分文档包含额外隐藏图形时，编号预检也可能跳过公式。请查看逐项原因，跳过不表示已经修改。
+
 ## Word 里没有显示 Equation Lab
 
 先完全退出 Word。在 Equation Lab 的 **Office 插件**窗口中安装或修复插件，再重新打开 Word。程序会检测 Word 和它的实际 Startup 位置；如果移动过 Word 或更改过启动目录，重新修复一次。
@@ -59,9 +63,11 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.6.13 (build101)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)**
+**[Download Equation Lab 0.6.14 (build102)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.14/Equation-Lab-0.6.14.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
+
+The app uses ad-hoc signing and has not been notarized by Apple, so macOS may report that it cannot verify the developer. Download the package from this project's GitHub Releases and check it against the matching SHA256SUMS first.
 
 1. Save your documents and quit Word and Equation Lab.
 2. Open the package and follow the macOS Installer.
@@ -93,6 +99,8 @@ Use the Word ribbon to adjust legacy MathType numbering. After inserting, deleti
 Under **Document → Document checks and batch tools**, check numbering and references, apply the current equation’s fonts, sizes, and spacing to a document copy, or choose a scope for Equation Lab number-format changes.
 
 Review the preview, then choose Save changed copy. These tools create a new file. Open that copy in Word, check its layout, and update numbering and references to use the changes. [Read the full guide](document-tools.md)
+
+You can keep typing and updating the equation preview during preflight. Unsupported font encodings are skipped when they cannot be handled safely. Numbering preflight may also skip equations in Word-saved documents that contain extra hidden shapes. Review each reason; skipped equations have not been changed.
 
 ## If the ribbon is missing
 

@@ -93,13 +93,13 @@ function safetyReason(object){
  return null;
 }
 function projection(plan){const {planSha256,...body}=plan;return body;}
-async function makePlan(bytes,options){
+async function makePlan(bytes,options,{checkpoint}={}){
  keys(options,['indices','typography','preset'],'batch typography options');
  const patch=options.typography===undefined?(options.preset?normalizeTypographyPreset(options.preset).typography:null):normalizeTypographyPatch(options.typography);
  const preset=options.preset===undefined?undefined:options.preset===null?null:normalizeTypographyPreset(options.preset);
  if(preset)patchTypography(makeNewOle('x'),preset.typography);
  if(!patch&&preset===undefined)throw Error('A typography patch or document preset is required');
- const document=await inspectDocx(bytes),indices=options.indices??(patch?document.objects.map(o=>o.index):[]);
+ const document=await inspectDocx(bytes,{checkpoint}),indices=options.indices??(patch?document.objects.map(o=>o.index):[]);
  if(Object.keys(document.zip.files).some(p=>/^_xmlsignatures\//.test(p)))throw Error('Signed documents cannot be changed by the copy engine');
  const settings=await settingsInfo(document.zip,document.mainPart);
  if(settings.doc&&Array.from(settings.doc.getElementsByTagNameNS(NS.w,'documentProtection')).some(n=>['1','true','on'].includes(n.getAttributeNS(NS.w,'enforcement'))))throw Error('Protected documents require an authorized Word host operation');
@@ -108,6 +108,7 @@ async function makePlan(bytes,options){
  let presetChanged=false;
  if(preset!==undefined){const existing=decodePreset(settings.node);presetChanged=stable(existing)!==stable(preset);}
  const targets=[],prepared=new Map();
+ if(checkpoint)await checkpoint();
  for(const index of [...indices].sort((a,b)=>a-b)){
   const object=document.objects[index],target={index,part:object.part,olePart:object.path,beforeNativeSha256:object.nativeSha256??null,afterNativeSha256:null,status:'skipped',reason:null};
   try{
@@ -124,6 +125,7 @@ async function makePlan(bytes,options){
    }
   }catch(error){target.status='skipped';target.reason=error.message;target.afterNativeSha256=null;}
   targets.push(target);
+  if(checkpoint)await checkpoint();
  }
  const normalizedOptions={indices:[...indices].sort((a,b)=>a-b),...(patch?{typography:patch}:{}),...(preset!==undefined?{preset}:{})};
  const plan={schema:PLAN_SCHEMA,sourceSha256:hash(bytes),options:normalizedOptions,targets,presetChanged,
@@ -133,7 +135,7 @@ async function makePlan(bytes,options){
 }
 
 /** Validates every selected object and its regenerated preview without writing. */
-export async function preflightTypography(input,options={}){return (await makePlan(await readDocxInput(input),options)).plan;}
+export async function preflightTypography(input,options={},hooks){return (await makePlan(await readDocxInput(input),options,hooks)).plan;}
 
 function relation(rels,type,target){
  const ids=new Set(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>n.getAttribute('Id')));let n=1;while(ids.has('rELTypography'+n))n++;

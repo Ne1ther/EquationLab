@@ -4,6 +4,8 @@
 
 检查面板读取当前载入的文档。批量处理先给出修改预览，再保存为新的 Word 文件。保存后在 Word 中打开副本，检查排版并更新编号与引用；当前打开的原文档保持原样。
 
+开发版本中，字体样式和编号的只读预检运行时，LaTeX 源码与公式画布仍可继续输入并更新预览。保存、写副本和切换文档等操作会等待预检结束。报告使用启动预检时的设置；如需采用之后调整的字号或编号格式，请关闭报告并重新预检。报告打开后，先关闭面板再继续编辑。
+
 ## 检查编号与引用
 
 点“检查编号与引用…”查看公式编号、正文引用和检查结果。搜索框可以按编号、引用或提示内容筛选；与当前文档公式对应的项目可以直接选中该公式。
@@ -93,6 +95,8 @@ node src/cli.mjs apply-numbering input.docx numbering-plan.json new-number-copy.
 Open **Document → Document checks and batch tools** in the inspector to review numbering and references, apply the current equation’s style to more equations, or organize number formats by scope. The tools are available once the document list finishes loading.
 
 Checks read the loaded document. Batch tools preview changes and save a new Word file. Open the copy in Word, check its layout, and update numbering and references to use the result. The original open document stays as it is.
+
+In the development build, read-only style and numbering preflights keep LaTeX and canvas input available, including fresh previews. Saving, writing a copy and navigation remain blocked until the check ends. Each report uses the settings captured when its preflight began; close it and run another preflight to use later settings. Close the result panel before continuing to edit.
 
 ## Check numbering and references
 

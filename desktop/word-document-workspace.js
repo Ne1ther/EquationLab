@@ -2,7 +2,7 @@
 // reopening requires a fresh, Word-owned document capture and OLE session.
 window.createWordDocumentWorkspace = api => {
  let cached=null,pending=null,generation=0,selecting=false,statusFlight=null,refreshFlight=null,observedIdentity=undefined,active=null,wordDocumentUnavailable=false,unavailableIdentity=null,unavailableName='',knownRetired=new Set();
- let documents=[],connected=false,insertionSupported=false,metadataFlight=null,emptyDocument=null,preparedInsertionDraft=null;
+ let documents=[],connected=false,insertionSupported=false,metadataFlight=null,emptyDocument=null,preparedInsertionDraft=null,awaitingPublishedIdentity=null;
  const changed=()=>api.changed();
  const readStatus=()=>metadataFlight??(metadataFlight=api.native('wordWorkspaceStatus').finally(()=>{metadataFlight=null;}));
  function updateCatalog(status){
@@ -20,9 +20,9 @@ window.createWordDocumentWorkspace = api => {
  async function refreshList(){
   const before=generation;
   try{
-   const status=await readStatus();if(before!==generation)return false;updateCatalog(status);
+   const status=await readStatus();if(before!==generation)return false;const unconfirmed=awaitingPublication(status);updateCatalog(status);
    if(status?.connected===true&&Array.isArray(status.retiredIdentities)){
-    knownRetired=new Set(status.retiredIdentities.filter(identity=>typeof identity==='string'));
+    knownRetired=new Set(status.retiredIdentities.filter(identity=>typeof identity==='string'&&(!unconfirmed||identity!==awaitingPublishedIdentity)));
     const state=api.state(),sourceIdentity=identityOf(state.source),cacheIdentity=identityOf(cached);
     const retiredIdentity=sourceIdentity&&knownRetired.has(sourceIdentity)?sourceIdentity:!sourceIdentity&&cacheIdentity&&knownRetired.has(cacheIdentity)?cacheIdentity:null;
     if(retiredIdentity){
@@ -100,6 +100,15 @@ window.createWordDocumentWorkspace = api => {
   return knownRetired.has(identity);
  }
  const identityOf=document=>document?.hasDocumentContext&&typeof document.documentIdentity==='string'?document.documentIdentity:null;
+ // A delivered OLE capture can precede the host's next workspace publication.
+ // An older active/retired snapshot cannot revoke that newly accepted session.
+ function awaitingPublication(status){
+  if(!awaitingPublishedIdentity)return false;
+  const state=api.state();
+  if(!state.wordTicket||identityOf(state.source)!==awaitingPublishedIdentity){awaitingPublishedIdentity=null;return false;}
+  if(!status?.connected||status.active?.identity!==awaitingPublishedIdentity||status.retiredIdentities?.includes(awaitingPublishedIdentity))return true;
+  awaitingPublishedIdentity=null;return false;
+ }
  const currentIdentity=()=>identityOf(api.state().source)||identityOf(cached)||(wordDocumentUnavailable?unavailableIdentity:emptyDocument?.identity||observedIdentity)||null;
  async function detachClean(keepSelecting=false,options={}){selecting=true;changed();try{return await api.detach(options);}finally{if(!keepSelecting){selecting=false;changed();}}}
  const dirty=state=>!!state.draftChanged;
@@ -112,13 +121,15 @@ window.createWordDocumentWorkspace = api => {
    if(statusGeneration!==generation)return false;
    updateCatalog(status);
    if(!status||!Number.isInteger(status.revision)||!status.connected)return false;
-   if(Array.isArray(status.retiredIdentities))knownRetired=new Set(status.retiredIdentities.filter(identity=>typeof identity==='string'));
+   const unconfirmed=awaitingPublication(status);
+   if(Array.isArray(status.retiredIdentities))knownRetired=new Set(status.retiredIdentities.filter(identity=>typeof identity==='string'&&(!unconfirmed||identity!==awaitingPublishedIdentity)));
    const retired=new Set(knownRetired);
    const rawTarget=status.active&&typeof status.active.identity==='string'?status.active:null;
    const target=rawTarget&&!retired.has(rawTarget.identity)?rawTarget:null;
    const nextIdentity=target?.identity??null;
    activeMetadataChanged=active?.identity!==target?.identity||active?.name!==target?.name;
    active=target?{identity:target.identity,name:String(target.name||'Word 文档')}:null;
+   if(unconfirmed&&!force)return false;
    const state=api.state(),sourceIdentity=identityOf(state.source),cacheIdentity=identityOf(cached),cachedBeforeRetirement=cached;
    // Direct OLE editing can retain an exact live owner without a document
    // snapshot. Metadata polling must not cancel it to open another equation.
@@ -352,6 +363,6 @@ window.createWordDocumentWorkspace = api => {
    pending=null;generation++;changed();return !!approved;
   },
   clearUnavailable,
-  accepted(document){generation++;emptyDocument=null;const identity=identityOf(document);if(identity)knownRetired.delete(identity);else cached=null;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
+  accepted(document){generation++;emptyDocument=null;const identity=identityOf(document);awaitingPublishedIdentity=identity;if(identity)knownRetired.delete(identity);else cached=null;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
  };
 };

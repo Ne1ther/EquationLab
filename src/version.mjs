@@ -1,2 +1,2 @@
-// Shared version for the local API and desktop engine.
-export const APP_VERSION='0.6.13';
+// The standalone engine follows the source release version.
+export const APP_VERSION='0.6.14';

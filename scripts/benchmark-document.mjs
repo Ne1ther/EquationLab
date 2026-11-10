@@ -38,8 +38,8 @@ async function benchmarkCase(config){
   stages.push({name,elapsedMs:round(elapsedMs),cpuMs:round((used.user+used.system)/1000),eventLoopUtilization:round(loop.utilization),memoryBefore:before,memoryAfter:after,counts:counts??{}});
   return counts;
  };
- const queued=(kind,run,{priority=0,key=null}={})=>scheduler.enqueue(run,{priority,key,onTiming:value=>timings.push({kind,...Object.fromEntries(Object.entries(value).map(([key,value])=>[key,typeof value==='number'?round(value):value]))})});
- const request=(action,payload)=>desktopRequest({action,payload});
+ const queued=(kind,run,{priority=0,key=null,checkpointPreview=false}={})=>scheduler.enqueue(run,{priority,key,checkpointPreview,onTiming:value=>timings.push({kind,...Object.fromEntries(Object.entries(value).map(([key,value])=>[key,typeof value==='number'?round(value):value]))})});
+ const request=(action,payload,context)=>desktopRequest({action,payload},context);
  let bytes,objects;
  await stage('read-local-file',async()=>{bytes=await readFile(config.input);return {bytes:bytes.length};});
  const inputSha256=sha(bytes);
@@ -51,8 +51,8 @@ async function benchmarkCase(config){
  await stage('renderer-warmup',async()=>{await warmNativeRenderer();return nativeRendererStats();});
  await stage('initial-list-no-thumbnails',async()=>{const result=await queued('initial-list',()=>request('inspect',{path:config.input,thumbnails:false}));return {equations:result.objects.length,images:result.objects.filter(o=>o.image).length};});
  await stage('cached-list-no-thumbnails',async()=>{const result=await queued('cached-list',()=>request('inspect',{path:config.input,thumbnails:false}));return {equations:result.objects.length};});
- const typography=()=>request('documentTypographyPreflight',{input:config.input,options:{indices,typography:{fullSize:14}}});
- const numbering=()=>request('documentNumberingPreflight',{input:config.input,options:{scope:'all',numberFormat:'(#C1.#E1)'}});
+ const typography=context=>request('documentTypographyPreflight',{input:config.input,options:{indices,typography:{fullSize:14}}},context);
+ const numbering=context=>request('documentNumberingPreflight',{input:config.input,options:{scope:'all',numberFormat:'(#C1.#E1)'}},context);
  if(config.scenario!=='sidebar'){
  await stage('readonly-audit',async()=>{const result=await queued('audit',()=>request('documentAudit',{input:config.input}));return result.summary;});
  await stage('readonly-typography-preflight',async()=>{const result=await queued('typography-preflight',typography);return result.summary;});
@@ -60,17 +60,17 @@ async function benchmarkCase(config){
  }
  const firstBatch=indices.slice(0,4),thumbnail=batch=>request('inspect',{path:config.input,onlyIndices:batch});
  if(config.scenario!=='sidebar'){
- await stage('interleaved-readonly-preview-thumbnails',async()=>{
-  let started;const began=new Promise(resolve=>started=resolve);
-  const active=queued('contended-preflight',async()=>{started();return typography();});
-  await began;
-  const pending=[];
-  // Same request priorities and preview opt-in as the stdio worker. The active
-  // preflight cannot be preempted; only queued previews may be superseded.
-  pending.push(queued('contended-thumbnails',()=>thumbnail(firstBatch),{priority:2}));
-  for(let index=0;index<8;index++)pending.push(queued('contended-preview',()=>request('validate',{latex:`x^{${index+1}}+1`}),{priority:1,key:'benchmark-preview'}));
-  await Promise.all([active,...pending]);
-  return {preflights:1,thumbnailRequests:1,previewRequests:8};
+ for(const [prefix,preflight]of [['contended',typography],['numbering-contended',numbering]])await stage(prefix+'-readonly-preview-thumbnails',async()=>{
+  const rounds=config.contentionRounds??5;
+  for(let roundIndex=0;roundIndex<rounds;roundIndex++){
+   let started;const began=new Promise(resolve=>started=resolve);
+   const active=queued(prefix+'-preflight',async context=>{started();return preflight(context);});
+   await began;
+   const pending=[queued(prefix+'-thumbnails',()=>thumbnail(firstBatch),{priority:2})];
+   for(let index=0;index<8;index++)pending.push(queued(prefix+'-preview',()=>request('validate',{latex:`x^{${index+1}}+1`}),{priority:1,key:'benchmark-preview',checkpointPreview:true}));
+   await Promise.all([active,...pending]);
+  }
+  return {preflights:rounds,thumbnailRequests:rounds,previewRequests:8*rounds};
  });
  }else await stage('prime-first-thumbnail-batch',async()=>{const result=await queued('prime-thumbnails',()=>thumbnail(firstBatch),{priority:2});return {images:result.objects.filter(o=>o.image).length};});
  await stage('thumbnails-all-in-batches-of-four',async()=>{
@@ -111,13 +111,15 @@ export function parseArguments(args){
  const options={counts:[1,30,300],scenario:'all',output:join(root,'.local','document-benchmark-'+new Date().toISOString().replace(/[:.]/g,'-'))};
  for(let index=0;index<args.length;index++){
   const arg=args[index],value=args[index+1];
-  if(!['--output','--document','--counts','--case','--scenario'].includes(arg)||!value)throw Error('Expected --output DIR, --document AUTHORIZED_COPY, --counts 1,30,300|none, or --scenario all|sidebar');
+  if(!['--output','--document','--counts','--case','--scenario','--reuse-report'].includes(arg)||!value)throw Error('Expected --output DIR, --document AUTHORIZED_COPY, --counts 1,30,300|none, --reuse-report REPORT, or --scenario all|sidebar');
   index++;
   if(arg==='--counts')options.counts=value==='none'?[]:value.split(',').map(Number);
   else if(arg==='--scenario')options.scenario=value;
+  else if(arg==='--reuse-report')options.reuseReport=resolve(value);
   else options[arg.slice(2)]=resolve(value);
  }
- if((!options.counts.length&&!options.document)||options.counts.length>4||new Set(options.counts).size!==options.counts.length||options.counts.some(count=>!Number.isSafeInteger(count)||count<1||count>300))throw Error('Use one to four unique synthetic counts between 1 and 300, or none with a document');
+ if((!options.counts.length&&!options.document&&!options.reuseReport)||options.counts.length>4||new Set(options.counts).size!==options.counts.length||options.counts.some(count=>!Number.isSafeInteger(count)||count<1||count>300))throw Error('Use one to four unique synthetic counts between 1 and 300, or none with a document');
+ if(options.document&&options.reuseReport)throw Error('Use either frozen report inputs or a new document, not both');
  if(!['all','sidebar'].includes(options.scenario))throw Error('Unknown benchmark scenario');
  return options;
 }
@@ -127,20 +129,29 @@ async function main(options){
  await mkdir(join(options.output,'fixtures'),{recursive:true});
  const startedAt=new Date().toISOString(),identity=await sourceIdentity(),head=(await execFileAsync('git',['rev-parse','HEAD'],{cwd:root})).stdout.trim(),fixtures=[],preparation=[];
  const {createDocx}=await import('../src/document.mjs');
- for(const count of options.counts){
+ if(options.reuseReport){
+  const bytes=await readFile(options.reuseReport),baseline=JSON.parse(bytes),labels=new Set();
+  if(baseline.schema!=='equationlab.document-benchmark.v1'||!Array.isArray(baseline.cases)||baseline.cases.length<1||baseline.cases.length>4)throw Error('Invalid bounded baseline report');
+  for(const entry of baseline.cases){
+   if(entry.failed||!/^[-a-z0-9]+$/.test(entry.label)||labels.has(entry.label))throw Error('Invalid baseline case');labels.add(entry.label);
+   const config=JSON.parse(await readFile(join(resolve(options.reuseReport,'..'),entry.label+'.config.json'))),content=await readFile(config.input);
+   if(sha(content)!==entry.input?.sha256)throw Error('Frozen benchmark input changed');
+   fixtures.push({label:entry.label,input:config.input});preparation.push({label:entry.label,bytes:content.length,sha256:sha(content),reused:true});
+  }
+ }else for(const count of options.counts){
   const start=performance.now(),label='synthetic-'+String(count).padStart(3,'0'),input=join(options.output,'fixtures',label+'.docx');
   const bytes=await createDocx(Array.from({length:count},(_,index)=>({latex:`x_{${index+1}}^2+${index+1}`,layout:{mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:1}})),{numberingFamily:'mathtype'});
   await writeFile(input,bytes,{flag:'wx'});fixtures.push({label,input});preparation.push({label,elapsedMs:round(performance.now()-start),bytes:bytes.length,sha256:sha(bytes),equations:count,layout:'single column, default A4 page; one numbered formula per paragraph'});
  }
  let privateInput;
- if(options.document){
+ if(options.document&&!options.reuseReport){
   const bytes=await readFile(options.document),input=join(options.output,'fixtures','local-document.docx');
   privateInput={sha256:sha(bytes),bytes:bytes.length};await copyFile(options.document,input,constants.COPYFILE_EXCL);fixtures.push({label:'local-document',input});
  }
  const cases=[];
  for(const fixture of fixtures){const result=await runChild({...fixture,scenario:options.scenario},options.output);cases.push(result);await writeFile(join(options.output,fixture.label+'.json'),JSON.stringify(result,null,2)+'\n');process.stdout.write(JSON.stringify({label:fixture.label,failed:result.failed===true,equations:result.stages?.find(s=>s.name==='parse-fresh')?.counts.equations,processTreePeakMiB:round((result.processTreeMemory?.peakSampledRssBytes??0)/1024**2)})+'\n');if(result.stoppedFor)break;}
  if(privateInput)privateInput.unchanged=privateInput.sha256===sha(await readFile(options.document));
- const report={schema:'equationlab.document-benchmark.v1',startedAt,completedAt:new Date().toISOString(),head,node:process.version,platform:process.platform,arch:process.arch,rounds:1,sourceHashes:identity,sourceHashesAfter:await sourceIdentity(),privateInput,preparation,cases,limits:{caseTimeoutMs:180_000,totalProcessTreeRssBytes:2*1024**3,rounds:1,thumbnailBatch:4,previewBurst:8},scope:'Offline backend parse, production readonly tools, thumbnail rendering and scheduler contention. No Word, GUI, installation, document mutation, or editable/paint-ready measurement.',hostVerified:false};
+ const report={schema:'equationlab.document-benchmark.v1',startedAt,completedAt:new Date().toISOString(),head,node:process.version,platform:process.platform,arch:process.arch,rounds:1,sourceHashes:identity,sourceHashesAfter:await sourceIdentity(),privateInput,reusedReport:options.reuseReport?{sha256:sha(await readFile(options.reuseReport))}:undefined,preparation,cases,limits:{caseTimeoutMs:180_000,totalProcessTreeRssBytes:2*1024**3,rounds:1,contentionRounds:5,thumbnailBatch:4,previewBurst:8},scope:'Offline backend parse, production readonly tools, thumbnail rendering and scheduler contention. No Word, GUI, installation, document mutation, or editable/paint-ready measurement.',hostVerified:false};
  await writeFile(join(options.output,'report.json'),JSON.stringify(report,null,2)+'\n');
  if(cases.some(result=>result.failed)||privateInput?.unchanged===false)process.exitCode=1;
 }

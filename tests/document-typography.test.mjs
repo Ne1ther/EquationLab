@@ -12,6 +12,15 @@ import {auditDocx} from '../src/document-audit.mjs';
 import {baseCompatibilityDocument,mutateDocument} from './helpers/document-compat-corpus.mjs';
 
 const sourcePromise=baseCompatibilityDocument();
+test('cooperative read-only typography yields without changing its plan or apply result',async()=>{
+ const input=await sourcePromise,options={indices:[0,1,2],typography:{fullSize:18}};
+ const ordinary=await preflightTypography(input,options);let checkpoints=0;
+ const cooperative=await preflightTypography(input,options,{checkpoint:async()=>{checkpoints++;}});
+ assert.ok(checkpoints>=3);assert.deepEqual(cooperative,ordinary);
+ const result=await applyTypography(input,cooperative);assert.equal(result.report.planSha256,ordinary.planSha256);
+ await assert.rejects(preflightTypography(input,{...options,checkpoint:true}),/Unknown/);
+ await assert.rejects(preflightTypography(input,options,{checkpoint:async()=>{throw Error('checkpoint failed');}}),/checkpoint failed/);
+});
 test('typography leaves prose sharing an equation run and its baseline untouched',async()=>{
  const input=await mutateDocument(await sourcePromise,doc=>{
   const object=doc.getElementsByTagNameNS(NS.o,'OLEObject')[0],run=object.parentNode.parentNode;

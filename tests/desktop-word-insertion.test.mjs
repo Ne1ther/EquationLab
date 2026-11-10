@@ -524,16 +524,34 @@ test('A failed Word insertion acknowledgement retains the draft and still permit
  assert.equal(await c.window.nativeCancelWordSession(),true);assert.equal(c.wordTicket,null);assert.equal(c.mf.value,'');
 });
 
+test('a newly delivered Word ticket survives stale workspace metadata before its own publication',async()=>{
+ const editor=createEditor(),c=editor.context,owner={...documentSnapshotFor(0),documentIdentity:'word:new',documentName:'new.docx'};
+ let status={connected:true,revision:2,active:null,retiredIdentities:['word:new']};
+ editor.setNativeBehavior(async(action)=>{
+  if(action==='wordSessionRead')return owner;
+  if(action==='wordWorkspaceStatus')return status;
+  return {};
+ });
+ assert.equal(await c.window.nativeOpenWordSession(ticket),true);const draft=c.mf.value;
+ assert.equal(await c.window.nativeSyncWordWorkspace(),false);
+ assert.equal(c.wordTicket,ticket);assert.strictEqual(c.source,owner);assert.equal(c.mf.value,draft);
+ assert.equal(editor.calls.some(call=>call.action==='wordSessionCancel'),false);
+ status={connected:true,revision:3,active:{identity:'word:new',name:'new.docx'},retiredIdentities:[]};
+ assert.equal(await c.window.nativeSyncWordWorkspace(),false);assert.equal(c.wordTicket,ticket);
+});
+
 test('Clean A to B document following keeps old content until a new Word ticket is validated',async()=>{
  const editor=createEditor(),c=editor.context,requestId='f'.repeat(64),a={...documentSnapshotFor(0),documentIdentity:'word:A',documentName:'A.docx'},b={...documentSnapshotFor(0),documentIdentity:'word:B',documentName:'B.docx'},pending=deferred();
+ let published=a;
  editor.setNativeBehavior(async(action,payload={})=>{
   if(action==='wordSessionRead')return payload.ticket===freshTicket?b:a;
-  if(action==='wordWorkspaceStatus')return {connected:true,revision:2,active:{identity:'word:B',name:'B.docx'}};
+  if(action==='wordWorkspaceStatus')return {connected:true,revision:2,active:{identity:published.documentIdentity,name:published.documentName}};
   if(action==='wordDocumentOpen')return {requestId};
   if(action==='wordDocumentStatus')return pending.promise;
   return {};
  });
  assert.equal(await c.window.nativeOpenWordSession(ticket),true);const baseline=c.mf.value;
+ await c.window.nativeSyncWordWorkspace();published=b;
  assert.equal(await c.window.nativeSyncWordWorkspace(),true);
  assert.equal(c.wordTicket,null);assert.equal(c.mf.value,baseline,'the real detach must retain formula contents while the fresh request is pending');
  assert.equal(editor.calls.filter(call=>call.action==='confirmWordSessionSwitch').length,0);

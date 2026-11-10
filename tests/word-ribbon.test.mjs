@@ -194,6 +194,11 @@ test('requested capture uses retained anchors or an exact first selection withou
  assert.match(save,/mBoundRanges\(CStr\(token\)\)/);assert.match(save,/ResolveBoundEquation\(Doc, anchor, index\)/);
  assert.doesNotMatch(save,/Set shape = equations\(index\)/);
  assert.match(save,/stage = "resolve-equation"[\s\S]*ResolveBoundEquation/);
+ assert.match(save,/Set Doc = mBoundDocuments\(CStr\(token\)\)/);
+ const dirty=save.indexOf('Doc.Saved = False'),activate=save.indexOf('shape.OLEFormat.Activate');
+ assert.ok(dirty>=0&&activate>=0&&save.indexOf('If Not (shape.Range.Document Is Doc) Then GoTo Failed')>=0&&save.indexOf('If Not (shape.Range.Document Is Doc) Then GoTo Failed')<dirty&&save.indexOf('If Not Supported(shape) Then GoTo Failed')>=0&&save.indexOf('If Not Supported(shape) Then GoTo Failed')<dirty&&dirty<activate,'only the bound, verified document is marked dirty before target activation');
+ assert.match(save,/On Error GoTo Failed/);
+ assert.doesNotMatch(save,/ActiveDocument|\bSelection\b|\bDoc\.Save\b|\.AddOLEObject\b|\.Delete\b/);
  assert.ok(save.indexOf('failureNumber = Err.Number')<save.indexOf('MathTypeBridgeFailBackgroundSave'), 'retain the original error before calling the bridge');
  assert.match(save,/background save unavailable at "; stage; ": "; failureNumber/);
  const poll=procedure('Public Sub ELPollNavigation');

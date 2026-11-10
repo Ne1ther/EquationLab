@@ -161,8 +161,23 @@ test('No running Word clears only the cached document, and keeps standalone draf
 });
 
 const workspaceStatus=(revision,identity,name='同名.docx',connected=true,retiredIdentities=[])=>({connected,revision,active:identity?{identity,name}:null,retiredIdentities});
+async function confirmPublished(e,doc){e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(1,doc.documentIdentity,doc.documentName):undefined);await e.workspace.syncCurrent();}
+test('a fresh Word delivery is not detached by a workspace status from before its publication',async()=>{
+ for(const stale of [workspaceStatus(4,null,'old',true,['A']),workspaceStatus(4,'B','old',true,['A'])]){
+  const e=setup(),owner={...document(),documentIdentity:'A',documentName:'new.docx',insertion:false};
+  e.state.source=owner;e.state.wordTicket=ticket;e.workspace.accepted(owner);
+  let current=stale;e.behavior(async action=>action==='wordWorkspaceStatus'?current:undefined);
+  await e.workspace.refreshList();assert.equal(await e.workspace.syncCurrent(),false);
+  assert.equal(e.state.source,owner);assert.equal(e.state.wordTicket,ticket);assert.equal(e.workspace.wordDocumentUnavailable,false);
+  assert.equal(e.calls.some(c=>['detach','wordDocumentOpen'].includes(c.action)),false);
+  current=workspaceStatus(5,'A','new.docx');assert.equal(await e.workspace.syncCurrent(),false);
+  current=workspaceStatus(6,null,'old',true,['A']);assert.equal(await e.workspace.syncCurrent(),true);
+  assert.equal(e.calls.filter(c=>c.action==='detach').length,1,'a retirement published after the accepted identity remains effective');
+ }
+});
 test('Switching between documents with identical formulas and names opens a fresh empty Word session',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',documentName:'same.docx',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(1,'B','same.docx'):undefined);
  assert.equal(await e.workspace.syncCurrent(),true);
  assert.deepEqual(e.calls.filter(c=>c.action==='detach').length,1);
@@ -172,6 +187,7 @@ test('Switching between documents with identical formulas and names opens a fres
 
 test('A Word draft stays visible and offers a confirmed switch to the other document',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',documentName:'A.docx',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.state.draftChanged=true;e.workspace.accepted(old);let discard=false;
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(2,'B','B.docx'):action==='confirmWordSessionSwitch'?{discard}:undefined);
  assert.equal(await e.workspace.syncCurrent(),false);assert.equal(e.workspace.otherWordDocumentName,'B.docx');assert.equal(e.state.source,old);assert.equal(e.state.wordTicket,ticket);
  assert.equal(await e.workspace.switchToCurrent(),false);assert.equal(e.state.source,old);assert.equal(e.calls.some(c=>c.action==='wordDocumentOpen'),false);
@@ -189,6 +205,7 @@ test('Standalone drafts are not taken over automatically by another open Word do
 
 test('Busy Word sessions skip a document change and retry it on the next status poll',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);e.state.busy=true;
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(5,'B','B.docx'):undefined);
  assert.equal(await e.workspace.syncCurrent(),false);assert.equal(e.calls.some(c=>c.action==='wordDocumentOpen'),false);
  e.state.busy=false;assert.equal(await e.workspace.syncCurrent(),true);assert.equal(e.calls.filter(c=>c.action==='wordDocumentOpen').length,1);
@@ -239,6 +256,7 @@ test('Closing the active Word document drops a clean cached list and records the
 
 test('Retiring a clean source detaches it and follows the unchanged active document',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',documentName:'A.docx',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(20,'B','B.docx',true,['A']):undefined);
  assert.equal(await e.workspace.syncCurrent(),true);
  assert.equal(e.calls.filter(c=>c.action==='detach').length,1);assert.equal(e.state.wordTicket,null);assert.equal(e.state.source,null);
@@ -258,6 +276,7 @@ test('Retirement is checked before a same-active-identity no-op',async()=>{
 
 test('Retiring a dirty source preserves an editable orphan draft and offers the remaining document',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',documentName:'A.docx',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.state.draftChanged=true;e.workspace.accepted(old);e.workspace.remember(old);
+ await confirmPublished(e,old);
  let status=workspaceStatus(21,'B','B.docx',true,['A']);e.behavior(async action=>action==='wordWorkspaceStatus'?status:undefined);
  assert.equal(await e.workspace.syncCurrent(),true);
  assert.equal(e.state.wordTicket,null);assert.equal(e.state.source,null);assert.equal(e.state.draftChanged,true);
@@ -273,6 +292,7 @@ test('Retiring a dirty source preserves an editable orphan draft and offers the 
 
 test('A re-observed identity stays an orphan until the user confirms a fresh identity-bound switch',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',documentName:'A.docx',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.state.draftChanged=true;e.workspace.accepted(old);
+ await confirmPublished(e,old);
  let status=workspaceStatus(25,'B','B.docx',true,['A']);e.behavior(async action=>action==='wordWorkspaceStatus'?status:undefined);
  assert.equal(await e.workspace.syncCurrent(),true);assert.equal(e.workspace.wordDocumentUnavailable,true);
  status=workspaceStatus(26,'A','A.docx');assert.equal(await e.workspace.syncCurrent(),false);
@@ -285,6 +305,7 @@ test('A re-observed identity stays an orphan until the user confirms a fresh ide
 
 test('Retirement clears stale cached rows while a busy session is preserved until retry',async()=>{
  const e=setup(),old={...document(),documentIdentity:'A',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);e.workspace.remember(old);e.state.busy=true;
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?workspaceStatus(22,'B','B.docx',true,['A']):undefined);
  assert.equal(await e.workspace.syncCurrent(),false);assert.equal(e.workspace.wordDocumentUnavailable,true);
  assert.equal(e.workspace.visibleSource(old),null);assert.equal(e.state.wordTicket,ticket);assert.equal(e.state.source,old);
@@ -388,6 +409,7 @@ test('Metadata retirement hides a live source and preserves all editor state unt
  for(const statePatch of [{},{draftChanged:true},{busy:true},{outcomeUnknown:true}]){
   const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'A.docx',insertion:false};
   Object.assign(e.state,{source:old,wordTicket:ticket,...statePatch});e.workspace.accepted(old);e.workspace.remember(old);
+  await confirmPublished(e,old);
   e.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus('word:B'),retiredIdentities:['word:A']}:undefined);
   assert.equal(await e.workspace.refreshList(),true);
   assert.equal(e.workspace.wordDocumentUnavailable,true);assert.equal(e.workspace.visibleSource(old),null);
@@ -401,6 +423,7 @@ test('Foreground sync completes metadata retirement for an active target or no a
  for(const active of ['word:B',null]){
   const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'A.docx',insertion:false};
   e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);e.workspace.remember(old);
+  await confirmPublished(e,old);
   e.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus(active),active:active?{identity:active,name:'B.docx'}:null,retiredIdentities:['word:A']}:undefined);
   assert.equal(await e.workspace.refreshList(),true);assert.equal(e.workspace.wordDocumentUnavailable,true);
   assert.equal(await e.workspace.syncCurrent(),true);
@@ -438,6 +461,7 @@ test('A no-document completion clears an empty cached retirement banner',async()
 test('Clearing a detached closed-document draft retires its title even when active identity stays null',async()=>{
  const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'A.docx'};
  Object.assign(e.state,{source:old,wordTicket:ticket,draftChanged:true});e.workspace.accepted(old);e.workspace.remember(old);
+ await confirmPublished(e,old);
  e.behavior(async action=>action==='wordWorkspaceStatus'?{...catalogStatus(null),active:null,documents:[],retiredIdentities:['word:A']}:undefined);
  let cleared=0;e.api.empty=()=>cleared++;
  await e.workspace.syncCurrent();assert.equal(e.workspace.wordDocumentUnavailable,true);

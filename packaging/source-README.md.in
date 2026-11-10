@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.6.13 安装包（build101）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.6.14 安装包（build102）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.14/Equation-Lab-0.6.14.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -25,7 +25,7 @@
 
 在左侧顶部选好文档，点底部“插入到 Word”，就能选择行内、居中或左右编号。如果正在编辑已有公式，新公式会插在它所在的段落后面。独立草稿使用所选文档在 Word 中的空光标位置，内容和排版设置一起带入。点“完成并插入”后，App 会显示 Word 返回的保存结果。
 
-左侧菜单列出 Word 当前打开的文档，同名文件也能区分。列表显示正文里的实际编号，可以一起搜索编号和 LaTeX。长文档先打开当前公式，其余列表在后台分批载入；打开靠后的公式时，所选行会滚动到可见位置，缩略图载入后也保持位置。
+左侧菜单列出 Word 当前打开的文档，同名文件也能区分。列表显示正文里的实际编号，可以一起搜索编号和 LaTeX。长文档先打开当前公式，其余列表在后台分批载入；字号或编号预检期间仍可输入并更新预览。打开靠后的公式时，所选行会滚动到可见位置，缩略图载入后也保持位置。
 
 没来得及保存的公式会留在本机，重开 App 后点“恢复草稿”就能继续独立编辑。[草稿恢复说明](docs/draft-recovery.md)
 

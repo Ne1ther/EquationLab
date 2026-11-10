@@ -1,10 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {spawn} from 'node:child_process';
-import {readFile} from 'node:fs/promises';
+import {readFile,writeFile,mkdtemp,rm} from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
+import {join} from 'node:path';
+import {tmpdir} from 'node:os';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
-import {makeNewOle} from '../src/new-formula.mjs';
+import {makeNewOle,factoryTypography} from '../src/new-formula.mjs';
+import {createDocx,hash} from '../src/document.mjs';
 import {inspectOle,oleLatex,characters} from '../src/native.mjs';
 import {renderNative} from '../src/font-renderer.mjs';
 
@@ -17,6 +20,32 @@ test('Editor control requests bypass rendering warmup and queued previews',async
  assert.equal(await finished,0,errors);const replies=out.trim().split('\n').map(s=>JSON.parse(s));
  assert.ok(replies.every(r=>r.ok),out);assert.equal(replies[0].id,'control','cancel/status/open use the same control path and must not queue behind rendering');
  assert.equal(replies.length,9);
+});
+
+test('production worker serves a preview inside readonly preflight while copy writes stay FIFO',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'equationlab-worker-preflight-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const input=join(dir,'input.docx'),bytes=await createDocx(Array.from({length:30},(_,i)=>({latex:`x_{${i+1}}+1`})),{fragment:true});await writeFile(input,bytes);
+ const child=spawn(process.execPath,[fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGTERM');});
+ const pending=new Map(),order=[];let buffer='',stderr='';
+ child.stderr.on('data',chunk=>stderr+=chunk);
+ child.stdout.on('data',chunk=>{buffer+=chunk;let end;while((end=buffer.indexOf('\n'))>=0){const reply=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);order.push(reply.id);pending.get(reply.id)?.(reply);pending.delete(reply.id);}});
+ const ended=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+ const send=request=>new Promise(resolve=>{pending.set(request.id,resolve);child.stdin.write(JSON.stringify(request)+'\n');});
+ assert.equal((await send({id:'warm',action:'validate',payload:{latex:'x+1'}})).ok,true);
+ const plan=send({id:'plan',action:'documentTypographyPreflight',payload:{input,options:{typography:{fullSize:14}}}});
+ const first=send({id:'write-1',action:'preferencesExport',payload:{output:join(dir,'first.eqp'),typography:factoryTypography()}});
+ const preview=send({id:'foreground',action:'validate',coalescePreview:true,payload:{previewOnly:true,latex:'y+2'}});
+ const last=send({id:'write-2',action:'preferencesExport',payload:{output:join(dir,'last.eqp'),typography:factoryTypography()}});
+ const control=send({id:'control',action:'typography-default'});
+ for(const reply of await Promise.all([plan,first,preview,last,control]))assert.equal(reply.ok,true,reply.error);
+ child.stdin.end();assert.equal(await ended,0,stderr);
+ assert.ok(order.indexOf('foreground')<order.indexOf('plan'),order.join(','));
+ assert.ok(order.indexOf('plan')<order.indexOf('write-1'),order.join(','));
+ assert.ok(order.indexOf('write-1')<order.indexOf('write-2'),order.join(','));
+ assert.ok(order.indexOf('control')<order.indexOf('plan'),order.join(','));
+ assert.equal(hash(await readFile(input)),hash(bytes));
+ assert.deepEqual(await readFile(join(dir,'first.eqp')),await readFile(join(dir,'last.eqp')));
 });
 
 test('only explicitly disposable previews coalesce; preference validation must actually run',async()=>{

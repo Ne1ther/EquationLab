@@ -228,7 +228,7 @@ function mathTypeNumberLayout(scan,element){
  return {bookmarkName:bookmark.name,numberText:bookmark.cachedText,numberFormat:bookmark.numberFormat,numberingFamily:'mathtype',mode:bookmark.start<object.order?'numbered-left':'numbered-right',...context,equation:/^\d+$/.test(cached)&&Number.isSafeInteger(Number(cached))?Number(cached):null,...increments.length===1&&increments[0].instruction.reset!==null?{equationReset:increments[0].instruction.reset}:{}};
 }
 
-export async function inspectDocx(buffer) {
+export async function inspectDocx(buffer,{checkpoint}={}) {
   const zip = await JSZip.loadAsync(buffer);
   const rootRelationships=zip.file('_rels/.rels');
   if(!rootRelationships)throw Error('Word document is missing its package relationships');
@@ -240,6 +240,7 @@ export async function inspectDocx(buffer) {
   const mainPart=partPath(mainTarget,'_root.xml');
   if(!zip.file(mainPart))throw Error('Word document main part is missing');
   const doc=parseXml(await zip.file(mainPart).async('string'));
+  if(checkpoint)await checkpoint();
   const objects = [];
   const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
   for (const part of parts) {
@@ -279,6 +280,7 @@ export async function inspectDocx(buffer) {
     if(mathTypeLayout){Object.assign(layout,mathTypeLayout);layout.referenceCount=references.get(layout.bookmarkName)??0;}
     let typography,typographyError;try{typography=readTypography(ole);}catch(error){typographyError=error.message;}
     objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
+    if(checkpoint)await checkpoint();
   }
   }
   let numberFormat=null,numberingRevision=0;

@@ -48,3 +48,34 @@ test('throwing observers preserve write FIFO and do not reject the work',async()
  release();assert.deepEqual(await Promise.all([first,old,last,latest]),[1,{superseded:true},2,3]);await active;
  assert.deepEqual(order,['write1','write2','preview']);
 });
+
+test('cooperative checkpoints run one marked preview, isolate failures and leave writes in FIFO order',async()=>{
+ let release,started;const start=new Promise(resolve=>started=resolve),gate=new Promise(resolve=>release=resolve);
+ const scheduler=createRenderScheduler(),events=[];
+ const preflight=scheduler.enqueue(async({checkpoint})=>{
+  events.push('preflight-start');started();await gate;
+  await checkpoint();events.push('checkpoint-1');
+  await checkpoint();events.push('checkpoint-2');
+  return 'plan';
+ });
+ await start;
+ const write1=scheduler.enqueue(()=>events.push('write-1'));
+ const old=scheduler.enqueue(()=>events.push('old-preview'),{priority:1,key:'preview',checkpointPreview:true});
+ const latest=scheduler.enqueue(()=>{events.push('latest-preview');throw Error('preview failed');},{priority:1,key:'preview',checkpointPreview:true});
+ const failed=assert.rejects(latest,/preview failed/);
+ const second=scheduler.enqueue(()=>events.push('second-preview'),{priority:1,checkpointPreview:true});
+ const otherPreflight=scheduler.enqueue(()=>events.push('other-preflight'));
+ const write2=scheduler.enqueue(()=>events.push('write-2'));
+ release();assert.equal(await preflight,'plan');await Promise.all([write1,old,failed,second,otherPreflight,write2]);
+ assert.deepEqual(await old,{superseded:true});
+ assert.deepEqual(events,['preflight-start','latest-preview','checkpoint-1','second-preview','checkpoint-2','write-1','other-preflight','write-2']);
+});
+
+test('checkpoint yields to the event loop before selecting a pending preview',async()=>{
+ const scheduler=createRenderScheduler(),events=[];let preview;
+ const preflight=scheduler.enqueue(async({checkpoint})=>{
+  setImmediate(()=>{preview=scheduler.enqueue(()=>events.push('preview'),{priority:1,checkpointPreview:true});});
+  await checkpoint();events.push('resumed');
+ });
+ await preflight;await preview;assert.deepEqual(events,['preview','resumed']);
+});

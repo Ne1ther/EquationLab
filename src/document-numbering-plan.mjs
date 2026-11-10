@@ -164,14 +164,16 @@ function normalizeOptions(value,count){
  if(value.scope==='selected')options.indices=[...indices].sort((a,b)=>a-b);
  return {options,indices:[...indices].sort((a,b)=>a-b)};
 }
-async function makePlan(bytes,options){
- const document=await inspectDocx(bytes),selection=normalizeOptions(options,document.objects.length),normalized=selection.options,settings=await settingsInfo(document);
+async function makePlan(bytes,options,{checkpoint}={}){
+ const document=await inspectDocx(bytes,{checkpoint}),selection=normalizeOptions(options,document.objects.length),normalized=selection.options,settings=await settingsInfo(document);
  if(Object.keys(document.zip.files).some(path=>/^_xmlsignatures\//.test(path)))throw Error('Signed documents cannot be changed by the copy engine');
  if(descendants(settings.doc,'documentProtection').some(node=>node.getAttributeNS(NS.w,'enforcement')&&!['false','0','off'].includes(node.getAttributeNS(NS.w,'enforcement'))))throw Error('Protected documents require a Word host operation');
- const bookmarkNames=new Map(),bookmarkIDs=new Map();
+ const bookmarkNames=new Map(),bookmarkIDs=new Map();let scannedBookmarks=0;
+ if(checkpoint)await checkpoint();
  for(const doc of new Set(document.objects.map(o=>o.partDoc)))for(const bookmark of descendants(doc,'bookmarkStart')){
   const name=bookmark.getAttributeNS(NS.w,'name').toLowerCase(),id=bookmark.getAttributeNS(NS.w,'id');bookmarkNames.set(name,(bookmarkNames.get(name)??0)+1);
   let ids=bookmarkIDs.get(doc);if(!ids){ids=new Map();bookmarkIDs.set(doc,ids);}ids.set(id,(ids.get(id)??0)+1);
+  if(checkpoint&&++scannedBookmarks%32===0)await checkpoint();
  }
  const prepared=new Map(),targets=[];
  for(const index of selection.indices){
@@ -184,13 +186,14 @@ async function makePlan(bytes,options){
   }
   catch(error){target.reason=error.message;}
   targets.push(target);
+  if(checkpoint)await checkpoint();
  }
  const documentDefaultChanged=normalized.updateFuture&&(settings.node?.getAttributeNS(NS.w,'val')!==normalized.numberFormat||document.numberFormat!==normalized.numberFormat);
  const plan={schema:PLAN,sourceSha256:hash(bytes),options:normalized,targets,documentDefaultChanged,summary:{selected:targets.length,ready:targets.filter(t=>t.status==='ready').length,unchanged:targets.filter(t=>t.status==='unchanged').length,skipped:targets.filter(t=>t.status==='skipped').length},requiresWordFieldUpdate:prepared.size>0,limits:{existingNumbers:'bounded-equationlab-or-shared-bookmarks',liveWordMutation:false,hostVerified:false}};
  plan.planSha256=hash(stable(plan));return {plan,document,prepared,settings};
 }
 /** Read-only, deterministic plan for the exact source bytes. */
-export async function preflightNumbering(input,options){return (await makePlan(await readDocxInput(input),options)).plan;}
+export async function preflightNumbering(input,options,hooks){return (await makePlan(await readDocxInput(input),options,hooks)).plan;}
 
 function writeSettings(document,info,pattern){
  const {doc}=info;

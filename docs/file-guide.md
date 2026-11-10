@@ -35,8 +35,9 @@
 | `src/word-snapshot.mjs / src/word-snapshot-parts.mjs` | 读取保存文档的精简快照、合并分批正文与资源关系 / Compact saved snapshots and joined range captures |
 | `src/word-document-requests.mjs` | 文档重开与精确公式请求、状态和取消 / Document reopen requests and cancellation |
 | `src/desktop-rpc.mjs` | 原生 App 与引擎之间的命令接口 / App-to-engine commands |
+| `src/document-snapshot-cache.mjs` | 不保留 ZIP/DOM 的文档快照、文件身份检查和延迟读取的预览缓存 / Compact snapshots and checked lazy previews |
 | `src/draft-store.mjs` | 本机草稿的保存、读取和清理 / Local draft storage |
-| `src/render-scheduler.mjs` | 安排预览任务、并发和缓存 / Preview scheduling and caching |
+| `src/render-scheduler.mjs` | 预览合并、排队计时和只读预检的协作让出 / Preview coalescing, queue timing and cooperative preflights |
 | `src/app-services.mjs / src/server.mjs` | 本机后台服务和 Word 通信 / Local services |
 | `src/cli.mjs / src/cli-entry.mjs` | 命令行入口与路径识别 / CLI entry points |
 | `src/eqp.mjs` | 公式偏好文件的读写 / Preference files |
@@ -62,6 +63,7 @@
 | `macos/Views/FormulaThumbnailVisibility.swift` | 只为可见公式行加载缩略图 / Visible-row thumbnail loading |
 | `desktop/app.js` | 公式编辑、Word 会话和界面交互 / Editor behavior |
 | `desktop/word-document-workspace.js` | 文档列表缓存、Dock 恢复、草稿保护和新会话关联 / Document workspace restoration and draft protection |
+| `desktop/document-tools.js` | 可继续输入的只读预检、固定选项及报告来源核对 / Editable preflights, captured options and report bindings |
 | `desktop/index.html / desktop/style.css / desktop/native.css` | 画布页面、基础样式与原生窗口样式 / Canvas markup and styles |
 | `desktop/editable-macros.js / desktop/catalog-macros.js` | 模板结构与可编辑参数的适配 / Editable template adapters |
 | `desktop/editor-viewport.js` | 公式画布的缩放与视口 / Editor viewport |
@@ -94,6 +96,8 @@
 | `scripts/package_release.sh` | 构建独立 App 和完整安装包 / Release entry point |
 | `scripts/build/build-word-demo.mjs` | 生成公开的 30 公式演示 / Demo generator |
 | `scripts/benchmark-document.mjs` | 只读测试文档解析、列表和缩略图的后台耗时 / Read-only document benchmarks |
+| `scripts/benchmark-snapshot-cache.mjs` | 固定输入、显式 GC 的缓存保留内存探针 / Controlled-GC cache retention probe |
+| `.github/workflows/ci.yml` | macOS 上的公开离线测试 / Public offline macOS checks |
 | `scripts/build/` | 生成模板预览、渲染资源和演示文档 / Build-time resources |
 | `packaging/release.json / packaging/update-notes.json` | 发布版本、构建号和中英文更新内容 / Release settings and notes |
 | `packaging/build-release.mjs` | 组装 App、运行时、依赖和 PKG / App and package builder |
@@ -122,10 +126,11 @@
 | `docs/draft-recovery.md` | 找回本机未完成的公式 / Recovering unfinished equations |
 | `docs/source-publication.md` | 源码、发布附件和本地材料的维护方式 / Source and release workflow |
 | `docs/feature-parity.md` | 当前功能入口与相关测试 / Feature and test map |
+| `docs/compatibility-regression.md` | 公开样例、可选宿主语料和 CI 的验证边界 / Public fixtures, optional host corpus and CI boundaries |
 | `docs/ocr.md` | 图片识别的后续计划 / OCR plan |
 | `docs/examples/` | 三节三十公式的 Word 和 PDF 演示 / Public demo documents |
 | `docs/preview/` | 真实 App 截图和演示预览 / Actual screenshots |
 
-本地的 `research/`、`.local/`、`evidence/` 和 `output/` 用于存放原始资料、私钥与验证记录，已配置在忽略列表中；`dist/` 保留当前发行包。`.local/README.md` 汇总本机当前版本、Word 编译输入和验收记录的位置。这些本地内容不提交到 GitHub 仓库。
+本地的 `research/`、`.local/`、`evidence/` 和 `output/` 用于存放原始资料、私钥与验证记录，已配置在忽略列表中；`dist/` 保留当前 PKG、签名更新清单、校验值和打包报告，展开的 App 可从包内恢复。`.local/README.md` 汇总本机当前版本、Word 编译输入、验收记录及清理清单的位置。完全相同的测试文档可归并，保留文件及 SHA-256 映射供历史路径追溯。历史 DOCX 和大型文本以原字节存入 `.local/archives/20261109-evidence/`，原路径见 `manifest.json`，恢复用本机 `research/tools/restore-local-archive.mjs`；不同内容的结果和收据不丢弃，常用原稿及已验收组件直接保留。这些本地内容不提交到 GitHub 仓库。
 
-Local inputs and validation records stay in the ignored directories above. `dist/` holds the current release, and the local `.local/README.md` points to the matching Word inputs and test records.
+Local inputs and validation records stay in the ignored directories above. `dist/` holds the current PKG, signed update metadata, checksums and packaging report; expand the PKG when its App is needed. The local `.local/README.md` points to matching Word inputs, test records and cleanup mappings. Byte-identical fixtures may share one retained original through the mapping. Historical DOCX and large text records are preserved byte-for-byte in local archives, with original paths and hashes in the manifest; use the local `restore-local-archive.mjs` tool when needed. Common originals and accepted components remain directly available.

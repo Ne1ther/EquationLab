@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.13 (build101)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.13/Equation-Lab-0.6.13.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.6.14 (build102)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.14/Equation-Lab-0.6.14.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -25,7 +25,7 @@ Save your documents, quit Word and Equation Lab, then open the installer. Open t
 
 Select a document at the top of the sidebar, then click Insert into Word to choose inline, centered, or left/right numbered placement. If you are editing an existing equation, the new one is inserted after its paragraph. For a standalone draft, place the cursor in the selected Word document without selecting text or an object. The draft's content and formatting carry over. After you click Finish and insert, the app shows the save result returned by Word.
 
-The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. For large documents, it opens the selected equation first and loads the rest of the list in batches. Thumbnails appear and update as you browse, and the app scrolls to the equation you open.
+The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. For large documents, it opens the selected equation first and loads the rest of the list in batches. You can keep typing and updating the preview during style or numbering preflight. Thumbnails appear as you browse, and the app scrolls to the equation you open.
 
 Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 

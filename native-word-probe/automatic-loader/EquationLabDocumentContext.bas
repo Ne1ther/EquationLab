@@ -1711,6 +1711,12 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
     If Not (shape.Range.Document Is Doc) Then GoTo Failed
     If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
     If Not Supported(shape) Then GoTo Failed
+    ' Word may accept the OLE update without marking its container dirty.
+    ' Mark this verified document before activating its exact target; this
+    ' neither saves the file nor replaces its owner. A failed activation can
+    ' leave an extra save prompt.
+    stage = "mark-document-dirty"
+    Doc.Saved = False
     ' Activation supplies the target's real OLE owner and client site. Native
     ' code verifies its original Native hash and applies the prepared result
     ' directly. Do not select/scroll the object or launch the editor again.

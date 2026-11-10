@@ -5,7 +5,7 @@
 ```sh
 EQUATIONLAB_NATIVE_WORD_ARTIFACTS_DIR="/path/to/accepted-native-artifacts" \
 EQUATIONLAB_UPDATE_PRIVATE_KEY="$PWD/.local/update-signing/ed25519-private.pem" \
-./scripts/package_release.sh --app-only --output dist/0.6.13-build101
+./scripts/package_release.sh --app-only --output dist/0.6.14-build102
 ```
 
 版本和构建号默认读取配置；输出目录须为空。本地功能迭代用 `./scripts/build_and_run.sh --word-test run`，不运行安装器。
@@ -24,4 +24,4 @@ Word 模板在真实 Word 中编译、保存，并通过冷启动加载检查。
 
 如需导出源码包，可运行 `node packaging/export-source.mjs --review --output dist/source-review`（目标输出目录必须事先不存在）。主仓库只保留源码、文档与演示材料，正式安装包统一发布到 GitHub Releases。
 
-只从构建清单复制运行所需的源码、依赖和资源。`evidence/`、`research/`、`.local/` 和 `output/` 里的私有文档、测试副本、截图和记录不进入安装包或源码导出。发布前检查包内清单与待提交文件，不上传个人文档或本地路径。App 使用 ad-hoc 代码签名，更新清单使用 Ed25519 签名。
+只从构建清单复制运行所需的源码、依赖和资源。`evidence/`、`research/`、`.local/` 和 `output/` 里的私有文档、测试副本、截图和记录不进入安装包或源码导出。发布前检查包内清单与待提交文件，不上传个人文档或本地路径。App 使用 ad-hoc 代码签名，未经过 Apple 公证；更新清单使用 Ed25519 签名。

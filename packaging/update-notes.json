@@ -1,5 +1,5 @@
 {
-  "version": "0.6.13",
-  "zh": "修复插入时可能带入上一条公式的问题，并保留 Word 原来的页边距、分栏与正文段落格式。加入本机草稿恢复、侧栏正文编号搜索和积分上下限设置，完善文档检查与副本操作，优化长文档加载。打开靠后的公式会自动定位到对应行，缩略图载入后位置保持稳定。恢复新版 Word 功能区图标。",
-  "en": "Fixes insertions that could reuse an earlier equation, while preserving Word margins, columns and paragraph formatting. Adds local draft recovery, document-number search and integral-limit controls, improves document checks and copy actions, and refines loading for long documents. Opening an equation brings its sidebar row into view, with stable positions as thumbnails arrive. Restores the refreshed Word ribbon artwork."
+  "version": "0.6.14",
+  "zh": "长文档字号和编号预检期间可以继续输入并更新公式预览，精简文档快照和预览缓存。修复 Word 会话偶尔提前结束、成功打开后误报超时，以及后台定位更新后普通保存可能漏写的问题。保留不支持的旧字体编码及复杂编号段落的安全跳过规则。",
+  "en": "Keeps formula input and previews responsive during long-document typography and numbering preflights, with smaller document snapshots and preview caches. Fixes premature Word session retirement, a false timeout after successful opening, and missed ordinary saves after a background target update. Unsupported legacy font encodings and complex numbering paragraphs remain safely skipped."
 }

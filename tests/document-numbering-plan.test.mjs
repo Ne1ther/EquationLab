@@ -13,6 +13,16 @@ async function fixture(){
 async function mutate(input,change){const zip=await JSZip.loadAsync(input);zip.file('word/document.xml',change(await zip.file('word/document.xml').async('string')));return zip.generateAsync({type:'nodebuffer'});}
 const numbers=async bytes=>(await inspectDocx(bytes)).objects.map(o=>o.layout.numberText);
 
+test('cooperative numbering yields without changing its plan or apply result',async()=>{
+ const input=await fixture(),options={scope:'all',numberFormat:'[#E1]'};
+ const ordinary=await preflightNumbering(input,options);let checkpoints=0;
+ const cooperative=await preflightNumbering(input,options,{checkpoint:async()=>{checkpoints++;}});
+ assert.ok(checkpoints>=3);assert.deepEqual(cooperative,ordinary);
+ const result=await applyNumbering(input,cooperative);assert.equal(result.report.planSha256,ordinary.planSha256);
+ await assert.rejects(preflightNumbering(input,{...options,checkpoint:true}),/Unknown/);
+ await assert.rejects(preflightNumbering(input,options,{checkpoint:async()=>{throw Error('checkpoint failed');}}),/checkpoint failed/);
+});
+
 test('current/selected/all scopes preserve original native objects, paragraph layout and reference anchors',async()=>{
  const input=await fixture(),original=await inspectDocx(input);
  const plan=await preflightNumbering(input,{scope:'selected',indices:[2,0],numberFormat:'[#C1-#E1]'});

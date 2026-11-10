@@ -1,4 +1,4 @@
-import {readFile,writeFile,realpath,stat} from 'node:fs/promises';
+import {readFile,writeFile,realpath} from 'node:fs/promises';
 import {resolve} from 'node:path';
 import {isMainModule} from './cli-entry.mjs';
 import {createInterface} from 'node:readline';
@@ -16,6 +16,8 @@ import {auditDocx,getReferenceTargets} from './document-audit.mjs';
 import {preflightTypography,applyTypography,readTypographyPreset,readTypographyPresetFromPackage} from './document-typography.mjs';
 import {preflightNumbering,applyNumbering} from './document-numbering-plan.mjs';
 import {createDraftStore} from './draft-store.mjs';
+import {createDocumentSnapshotCache} from './document-snapshot-cache.mjs';
+import JSZip from 'jszip';
 
 const drafts=createDraftStore(),draftBases=new Map();
 
@@ -23,24 +25,20 @@ function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler
 // Word stages immutable snapshots. Parse each snapshot once, including while
 // individual sidebar thumbnails are arriving, and reuse identical snapshots
 // across OLE activations. Recheck file identity before every reuse.
-const documentCache=new Map(),documentFiles=new Map();let documentBytes=0;
-// Retain a media-heavy thesis across thumbnail batches without an unbounded cache.
-const DOCUMENT_CACHE_BYTES=64*1024*1024;
-async function readDocument(path){
- const info=await stat(path,{bigint:true}),identity=[info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
- const previous=documentFiles.get(path);
- if(previous?.identity===identity&&documentCache.has(previous.key))return documentCache.get(previous.key).parsed;
- const bytes=await readFile(path),key=hash(bytes);
- let entry=documentCache.get(key);
- if(!entry){
-  entry={bytes:bytes.length,parsed:inspectDocx(bytes).then(async document=>({...document,typographyPreset:await readTypographyPresetFromPackage(document).catch(()=>null)}))};documentCache.set(key,entry);documentBytes+=entry.bytes;
-  try{await entry.parsed;}catch(error){documentCache.delete(key);documentBytes-=entry.bytes;throw error;}
+const documentCache=createDocumentSnapshotCache({
+ inspect:inspectDocx,readTypographyPreset:readTypographyPresetFromPackage,
+ extractPreviews:async(bytes,paths)=>{
+  const zip=await JSZip.loadAsync(bytes),images=Object.create(null);
+  for(const imagePath of paths)if(/\.(png|jpe?g|gif)$/i.test(imagePath)&&zip.file(imagePath)){
+   const type=imagePath.toLowerCase().endsWith('.png')?'png':imagePath.toLowerCase().endsWith('.gif')?'gif':'jpeg';
+   images[imagePath]=`data:image/${type};base64,${await zip.file(imagePath).async('base64')}`;
+  }
+  return images;
  }
- documentFiles.delete(path);documentFiles.set(path,{identity,key});
- while(documentFiles.size>32)documentFiles.delete(documentFiles.keys().next().value);
- while(documentCache.size>4||documentBytes>DOCUMENT_CACHE_BYTES){const first=documentCache.keys().next().value;documentBytes-=documentCache.get(first).bytes;documentCache.delete(first);}
- return entry.parsed;
-}
+});
+async function readDocument(path){return (await documentCache.get(path)).document;}
+// Content-free diagnostics for offline benchmarks, not a product RPC action.
+export function documentSnapshotCacheStats(){return documentCache.stats();}
 // A thumbnail is identified by ALL native bytes, including fonts, sizes,
 // spacing and rulers. Never reuse Word's stale image or cache document paths.
 const thumbnailCache=new Map();let thumbnailBytes=0;
@@ -135,7 +133,7 @@ async function insertWordEquation(payload){
  }finally{native?.fill(0);docx?.fill(0);ole.fill(0);if(ole!==base)base.fill(0);}
 }
 
-export async function desktopRequest(request) {
+export async function desktopRequest(request,execution={}) {
  const {action,payload={}}=request;
  if(action==='draftStatus')return drafts.status(payload.clientId);
  if(action==='draftClear')return drafts.clear(payload.clientId);
@@ -175,8 +173,8 @@ export async function desktopRequest(request) {
  if(action==='documentAudit')return auditDocx(await checkedDocumentToolsInput(payload));
  if(action==='documentReferenceTargets')return getReferenceTargets(await auditDocx(await checkedDocumentToolsInput(payload)),{query:payload.query});
  if(action==='documentTypographyPreset')return {preset:await readTypographyPreset(await checkedDocumentToolsInput(payload))};
- if(action==='documentTypographyPreflight')return preflightTypography(await checkedDocumentToolsInput(payload),payload.options);
- if(action==='documentNumberingPreflight')return preflightNumbering(await checkedDocumentToolsInput(payload),payload.options);
+ if(action==='documentTypographyPreflight')return preflightTypography(await checkedDocumentToolsInput(payload),payload.options,{checkpoint:execution.checkpoint});
+ if(action==='documentNumberingPreflight')return preflightNumbering(await checkedDocumentToolsInput(payload),payload.options,{checkpoint:execution.checkpoint});
  if(action==='documentTypographyApply'||action==='documentNumberingApply'){
   const input=await checkedDocumentToolsInput(payload);
   if(typeof payload.output!=='string'||!payload.output)throw Error('请选择新的副本文件');
@@ -262,7 +260,7 @@ export async function desktopRequest(request) {
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
  if(action==='inspect') {
-  const {objects,zip,numberFormat,numberingRevision,typographyPreset}=await readDocument(payload.path);
+  const {document:{objects,numberFormat,numberingRevision,typographyPreset},contentHash}=await documentCache.get(payload.path);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
@@ -282,17 +280,22 @@ export async function desktopRequest(request) {
    if(!Array.isArray(payload.onlyIndices)||payload.onlyIndices.length>4||payload.onlyIndices.some(i=>!Number.isInteger(i)||i<0||!objects[i]))throw Error('Invalid thumbnail indices');
    chosen=[...new Set(payload.onlyIndices)].map(index=>objects[index]);
   }
+  const storedPaths=new Map();
   const entries=await Promise.all(chosen.map(async o=>{
-   let image=null;
-   if(o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath)&&zip.file(o.imagePath))image=`data:image/${o.imagePath.toLowerCase().endsWith('.png')?'png':o.imagePath.toLowerCase().endsWith('.gif')?'gif':'jpeg'};base64,${await zip.file(o.imagePath).async('base64')}`;
+   let image=null,preserveStored=true;
    // Word's cached OLE image can be tiny or retain an old layout. Supported
    // formulas get a fresh native thumbnail; defer that work on session open.
    if(!o.parseError&&!o.previewError&&o.nativeSha256){
-    if(payload.thumbnails===false)image=thumbnailCache.get(o.nativeSha256)??null;
-    else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);}catch{/* Preserve the stored preview if the native renderer cannot display it. */}}
+    if(payload.thumbnails===false){image=thumbnailCache.get(o.nativeSha256)??null;preserveStored=false;}
+    else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);preserveStored=false;}catch{/* Lazily preserve the stored preview when rendering fails. */}}
    }
+   if(preserveStored&&o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath))storedPaths.set(o.index,o.imagePath);
    return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
   }));
+  if(storedPaths.size){
+   const paths=[...new Set(storedPaths.values())].sort(),images=await documentCache.getStoredPreviews(payload.path,contentHash,paths);
+   for(const entry of entries)if(storedPaths.has(entry.index))entry.image=images[storedPaths.get(entry.index)]??null;
+  }
   return {path:payload.path,objects:entries,documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
  }
  if(action==='export') {
@@ -352,13 +355,13 @@ if(await isMainModule(import.meta.url)){
    let id,request;const start=performance.now();
    try{if(Buffer.byteLength(line)>5_000_000)throw Error('请求过大');request=JSON.parse(line);id=request.id;if(typeof id!=='string'||id.length>100)throw Error('无效的请求标识');}
    catch(error){process.stdout.write(JSON.stringify({id,ok:false,error:error.message,elapsedMs:performance.now()-start})+'\n');continue;}
-   const run=async()=>{try{return {ok:true,data:await desktopRequest(request)};}catch(error){return {ok:false,error:error.message,...['wordSessionInsert','wordSessionSave'].includes(request.action)?{submissionState:error.submissionState??'not-submitted'}:{}};}};
+   const run=async context=>{try{return {ok:true,data:await desktopRequest(request,context)};}catch(error){return {ok:false,error:error.message,...['wordSessionInsert','wordSessionSave'].includes(request.action)?{submissionState:error.submissionState??'not-submitted'}:{}};}};
    // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
    // Rendering and filesystem mutations retain their original serial order.
    const isPreview=['validate','editPreview'].includes(request.action);
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;
-   const execution=control.has(request.action)?(async()=>{const before=performance.now();const result=await run();timing={queuedMs:0,executionMs:performance.now()-before,elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};return result;})():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key,onTiming:value=>{timing=value;}});
+   const execution=control.has(request.action)?(async()=>{const before=performance.now();const result=await run();timing={queuedMs:0,executionMs:performance.now()-before,elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};return result;})():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
    const task=execution.then(result=>{if(result.superseded)result={ok:false,cancelled:true,superseded:true};process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start,timing})+'\n');});
    inflight.add(task);task.finally(()=>inflight.delete(task));
   }
