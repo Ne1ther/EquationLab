@@ -27,7 +27,7 @@ node scripts/benchmark-document.mjs --output .local/document-benchmark
 node scripts/benchmark-document.mjs --document /path/to/local-copy.docx --counts none --scenario sidebar --output /path/to/private-report
 ```
 
-脚本测量后台解析、列表缓存、缩略图、只读预检和预览排队，不操作 Word。报告中的后台耗时不能代替 Word 首次可编辑或保存耗时。私人论文和结果保留在本地，不作为公开测试夹具。
+脚本测量后台解析、列表缓存、缩略图、只读预检和预览排队，不操作 Word。报告中的后台耗时不能代替 Word 首次可编辑或保存耗时。私人论文和结果保留在本地，不作为公开测试夹具。当前光标、导航和激活链路的本机对照及剩余限制见[长文档交互验收](word-performance.md)。
 
 Version 0.6.13 includes number search, local draft recovery and receipt reconciliation after a lost save response. Copy arrangement reads section geometry, including two equal-width columns. Native insertion imports a bookmarked body from a unique file, keeping the source’s final section mark out of Word; inline insertion restores the surrounding paragraph’s style and formatting. Compile and verify the matching macros in Word before freezing them. Refreshing ribbon artwork preserves the compiled VBA but changes the template hash, so cold-start evidence must use the refreshed file. Offline benchmarks measure backend work separately from live Word behavior.
 
@@ -82,6 +82,8 @@ Numbering preflight still skips the extra hidden VML shapes that Word creates wh
 
 如果当前安装是 QA 或正式发行构建，部署只接受完整包散列与已核验 seed 一致、且属于 root 或当前用户的副本，并将它保留为新的基线。已有基线转入 `historicalBaselines` 继续保留；不同来源或散列变化的 App 仍会拒绝替换。构建记录中的旧安装身份不能单独证明当前副本已登记。
 
+已在 Word 验收的新原生组件需要使用不同 seed 时，可在构建时显式设置 `EQUATIONLAB_WORD_TEST_BASELINE='/Applications/Equation Lab.app'`。入口会独立校验当前非开发发行／QA App 的签名、版本、运行时、依赖、所有者和完整文件清单；部署前再次核对，发生变化便拒绝替换。该选项保留当前完整基线，不跳过 seed 的新组件验收要求。后续更新已经受管的开发 App 时，无需设置它。
+
 默认从当前完整 App 复用运行时和已验证的原生资源，也可用 `EQUATIONLAB_WORD_TEST_SEED` 指定。依赖锁或原生版本改变时，需要匹配的新 seed。原生组件和 VBA 改动须重新构建，并在 Word 中编译、保存和验证，再冻结给发行包使用。
 
 ### 清理后恢复开发输入
@@ -96,9 +98,9 @@ export EQUATIONLAB_WORD_TEST_SEED="$equationlab_pkg_tmp/expanded/component.pkg/P
 
 然后使用上面的 `--word-test --build-only`；完成构建后可清除这份临时解包目录，并取消 `EQUATIONLAB_WORD_TEST_SEED`。解包不运行安装器，也不修改已安装 App 或 Word 插件。具体版本、配套组件、保留原稿及重复夹具的旧路径映射，以本机 `.local/README.md` 为准。重跑历史验证前，从保留文件复制独立夹具，不直接修改归档原稿。
 
-0.6.14 使用 0.0.40 和重新编译的模板；旧版 0.6.13 PKG 中的 0.0.39 组件不能作为当前匹配 seed。也可直接使用已安装的完整 0.6.14 App。构建入口会核对版本和组件身份。
+公开 0.6.14 使用 0.0.40 和重新编译的模板；旧版 0.6.13 PKG 使用 0.0.39。11 月 11 日首轮性能优化阶段曾使用 0.0.42（新增宿主调用和本地请求的分段耗时记录），而当前仓库源码已升级到已验收的 0.0.44 组件与配套 Word 编译模板，构建时应使用匹配的完整 0.0.44 测试 App 或 seed。构建入口会核对版本和组件身份；公开 0.6.14 包或旧 0.0.42 组件均不能充当当前 0.0.44 源码的匹配输入。
 
-本机历史 DOCX 和大型报告、日志还可无损归档。常用原稿、已验收 Word 组件和小型收据直接保留；已归档文件的原路径和散列保存在 `.local/archives/20261109-evidence/manifest.json`。恢复工具不依赖 npm 包：
+本机历史 DOCX 和大型报告、日志还可无损归档。当前发布签名私钥、已验收 Word 组件和回归夹具直接留在仓库忽略目录，其余历次归档与旧版验证资料默认外迁至 `~/Documents/Archive/EquationLab-History/`（可通过 `EQUATIONLAB_HISTORY_ROOT` 指定位置）；已归档文件的原路径和散列保存在 `20261109-evidence/manifest.json` 与 `20261113-evidence/manifest.json`。恢复工具不依赖 npm 包，会自动查找仓库内或外部历史目录：
 
 ```sh
 node research/tools/restore-local-archive.mjs --list
@@ -143,10 +145,16 @@ Word 回归测试要完整覆盖新建插入、完整公式列表加载与切换
 
 Use the commands above to build and test. Local Word iteration deploys a user-writable App and user-scoped components; reserve Installer for the final installation check. Record the actual running build and component hashes, and check the system's foreground application for focus tests. Native/VBA changes also need compilation and validation inside Word before freezing release inputs.
 
-After local cleanup, run `npm ci` to restore locked dependencies. A matching PKG can be expanded into a new temporary directory for a release App seed without running Installer. The 0.6.13 example above contains helper 0.0.39 and the older template; it is not a matching seed for 0.6.14's helper 0.0.40 and recompiled template. The local index records accepted components and maps removed duplicate fixtures to identical retained originals; copy a fresh test fixture before running historical scripts.
+After local cleanup, run `npm ci` to restore locked dependencies. A matching PKG can be expanded into a new temporary directory for a release App seed without running Installer. The public 0.6.13 and 0.6.14 packages contain helpers 0.0.39 and 0.0.40 respectively (an earlier November 11 performance pass used 0.0.42 for segmented timing); the current checkout requires host-accepted 0.0.44 artifacts and its matching Word-compiled template. Use a matching complete 0.0.44 test App or a qualified seed. If that seed differs from the installed release, `EQUATIONLAB_WORD_TEST_BASELINE='/Applications/Equation Lab.app'` independently records the exact supported shipping baseline at build time; deployment rejects subsequent drift and retains its backup. The local index records accepted components and maps removed duplicate fixtures to identical retained originals; copy a fresh test fixture before running historical scripts.
 
 Historical DOCX and large text evidence may also be archived without changing their original bytes. The local `restore-local-archive.mjs` tool lists entries, verifies archives and restores one exact path or a separate copy with `--output`; it refuses to overwrite a different file. Restore archived JSON or logs before running scripts that read their old paths. Common original inputs and accepted Word components stay directly available. These private archives and tools are not part of the published source.
 
 See [Document backend tools](document-tools.md) for document checks, batch copies, insertion loading, and connection diagnostics.
 
 Clean saved documents use a checked compact ZIP snapshot. Large unsaved documents open the exact equation first, then capture main-story ranges in separate Word callbacks, yielding between batches and deferring while Word receives recent user input. Joining the ranges preserves native data and numbering metadata while isolating relationship names. The source document is never saved, renamed or selected for this capture. Measure first-edit readiness, full-list completion and the longest callback separately; test draft retention, target save-back, cancellation and document closure in real Word.
+
+Workspace publication now reads bounded stored numbering settings without scanning all fields. Directional navigation stops at the nearest supported object, saved-snapshot reuse requires a fresh activation nonce and stable file identity, and background list waits no longer occupy the preview queue. Local measurements, preservation checks and remaining opening/full-list costs are described in [Word performance acceptance](word-performance.md).
+
+2026-11-11 的第一轮论文插入诊断使用了初步模板与 0.0.43 helper，未形成匹配的完整验收；该历史边界及当时的失败保留在本机 `.local/thesis-fix-20261111/STATUS.md`。
+
+后续修复后的本地 Word 测试构建为 `99d8bfdb-037d-4e05-81a2-c34b020952c7`，实际运行在 `/Applications/Equation Lab.app`；匹配的用户级 Startup 使用 helper 0.0.44 和 Word 编译模板。`./scripts/build_and_run.sh --word-test --verify` 核对当前 App、服务、Word 冷启动回执及组件身份。具体散列、八种插入、取消、编号引用和失败恢复的记录见本机 `.local/thesis-fix-20261111/round2/STATUS.md`。这是本地 QA 构建，未更新正式 PKG；重建时须使用其中保留的匹配编译输入，不能以 0.0.42 或正式包的组件代替。

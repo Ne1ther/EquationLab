@@ -172,7 +172,9 @@ test('requested capture uses retained anchors or an exact first selection withou
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const procedure=name=>source.slice(source.indexOf(name),source.indexOf('End Sub',source.indexOf(name))).split('\n').map(line=>line.split("'")[0]).join('\n');
  const remember=procedure('Private Sub RememberSnapshot');
- assert.match(remember,/shape\.Range\.Duplicate/);assert.match(remember,/anchors\.Add anchor/);assert.match(remember,/RememberDocumentRanges mDocument, mSnapshotToken, anchors/);
+ assert.match(remember,/anchors\.Count <> mEquations\.Count/);assert.match(remember,/RememberDocumentRanges mDocument, mSnapshotToken, anchors/);
+ const preflight=procedure('Public Sub ELCaptureEquation');
+ assert.match(preflight,/Set candidateRange = shape\.Range[\s\S]*?mEquations\.Add shape\s+anchors\.Add candidateRange\.Duplicate/);
  const rememberRanges=procedure('Private Sub RememberDocumentRanges');assert.match(rememberRanges,/mBoundRanges\.Add anchors, CStr\(snapshotToken\)/);
  assert.doesNotMatch(remember,/mBoundRanges\.Add mEquations/);
  const capture=procedure('Private Sub ApplyDocumentCaptureRequest');
@@ -279,6 +281,29 @@ test('Word workspace reconciliation retires only absent documents after close ev
  assert.doesNotMatch(restore,/Selection|WordOpenXML|\.Select\b|\.Activate\b/i);
 });
 
+test('workspace numbering metadata reads only declared settings while numbering commands retain field checks',async()=>{
+ const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const ribbon=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const get=(source,name,end)=>{const start=source.indexOf(name);assert.ok(start>=0,name);return source.slice(start,source.indexOf(end,start));};
+ const publish=get(context,'Private Sub PublishDocumentWorkspace','End Sub');
+ const metadata=get(ribbon,'Public Function ELWorkspaceNumberFormat','End Function');
+ const valid=get(ribbon,'Private Function ELWorkspaceValidNumberFormat','End Function');
+ const preference=get(ribbon,'Private Function PreferenceForDocument','End Function');
+ assert.match(publish,/ELWorkspaceNumberFormat\(candidate\)/);assert.doesNotMatch(publish,/ELStoredNumberFormat\(candidate\)/);
+ assert.match(metadata,/PreferenceForDocument\(Doc, "EquationLabNumberFormat", ""\)/);
+ assert.match(metadata,/Doc\.CustomDocumentProperties\("MTEquationNumber2"\)\.Value/);
+ assert.match(metadata,/On Error Resume Next\s+sharedFormat = CStr\(Doc\.CustomDocumentProperties\("MTEquationNumber2"\)\.Value\)\s+Err\.Clear\s+On Error GoTo Missing/);
+ assert.match(metadata,/explicitFormat <> "" And sharedFormat <> "" And explicitFormat <> sharedFormat Then Exit Function/);
+ assert.match(valid,/On Error GoTo Missing[\s\S]*?If Len\(pattern\) = 0 Then Exit Function[\s\S]*?ValidateRibbonNumberFormat pattern\s+ELWorkspaceValidNumberFormat = pattern\s+Missing:/);
+ assert.match(preference,/On Error GoTo Missing[\s\S]*?Doc\.Variables\(key\)\.Value[\s\S]*?Missing:\s+PreferenceForDocument = fallback/);
+ for(const part of [publish,metadata,valid,preference])assert.doesNotMatch(part,/HasLegacyNumbering|CollectEquationFields|SharedDefaultFormat|Doc\.Content|\.Fields\b|WordOpenXML|\.Save\b|\.Select\b/);
+ const actual=get(ribbon,'Public Function ELDocumentNumberFormat','End Function');
+ const shared=get(ribbon,'Private Function SharedDefaultFormat','End Function');
+ const legacy=get(ribbon,'Private Function HasLegacyNumbering','End Function');
+ assert.match(actual,/SharedDefaultFormat\(Doc\)/);assert.match(shared,/HasLegacyNumbering\(Doc\)/);
+ assert.match(legacy,/CollectEquationFields Doc\.Content/);
+});
+
 test('workspace sidecar carries bounded metadata only and explicit selector is identity bound',async()=>{
  const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const ribbon=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
@@ -339,20 +364,24 @@ test('Ribbon Next and Previous step past the exact selected embedded equation ra
  assert.match(navigate,/Set current = ELSelectedEquation\(Selection\)/,'use the shared exact supported-object resolver');
  assert.match(navigate,/position = Selection\.Start\s+If Not current Is Nothing Then position = current\.Range\.Start/,'use the exact object start so an expanded field cannot select itself again');
  assert.doesNotMatch(navigate,/position = current\.Range\.End/,'using End with a strict comparison would skip an immediately adjacent equation');
- assert.match(navigate,/If equation\.Range\.Start > position Then/,'Next must choose a later object, including one starting at the current object end');
- assert.match(navigate,/If equation\.Range\.Start < position Then/,'Previous must move before the selected object start');
- assert.match(navigate,/For Each equation In ActiveDocument\.InlineShapes/,'navigation remains in the active document');
- assert.match(navigate,/If Not chosen Is Nothing Then chosen\.Range\.Select/);
+ assert.match(navigate,/equation\.Range\.Start > position And IsEquation\(equation\)/,'Next must choose a later object, including one starting at the current object end');
+ assert.match(navigate,/equation\.Range\.Start < position And IsEquation\(equation\)/,'Previous must move before the selected object start');
+ assert.match(navigate,/Set Doc = ActiveDocument/);assert.match(navigate,/Set span = Doc\.Range\(cursor, edge\): Set shapes = span\.InlineShapes/);
+ assert.match(navigate,/For i = 1 To shapes\.Count[\s\S]*?Exit For/);assert.match(navigate,/For i = shapes\.Count To 1 Step -1[\s\S]*?Exit For/);
+ assert.match(navigate,/ELBeginRibbonNavigation/);assert.match(navigate,/If Not chosen Is Nothing Then ELSelectRibbonNavigationTarget chosen/);
+ assert.match(navigate,/If oldScreenUpdating Then Application\.ScreenUpdating = True[\s\S]*?Failed:[\s\S]*?If oldScreenUpdating Then Application\.ScreenUpdating = True/);
+ const context=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ assert.match(context,/If mRibbonNavigationSelecting Then Exit Sub/);assert.match(context,/mRibbonNavigationSelecting = True\s+target\.Range\.Select\s+mRibbonNavigationSelecting = False/);
  assert.doesNotMatch(navigate,/ActiveWindow|Documents\(|Selection\.Move|InlineShapes\(\d+\)/,'do not add cross-document or positional fallback targeting');
 });
 
 test('double-click pre-capture nonce precedes forced ELCTX4 serialization and ELACT2 arming',async()=>{
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const capture=source.slice(source.indexOf('Public Sub ELCaptureEquation'),source.indexOf('End Sub',source.indexOf('Public Sub ELCaptureEquation'))).split('\n').map(line=>line.split("'")[0]).join('\n');
- const issue=capture.indexOf('ELIssueDocumentActivationNonce(mDocumentIdentity, selected)');
- const cache=capture.indexOf('If Not forceSnapshot And mSnapshotReady');
+ const issue=capture.lastIndexOf('ELIssueDocumentActivationNonce(mDocumentIdentity, selected)');
+ const cache=capture.indexOf('If Not prepareActivation And Not forceSnapshot And mSnapshotReady');
  const xml=capture.indexOf('mDocument.Content.WordOpenXML');
- assert.ok(issue>=0&&issue<cache&&issue<xml,'nonce must be registered before the full XML read');
+ assert.ok(cache>=0&&issue>cache&&issue<xml,'pre-activation cannot take the no-nonce cache and must register its nonce before XML');
  assert.match(capture,/If activationNonce <= 0 Then GoTo Failed/);
  assert.match(capture,/captureRequestToken = activationNonce/);
  assert.match(capture,/If captureRequestToken > 0 Then contextHeader = "ELCTX4"/);
@@ -372,7 +401,10 @@ test('double-click pre-capture nonce precedes forced ELCTX4 serialization and EL
  assert.match(reuse,/target\.Range\.Start <> mActivationRange\.Start Or target\.Range\.End <> mActivationRange\.End/);
  assert.match(reuse,/mSnapshotGeneration <> EquationLabNativeCommand\("MathTypeBridgeEditGeneration"\)/);
  assert.match(reuse,/mSnapshotEnd <> Doc\.Content\.End Or mSnapshotShapes <> Doc\.InlineShapes\.Count/);
- assert.match(reuse,/ELFindEquationIndex\(target\) <> mActivationIndex/);
+ assert.match(reuse,/mBoundRanges\(CStr\(mSnapshotToken\)\)/);
+ assert.match(reuse,/Set anchor = anchors\(mActivationIndex \+ 1\)/);
+ assert.match(reuse,/anchor\.Start <> target\.Range\.Start Or anchor\.End <> target\.Range\.End/);
+ assert.doesNotMatch(reuse,/ELFindEquationIndex/);
  assert.match(reuse,/elapsed >= 0\.5/);
  assert.match(reuse,/MathTypeBridgePreparedDocumentActivationNonce"\) <> mActivationNonce/);
  const native=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
@@ -405,21 +437,21 @@ test('Word insertion postprocessing maps each phase to a safe native outcome',as
  assert.match(insertion,/mutationAttempted = True[\s\S]*?target\.InsertFile[^\r\n]*\r?\n\s*mutationCompleted = True/);
  assert.ok(insertion.indexOf('mutationAttempted = True')<insertion.indexOf('target.InsertBefore vbCr'),'the optional paragraph is inside the uncertain-mutation phase');
  const failed=insertion.slice(insertion.indexOf('Failed:'));
- assert.match(failed,/Failed:\s+failureNumber = Err\.Number\s+failureDescription = Err\.Description\s+On Error Resume Next/);
+ assert.match(failed,/Failed:\s+failureNumber = Err\.Number\s+failureDescription = Err\.Description[\s\S]*ELTransactionRecoveryMessage/);
  assert.match(failed,/If mutationCompleted Then[\s\S]*?MathTypeBridgeFinishInsertion[\s\S]*?ElseIf mutationAttempted Then[\s\S]*?MathTypeBridgeUncertainInsertion[\s\S]*?Else[\s\S]*?MathTypeBridgeFailInsertion/);
  assert.match(failed,/Word may have inserted the equation\. Check the document; Equation Lab will not automatically repeat this insertion\./);
  assert.match(insertion,/ELInvalidateDocumentSnapshot/);
  assert.match(insertion,/If inlineMode = 0 Then numberUpdateFailed = Not ELTryUpdateInsertedNumbers\(Doc, start, beforeEnd, numberFormat\)/);
  assert.match(insertion,/Selection\.Document Is Doc[\s\S]*advanceCursor = \(Selection\.Range\.StoryType = wdMainTextStory And Selection\.Start = start And Selection\.End = start\)/);
- assert.match(insertion,/mutationCompleted = True\s+Set insertedRange = Doc\.Range/);
+ assert.match(insertion,/hadFragmentBookmark = Doc\.Bookmarks\.Exists\("EquationLabInsertBody"\)[\s\S]*?target\.InsertFile[\s\S]*?mutationCompleted = True[\s\S]*?If hadFragmentBookmark Then Doc\.Bookmarks\.Add Name:="EquationLabInsertBody", Range:=existingFragmentBookmark[\s\S]*?Set insertedRange = Doc\.Range/);
  const cursorStart=source.indexOf('Private Sub ELAdvanceInsertionCursor');
  const cursor=source.slice(cursorStart,source.indexOf('End Sub',cursorStart));
  assert.match(cursor,/If Not \(Selection\.Document Is Doc\) Then Exit Sub/);
  assert.match(cursor,/If Selection\.Start <> inserted\.Start Or Selection\.End > inserted\.End Then Exit Sub/);
  assert.match(cursor,/Selection\.SetRange Start:=inserted\.End, End:=inserted\.End/);
  assert.doesNotMatch(cursor,/\.Select\b|\.Activate\b|OLEFormat/i);
- assert.ok(insertion.indexOf('ELTryUpdateInsertedNumbers(Doc, start, beforeEnd)')<insertion.indexOf('MathTypeBridgeFinishInsertion'));
- assert.match(insertion,/If numberUpdateFailed Then MsgBox "The equation was inserted, but its numbering could not be updated/);
+ assert.ok(insertion.indexOf('ELTryUpdateInsertedNumbers(Doc, start, beforeEnd, numberFormat)')<insertion.indexOf('MathTypeBridgeFinishInsertion'));
+ assert.match(insertion,/If numberUpdateFailed Then Err\.Raise/);
  assert.equal((insertion.match(/\bClearInsertion\b/g)||[]).length,1,'insertion anchors must be cleared once on every path');
  assert.doesNotMatch(insertion,/\.Select\b|\.Activate\b|(?:Application|Doc)\.Undo/i);
  const cleanup=source.slice(source.indexOf('Private Function ELTryCleanupInlineInsertion'),source.indexOf('End Function',source.indexOf('Private Function ELTryCleanupInlineInsertion')));
@@ -455,7 +487,7 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(mutate,/insertion\.FormattedText = oldNumberRange\.FormattedText[\s\S]*?Set copiedRange = insertion\.Duplicate[\s\S]*?oldNumberRange\.Delete/,'copy fields into a retained range before deleting the source');
  assert.match(source,/Doc\.Bookmarks\.Add Name:=bookmarkName, Range:=Doc\.Range\(finalNumberStart/,'normalization restores the same bookmark name');
  assert.match(mutate,/oldNumberRange\.Start >= oleEnd[\s\S]*?oldNumberRange\.End <= oleStart/,'same-side requests are idempotent');
- assert.match(transaction,/record\.StartCustomRecord[\s\S]*?NumberSelectedEquationCore[\s\S]*?UpgradeLegacyNumbering[\s\S]*?record\.EndCustomRecord[\s\S]*?Doc\.Undo/,'unwrapping, exact OLE layout and shared-number conversion use one undo record');
+ assert.match(transaction,/ELBeginNumberingTransaction[\s\S]*?NumberSelectedEquationCore[\s\S]*?UpgradeLegacyNumbering[\s\S]*?ELCommitNumberingTransaction[\s\S]*?ELTransactionRecoveryMessage/,'unwrapping, exact OLE layout and shared-number conversion use one undo record');
  assert.ok(mutate.indexOf('ValidateRibbonNumberFormat pattern')<mutate.indexOf('Options.SmartCutPaste = False'),'format is validated before new-number Word changes');
  assert.match(mutate,/RequireCounterContext Doc, pattern, oleStart/,'chapter and section sequence context is checked before mutation');
  assert.match(source,/ELInvalidateDocumentSnapshot/,'successful numbering invalidates the cached document layout');
@@ -493,7 +525,7 @@ test('Legacy MathType numbering visits nested code fields and preserves macrobut
  assert.match(collect,/CollectEquationFields field\.Code, fields, seen/);assert.match(collect,/CollectEquationFields field\.Result, fields, seen/);assert.match(collect,/field\.Type <> wdFieldEmbed/);assert.match(collect,/seen\.Add field, key/);assert.doesNotMatch(collect,/field\.Update|Selection|ActiveDocument/);
  const update=source.slice(source.indexOf('Private Sub UpdateNumbersForDocument'),source.indexOf('Private Sub InsertPreparedFragment'));
  const entry=source.slice(source.indexOf('Public Sub UpdateNumbers()'),source.indexOf('Private Sub OpenNumberingSettings'));
- assert.match(entry,/Set Doc = ActiveDocument\s+ELUpgradeNumberingForInterop Doc\s+UpdateNumbersForDocument Doc\s+NumberingChanged Doc\s+ELInvalidateDocumentSnapshot/);assert.doesNotMatch(entry,/\.Fields|\.Update/);
+ assert.match(entry,/Set Doc = ActiveDocument[\s\S]*ELBeginNumberingTransaction[\s\S]*ELUpgradeNumberingForInterop Doc\s+UpdateNumbersForDocument Doc\s+NumberingChanged Doc\s+ELInvalidateDocumentSnapshot[\s\S]*ELCommitNumberingTransaction/);assert.doesNotMatch(entry,/\.Fields|\.Update/);
  assert.match(source,/"MTEQN", "MTCHAP", "MTSEC"/);assert.match(update,/Doc\.Bookmarks\.ShowHidden = True/);assert.equal((update.match(/Doc\.Bookmarks\.ShowHidden = showHidden/g)||[]).length,2);assert.match(update,/IsEquationSequence\(field\).*field\.Update[\s\S]*IsEquationReference\(field, Doc\).*field\.Update/);assert.doesNotMatch(update,/\.Delete|\.Unlink|Selection|ActiveDocument|MTPlaceRef.*\.Update/);
  const reference=source.slice(source.indexOf('Private Function IsEquationReference'),source.indexOf('Private Sub UpdateNumbersForDocument'));
  for(const guard of [/target\.Paragraphs\.Count <> 1/,/target\.Tables\.Count <> 0/,/target\.InlineShapes\.Count <> 0/,/target\.Characters\.Count > 256/])assert.match(reference,guard,'a whole table or prose bookmark must not qualify just because it contains a formula');
@@ -520,12 +552,29 @@ test('large unsaved enrichment yields between bound main-story ranges and pauses
  assert.match(chunk,/mChunkDocument\.Content\.Text <> mChunkText/);
  assert.match(chunk,/mChunkDocument\.Content\.End <> mChunkEnd/);
  assert.match(chunk,/MathTypeBridgeCanReadDocumentChunk"\) = 0 Then SchedulePoll: Exit Sub/);
+ assert.ok(chunk.indexOf('MathTypeBridgeCanReadDocumentChunk')<chunk.indexOf('mChunkDocument.Content.Text <> mChunkText'));
  assert.match(chunk,/last = mChunkStart \+ 3000/);
  assert.match(chunk,/span\.Paragraphs\.Last\.Range\.Start/);
  assert.match(chunk,/xml = span\.WordOpenXML/);
  assert.match(chunk,/MathTypeBridgeQueueDocumentChunk/);
  assert.doesNotMatch(chunk,/DoEvents|\.Select\b|ActiveDocument|\.Save\b|\.Content\.WordOpenXML/);
  assert.match(source,/If mChunkToken = requestToken Then Exit Sub/);
+});
+
+test('saved snapshot reuse checks native file identity and an exact live anchor before a fresh nonce',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const start=source.indexOf('Private Function ELReusableSavedEquationIndex'),helper=source.slice(start,source.indexOf('End Function',start));
+ assert.match(helper,/Not mSnapshotAnchorSorted Or mSnapshotToken <= 0/);
+ assert.match(helper,/mBoundDocuments\(CStr\(mSnapshotToken\)\)/);assert.match(helper,/mBoundRanges\(CStr\(mSnapshotToken\)\)/);
+ assert.match(helper,/anchors\.Count <> mEquations\.Count/);
+ assert.ok(helper.indexOf('MathTypeBridgeSavedDocumentCaptureReusable')<helper.indexOf('Do While low <= high'));
+ assert.match(helper,/anchor\.Document Is bound/);assert.match(helper,/anchor\.StoryType <> wdMainTextStory/);assert.match(helper,/anchor\.End <> target\.End/);
+ const begin=source.indexOf('Public Sub ELCaptureEquation'),capture=source.slice(begin,source.indexOf('End Sub',begin));
+ const reusable=capture.indexOf('selected = ELReusableSavedEquationIndex'),issue=capture.indexOf('ELIssueDocumentActivationNonce',reusable),reuse=capture.indexOf('MathTypeBridgeReuseSavedDocumentCapture',issue),fresh=capture.indexOf('BuildSnapshot:');
+ assert.ok(reusable>=0&&reusable<issue&&issue<reuse&&reuse<fresh);
+ assert.match(capture.slice(reusable,reuse),/"ELREUSE1" & vbLf & CStr\(activationNonce\)[\s\S]*?CStr\(mSnapshotToken\)[\s\S]*?CStr\(selected\)/);
+ assert.match(capture.slice(reuse,fresh),/If result = 0 Then[\s\S]*?GoTo Captured[\s\S]*?ELClearActivationAnchor\s+activationNonce = 0/);
+ assert.match(capture,/If candidateStart <= previousStart Then anchorsSorted = False/);
 });
 
 test('shared number replacement resolves the real end delimiter and preserves the physical equation paragraph',async()=>{
@@ -554,8 +603,20 @@ test('unreferenced MathType numbers receive only a bounded display anchor inside
  const unwrap=vba.slice(vba.indexOf('Private Sub UnwrapSelectedSharedNumber'),vba.indexOf('Private Sub EnsureSharedNumberBookmark'));
  assert.match(unwrap,/EnsureSharedNumberBookmark Doc, equation, changed/);
  const upgrade=vba.slice(vba.indexOf('Public Sub ELUpgradeNumberingForInterop'),vba.indexOf('Private Function ValidDisplaySequence'));
- assert.ok(upgrade.indexOf('StartCustomRecord')<upgrade.indexOf('EnsureSharedNumberBookmark'));
- assert.match(upgrade,/If changed Then Doc\.Undo/);
+ assert.ok(upgrade.indexOf('ELBeginNumberingTransaction')<upgrade.indexOf('EnsureSharedNumberBookmark'));
+ assert.match(upgrade,/ELTransactionRecoveryMessage/);
  const reference=vba.slice(vba.indexOf('Private Sub InsertReference()'),vba.indexOf("' Shared by the Ribbon"));
- assert.ok(reference.indexOf('ELUpgradeNumberingForInterop Doc')<reference.indexOf('For Each bookmark In Doc.Bookmarks'));
+ assert.doesNotMatch(reference,/ELUpgradeNumberingForInterop Doc/);
+ assert.ok(reference.indexOf('ChooseReference(')<reference.indexOf('ELBeginNumberingTransaction'));
+ assert.ok(reference.indexOf('ELBeginNumberingTransaction')<reference.indexOf('EnsureSharedNumberBookmark Doc, equation, changed'));
+});
+
+test('reference picker text handles truncated UTF-16 without altering valid pairs',async()=>{
+ const vba=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8');
+ const text=vba.slice(vba.indexOf('Private Function ReferenceDisplayText'),vba.indexOf('Private Function ChooseReference'));
+ assert.match(text,/unit >= &HD800& And unit <= &HDBFF&/);
+ assert.match(text,/following >= &HDC00& And following <= &HDFFF&[\s\S]*?Mid\$\(value, i, 2\)/);
+ assert.match(text,/ElseIf unit >= &HDC00& And unit <= &HDFFF& Then\s+safe = safe & " "/);
+ const picker=vba.slice(vba.indexOf('Private Sub InsertReference()'),vba.indexOf("' Shared by the Ribbon"));
+ assert.match(picker,/ReferenceDisplayText\(Right\$\(context\.Text, 180\)\)/);
 });

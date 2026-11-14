@@ -86,6 +86,9 @@ final class EquationWKWebView: WKWebView {
 struct EquationWebView: NSViewRepresentable {
     @ObservedObject var bridge: DesktopBridge
     func makeNSView(context: Context) -> WKWebView {
+        // Loading the local WebKit editor and starting its private engine are
+        // independent; overlap them without submitting an editor request.
+        bridge.prewarmEngine()
         let configuration = WKWebViewConfiguration(); configuration.userContentController.add(bridge, name: "native")
         let web = EquationWKWebView(frame: .zero, configuration: configuration)
         web.recordLifecycle("created")

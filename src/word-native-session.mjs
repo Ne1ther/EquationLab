@@ -12,6 +12,7 @@ import {previewNumberFormat} from './layout.mjs';
 import {checkedWordSnapshotZip} from './word-snapshot.mjs';
 import {combineWordSnapshotParts} from './word-snapshot-parts.mjs';
 import {checkedWordNumbering} from './word-numbering.mjs';
+import {performance} from 'node:perf_hooks';
 
 const MAX_BLOB=16*1024*1024,MAX_ENCODED=4*Math.ceil(MAX_BLOB/3);
 const MAX_SESSIONS=16,TTL=20*60*1000,MAX_UINT64=18446744073709551615n;
@@ -20,9 +21,17 @@ const sessions=new Map();
 const receipts=new Map();
 const documentSnapshots=new Map();let snapshotBytes=0;
 const inflateContext=promisify(inflateRaw),MAX_COMPRESSED_CONTEXT=34_000_000;
+// Opt-in, content-free timings. Never emit document names, paths, tickets,
+// identities or formula data, and never let diagnostics affect a session.
+function timing(event){
+ if(process.env.EQUATIONLAB_HOST_TRACE!=='1')return;
+ try{process.stderr.write(JSON.stringify({event:'word-native-timing',...event})+'\n');}catch{}
+}
 async function snapshot(value){
+ const started=performance.now();let conversionMs=0,inspectMs=0;
  const key=createHash('sha256').update(value.encoding??'xml').update('\0').update(value.ooxml).digest('hex');
  let cached=documentSnapshots.get(key);
+ const cacheHit=!!cached;
  if(!cached){
   let xml=value.ooxml;
   const chunked=value.encoding==='parts-deflate-base64';
@@ -41,14 +50,19 @@ async function snapshot(value){
   if(value.encoding!=='docx-base64'&&!chunked)xml=xml.replace(/<pkg:part\b[^>]*\bpkg:name="\/[^"]+\.(?:png|jpe?g|emf|wmf|gif|tiff?|bmp|svg)"[^>]*>[\s\S]*?<\/pkg:part\s*>/gi,'');
   let parts;
   if(chunked){try{parts=JSON.parse(xml);}catch{throw Error('Invalid Word snapshot parts');}}
+  const conversionStart=performance.now();
   const bytes=chunked?await combineWordSnapshotParts(parts):value.encoding==='docx-base64'?await checkedWordSnapshotZip(value.ooxml):await fromFlatOpc(xml);
+  conversionMs=performance.now()-conversionStart;
   try{
-   const {objects}=await inspectDocx(bytes);
+   const inspectStart=performance.now();
+   const {objects}=await inspectDocx(bytes,{nativeIndexOnly:true});
+   inspectMs=performance.now()-inspectStart;
    cached={bytes,objects:objects.map(o=>({part:o.part,mainDocument:o.mainDocument===true,error:o.parseError,nativeSha256:o.nativeSha256})),count:objects.filter(o=>o.mainDocument===true).length};
   }catch(error){bytes.fill(0);throw error;}
   documentSnapshots.set(key,cached);snapshotBytes+=bytes.length;
   while(documentSnapshots.size>4||snapshotBytes>32*1024*1024){const oldest=documentSnapshots.keys().next().value,item=documentSnapshots.get(oldest);documentSnapshots.delete(oldest);snapshotBytes-=item.bytes.length;if(item!==cached)item.bytes.fill(0);}
  }
+ timing({phase:'snapshot',cacheHit,encoding:value.encoding??'xml',conversionMs,inspectMs,totalMs:performance.now()-started,objects:cached.count,bytes:cached.bytes.length});
  return cached;
 }
 let sequence=Promise.resolve(),queued=0;
@@ -165,10 +179,11 @@ async function sessionSource(native){
  return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 async function stage(entry){
+ const started=performance.now();
  if(entry.path){
   const [directory,file]=await Promise.all([lstat(entry.directory),lstat(entry.path)]).catch(()=>{throw Error('Native session staging file is unavailable');});
   if(!directory.isDirectory()||directory.isSymbolicLink()||(directory.mode&0o777)!==0o700||!file.isFile()||file.isSymbolicLink()||(file.mode&0o777)!==0o600)throw Error('Native session staging file is unsafe');
-  return entry.path;
+  timing({phase:'stage',reused:true,totalMs:performance.now()-started});return entry.path;
  }
  const document=await sessionSource(entry.native);
  try{
@@ -177,7 +192,7 @@ async function stage(entry){
   entry.path=join(entry.directory,'equation.docx');
   await writeFile(entry.path,document,{mode:0o600,flag:'wx'});
   if(entry.document){entry.document.path=join(entry.directory,'document.docx');await writeFile(entry.document.path,entry.document.bytes,{mode:0o600,flag:'wx'});entry.document.bytes.fill(0);}
-  return entry.path;
+  timing({phase:'stage',reused:false,totalMs:performance.now()-started});return entry.path;
  }catch{await removeStage(entry);throw Error('Native session staging failed');}
  finally{document.fill(0);}
 }
@@ -232,7 +247,8 @@ function saveNumbering(value,target,entry){
  return checkedWordNumbering(value,{supported:!entry.insertion&&entry.numberingSupport,contextSupported:entry.numberingContextSupport,target});
 }
 
-/** In-memory, local native editing sessions. No networking or logging occurs.
+/** In-memory, local native editing sessions. No networking occurs here; opt-in
+ * diagnostics emit content-free stage timings only.
  * path is native-open/native-insert-open/poll/read/complete/cancel, optionally prefixed /api/.
  * Native, PDF and insertion DOCX payloads use canonical standard base64, at most 16 MiB each.
  * PDF validation checks its header, not the full document structure.
@@ -243,7 +259,9 @@ function saveNumbering(value,target,entry){
  */
 export async function nativeSessionOperation(path,body){
  const operation=typeof path==='string'?path.replace(/^\/api\//,''):path;body=request(operation,body);
+ const receivedAt=performance.now();
  return serial(async()=>{
+  if(operation==='native-open'||operation==='native-insert-open')timing({phase:'open-queue',operation,queueMs:performance.now()-receivedAt});
   await expire();
   if(operation==='native-status'||operation==='native-ack'){
    const receipt=receipts.get(body.ticket);

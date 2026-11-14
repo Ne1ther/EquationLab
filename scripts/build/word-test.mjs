@@ -9,9 +9,6 @@ import {promisify} from 'node:util';
 import {fileURLToPath} from 'node:url';
 import {constants} from 'node:fs';
 import {readArtifacts} from '../../packaging/word-native-installer/installer.mjs';
-import {buildMathLiveEditor} from '../../packaging/mathlive-editor.mjs';
-import {buildWorkbenchAssets} from '../../packaging/workbench-assets.mjs';
-import {buildTemplatePreviews} from './build-template-previews.mjs';
 
 const exec=promisify(execFile),sha=bytes=>crypto.createHash('sha256').update(bytes).digest('hex');
 const command=async(file,args,options={})=>{const {input,...settings}=options,pending=exec(file,args,{maxBuffer:4_000_000,...settings});if(input!==undefined)pending.child.stdin.end(input);return (await pending).stdout.trim();};
@@ -48,9 +45,14 @@ export function classifyPreviousApplication(previous,record,root,uid){
   if(previous.uid!==uid||!record.baselineBackup||info.EquationLabDevelopmentRoot!==root||release.developmentRoot!==root||release.purpose!=='local-word-test'||release.developmentBuild!==info.EquationLabDevelopmentBuild||record.actualInstallation?.buildId!==info.EquationLabDevelopmentBuild||record.actualInstallation?.bundleSha256!==previous.bundleSha256)throw Error('拒绝覆盖未登记或已更改的开发应用。');
   return 'managed';
  }
- // Adopt only a root- or current-user-owned QA/release bundle that exactly
- // matches the complete accepted seed. A formal upgrade may supersede the
- // recorded development installation; retain it and every earlier baseline.
+ // An explicitly recorded baseline takes precedence over the seed. Never fall
+ // back to the seed identity if the destination has drifted since build.
+ if(record.explicitBaseline){
+  const expected=record.explicitBaseline,entries=expected.inventory?.entries;
+  if(expected.path!==WORD_TEST_DESTINATION||!Array.isArray(entries)||entries.length!==expected.inventory?.files||sha(JSON.stringify(entries))!==expected.inventory?.sha256||!['qa','release'].includes(release.purpose)||release.purpose!==expected.purpose||![0,uid].includes(previous.uid)||previous.uid!==expected.uid||previous.bundleSha256!==expected.inventory.sha256||info.CFBundleShortVersionString!==expected.version||info.CFBundleVersion!==expected.build)throw Error('拒绝覆盖与构建时显式基线不符的发行应用或 QA 应用。');
+  return 'baseline';
+ }
+ // Without an explicit baseline retain the existing exact-seed contract.
  if(['qa','release'].includes(release.purpose)&&[0,uid].includes(previous.uid)&&record.seed.bundleSha256===previous.bundleSha256)return 'baseline';
  throw Error('拒绝覆盖与已验收 seed 不符的发行应用或 QA 应用。');
 }
@@ -96,7 +98,7 @@ export async function wordTestAction(mode,operations){
 async function processes(){const text=await command('/bin/ps',['-ww','-axo','pid=,comm=']);return text.split('\n').flatMap(line=>{const match=/^\s*(\d+)\s+(.+)$/.exec(line);return match?[{pid:Number(match[1]),executable:match[2]}]:[];});}
 async function plist(file){return JSON.parse(await command('/usr/bin/plutil',['-convert','json','-o','-',file]));}
 async function atomicJson(file,value){await fs.mkdir(path.dirname(file),{recursive:true,mode:0o700});const temp=file+'.'+crypto.randomUUID()+'.tmp';await fs.writeFile(temp,JSON.stringify(value,null,2)+'\n',{mode:0o600,flag:'wx'});await fs.rename(temp,file);}
-async function inventory(directory){
+async function inventory(directory,{includeEntries=false}={}){
  const files=[];
  async function visit(current){for(const entry of (await fs.readdir(current,{withFileTypes:true})).sort((a,b)=>a.name.localeCompare(b.name))){
   const file=path.join(current,entry.name),name=path.relative(directory,file),stat=await fs.lstat(file);
@@ -105,36 +107,55 @@ async function inventory(directory){
   else if(stat.isFile())files.push([name,stat.mode&0o777,sha(await fs.readFile(file))]);
   else throw Error('Unsupported test bundle file: '+name);
  }}
- await visit(directory);return {sha256:sha(JSON.stringify(files)),files:files.length};
+ await visit(directory);return {sha256:sha(JSON.stringify(files)),files:files.length,...includeEntries?{entries:files}:{}};
 }
 async function assertLocalPaths(root){for(const directory of [path.join(root,'.local'),wordTestPaths(root).directory]){const stat=await present(directory);if(stat&&(!stat.isDirectory()||stat.isSymbolicLink()))throw Error('Word test directory must be a real local folder: '+directory);}}
 async function assertBuildTargetIdle(app){const service=await readJson(path.join(os.homedir(),'Library/Application Support/Equation Lab/word-service-install.json')).catch(error=>{if(error.code==='ENOENT')return null;throw error;});assertBuildSafe(await processes(),{app,serviceApp:service?.app});}
-async function seedApplication(root,config){
- const sourceVersion=(await plist(path.join(root,'native-word-probe/Info.plist'))).CFBundleShortVersionString;
- const candidates=process.env.EQUATIONLAB_WORD_TEST_SEED?[path.resolve(process.env.EQUATIONLAB_WORD_TEST_SEED)]:[path.join(root,`dist/${config.version}-build${config.build}/Equation Lab.app`),'/Applications/Equation Lab.app'];
- const failures=[];
- for(const app of candidates)try{
+async function inspectReusableApplication(root,config,app,{sourceVersion}={}){
   const canonical=await fs.realpath(app),info=await plist(path.join(canonical,'Contents/Info.plist'));
-  if(info.CFBundleIdentifier!==WORD_TEST_BUNDLE_ID||info.EquationLabNode!=='runtime/bin/node')throw Error('not a complete shipping bundle');
+  if(info.CFBundleIdentifier!==WORD_TEST_BUNDLE_ID||info.CFBundleExecutable!=='EquationLab'||info.EquationLabNode!=='runtime/bin/node')throw Error('not a complete shipping bundle');
   await command('/usr/bin/codesign',['--verify','--deep','--strict',canonical]);
   const resources=path.join(canonical,'Contents/Resources'),native=await readArtifacts(path.join(resources,'native-word-artifacts'));
   if(native.manifest.binding!=='startup-adjacent')throw Error('requires accepted user Startup artifacts');
-  requireAcceptedNativeVersion(sourceVersion,native.manifest.nativeVersion);
+  if(sourceVersion!==undefined)requireAcceptedNativeVersion(sourceVersion,native.manifest.nativeVersion);
   const release=await readJson(path.join(resources,'release-manifest.json'));
   if(typeof release.runtime?.version!=='string'||release.runtime.version!==config.nodeVersion)throw Error('seed runtime manifest does not match the configured Node version');
   const lock=await readJson(path.join(resources,'engine/package-lock.json'));
   if(dependencyIdentity(lock)!==dependencyIdentity(await readJson(path.join(root,'package-lock.json'))))throw Error('production dependencies changed; prepare a complete seed matching package-lock.json');
   const runtime=path.join(resources,'runtime/bin/node');if(await command(runtime,['--version'])!==config.nodeVersion)throw Error('bundled Node runtime version differs');
   for(const file of ['installer/word-native-installer/automatic-install.mjs','engine/src/desktop-rpc.mjs','engine/node_modules/mathlive/package.json','licenses/Node-LICENSE.txt'])if(!(await fs.stat(path.join(resources,file))).isFile())throw Error('missing resource '+file);
-  return {app:canonical,info,native,sourceNativeVersion:sourceVersion,bundleSha256:(await inventory(canonical)).sha256,runtimeSha256:sha(await fs.readFile(runtime)),lockSha256:sha(await fs.readFile(path.join(resources,'engine/package-lock.json')))};
+  return {app:canonical,info,release,native,runtimeSha256:sha(await fs.readFile(runtime)),lockSha256:sha(await fs.readFile(path.join(resources,'engine/package-lock.json')))};
+}
+async function seedApplication(root,config){
+ const sourceVersion=(await plist(path.join(root,'native-word-probe/Info.plist'))).CFBundleShortVersionString;
+ const candidates=process.env.EQUATIONLAB_WORD_TEST_SEED?[path.resolve(process.env.EQUATIONLAB_WORD_TEST_SEED)]:[path.join(root,`dist/${config.version}-build${config.build}/Equation Lab.app`),'/Applications/Equation Lab.app'];
+ const failures=[];
+ for(const app of candidates)try{
+  const candidate=await inspectReusableApplication(root,config,app,{sourceVersion});
+  return {...candidate,sourceNativeVersion:sourceVersion,bundleSha256:(await inventory(candidate.app)).sha256};
  }catch(error){failures.push({app,error:error.message});}
  throw Error('没有可复用的完整已验收 App；未下载运行时或构建安装包。'+JSON.stringify(failures));
+}
+export function validateExplicitBaselineMetadata(info,release,config){
+ if(info.EquationLabDevelopmentBuild!==undefined||info.EquationLabDevelopmentRoot!==undefined||release.developmentBuild!==undefined||release.developmentRoot!==undefined||release.equationlabBundle!==true||!['qa','release'].includes(release.purpose)||info.CFBundleShortVersionString!==config.version||info.CFBundleVersion!==config.build||release.version!==info.CFBundleShortVersionString||String(release.build)!==info.CFBundleVersion||release.architecture!==config.architecture)throw Error('显式基线必须是版本匹配的非开发发行或 QA App。');
+}
+async function explicitBaseline(root,config,value){
+ if(value===undefined)return null;
+ if(value!==WORD_TEST_DESTINATION)throw Error('显式基线必须是当前 Applications 目标路径。');
+ const before=await fs.lstat(value);
+ if(!before.isDirectory()||before.isSymbolicLink()||![0,process.getuid()].includes(before.uid)||await fs.realpath(value)!==WORD_TEST_DESTINATION)throw Error('显式基线路径或 owner 不符。');
+ const first=await inventory(value,{includeEntries:true});
+ const candidate=await inspectReusableApplication(root,config,value),{info,release}=candidate;
+ validateExplicitBaselineMetadata(info,release,config);
+ const after=await fs.lstat(value),second=await inventory(value);
+ if(!after.isDirectory()||after.isSymbolicLink()||after.uid!==before.uid||after.dev!==before.dev||after.ino!==before.ino||second.sha256!==first.sha256||second.files!==first.files)throw Error('显式基线在校验期间已改变。');
+ return {path:value,uid:before.uid,version:info.CFBundleShortVersionString,build:info.CFBundleVersion,purpose:release.purpose,runtimeVersion:release.runtime.version,runtimeSha256:candidate.runtimeSha256,lockSha256:candidate.lockSha256,nativeVersion:candidate.native.manifest.nativeVersion,inventory:first};
 }
 export async function buildWordTestBundle({root,buildDirectory}){
  if(process.geteuid()===0)throw Error('Word development tests run as the normal macOS user, without sudo.');
  root=path.resolve(root);await assertLocalPaths(root);const paths=wordTestPaths(root);
  await assertBuildTargetIdle(paths.app);
- const config=await readJson(path.join(root,'packaging/release.json'));validateWordTestConfig(config);const seed=await seedApplication(root,config);
+ const config=await readJson(path.join(root,'packaging/release.json'));validateWordTestConfig(config);const seed=await seedApplication(root,config),baseline=await explicitBaseline(root,config,process.env.EQUATIONLAB_WORD_TEST_BASELINE);
  await fs.mkdir(paths.directory,{recursive:true,mode:0o700});
  const id=crypto.randomUUID(),stage=path.join(paths.directory,`.Equation Lab.${id}.app`),previous=path.join(paths.directory,`.previous.${id}.app`);
  let movedPrevious=false,published=false,committed=false;
@@ -161,6 +182,11 @@ export async function buildWordTestBundle({root,buildDirectory}){
   // The release seed deliberately prunes MathLive's unminified build input.
   // Use the existing npm-ci checkout to rebuild the adapter, while retaining
   // the seed's locked production dependencies inside the standalone bundle.
+  const [{buildMathLiveEditor},{buildWorkbenchAssets},{buildTemplatePreviews}]=await Promise.all([
+   import('../../packaging/mathlive-editor.mjs'),
+   import('../../packaging/workbench-assets.mjs'),
+   import('./build-template-previews.mjs')
+  ]);
   await buildMathLiveEditor({root,mathliveDirectory:path.join(root,'node_modules/mathlive'),output:path.join(resources,'web/vendor/mathlive.min.js')});
   await buildWorkbenchAssets({root,resources});
   await buildTemplatePreviews(path.join(resources,'template-previews'));
@@ -179,7 +205,7 @@ export async function buildWordTestBundle({root,buildDirectory}){
   const engineVersion=await command(path.join(resources,'runtime/bin/node'),['--input-type=module','-e','const {pathToFileURL}=await import("node:url");const {APP_VERSION}=await import(pathToFileURL(process.argv[1]));process.stdout.write(APP_VERSION);',path.join(engine,'src/version.mjs')],{cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'}});
   if(engineVersion!==config.version)throw Error('Bundled engine and App versions differ.');
   const previousRecord=await readJson(paths.record).catch(error=>{if(error.code==='ENOENT')return null;throw error;});
-  const built={schema:'equationlab.word-test-deployment.v1',id,status:'built-not-deployed',builtAt:new Date().toISOString(),buildApp:paths.app,app:paths.destination,developmentRoot:root,bundleIdentifier:WORD_TEST_BUNDLE_ID,version:config.version,build:config.build,configuration:'release',appExecutableSha256:sha(await fs.readFile(path.join(stage,'Contents/MacOS/EquationLab'))),bundle:await inventory(stage),runtime:{version:config.nodeVersion,sha256:seed.runtimeSha256},seed:{app:seed.app,version:seed.info.CFBundleShortVersionString,build:seed.info.CFBundleVersion,bundleSha256:seed.bundleSha256,lockSha256:seed.lockSha256},native:{version:native.manifest.nativeVersion,sourceVersion:seed.sourceNativeVersion,reusedAcceptedArtifacts:true,helperSha256:native.manifest.bundle.binarySha256,templateSha256:native.manifest.template.sha256,templateBuildId:native.manifest.template.buildId,artifactManifestSha256:native.manifestSha256},checks:{strictSignature:true,relocatedEngine:true,engineVersionBound:true,nativeInputsPreserved:true,bundledRuntimePreserved:true,actualWordUsed:false,installerRun:false,launchServicesModified:false},historicalBaselines:previousRecord?.historicalBaselines??[],baselineBackup:previousRecord?.baselineBackup??null,actualInstallation:previousRecord?.actualInstallation??null,deployment:null};
+  const built={schema:'equationlab.word-test-deployment.v1',id,status:'built-not-deployed',builtAt:new Date().toISOString(),buildApp:paths.app,app:paths.destination,developmentRoot:root,bundleIdentifier:WORD_TEST_BUNDLE_ID,version:config.version,build:config.build,configuration:'release',appExecutableSha256:sha(await fs.readFile(path.join(stage,'Contents/MacOS/EquationLab'))),bundle:await inventory(stage),runtime:{version:config.nodeVersion,sha256:seed.runtimeSha256},seed:{app:seed.app,version:seed.info.CFBundleShortVersionString,build:seed.info.CFBundleVersion,bundleSha256:seed.bundleSha256,lockSha256:seed.lockSha256},...baseline?{explicitBaseline:baseline}:{},native:{version:native.manifest.nativeVersion,sourceVersion:seed.sourceNativeVersion,reusedAcceptedArtifacts:true,helperSha256:native.manifest.bundle.binarySha256,templateSha256:native.manifest.template.sha256,templateBuildId:native.manifest.template.buildId,artifactManifestSha256:native.manifestSha256},checks:{strictSignature:true,relocatedEngine:true,engineVersionBound:true,nativeInputsPreserved:true,bundledRuntimePreserved:true,actualWordUsed:false,installerRun:false,launchServicesModified:false},historicalBaselines:previousRecord?.historicalBaselines??[],baselineBackup:previousRecord?.baselineBackup??null,actualInstallation:previousRecord?.actualInstallation??null,deployment:null};
   // Recheck just before replacing a previous user test copy. Never overwrite
   // a running editor, even when the build was started with --build-only.
   await assertBuildTargetIdle(paths.app);

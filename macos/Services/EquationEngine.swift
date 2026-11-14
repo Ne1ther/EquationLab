@@ -12,6 +12,15 @@ final class EquationEngine: @unchecked Sendable {
     private var generation = UUID()
     private var pending: [String: (completion: ([String: Any]) -> Void, timeout: DispatchWorkItem, start: UInt64, action: String)] = [:]
 
+    /// Start the same private worker while WebKit loads its local editor.
+    /// A later request retries normally if this speculative start fails.
+    func prewarm(node: URL, root: URL) {
+        queue.async { [self] in
+            do { try start(node: node, root: root) }
+            catch { logger.debug("worker prewarm failed; next request will retry") }
+        }
+    }
+
     func request(id: String, action: String, payload: [String: Any], node: URL, root: URL,
                  completion: @escaping ([String: Any]) -> Void) {
         queue.async { [self] in

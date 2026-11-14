@@ -47,6 +47,12 @@
 
 该面板还提供连接检查和“复制连接诊断”。诊断列出版本、组件状态、本地服务和最近操作阶段，便于随问题描述一起提供。
 
+### 看得到功能区，但提示原生组件未连接
+
+`Word native component is not connected.` 表示功能区宏已执行，但本机原生组件尚未成功加载或注册。功能区显示出来不等于全部组件已连接；仅凭这句话不能确定是组件缺失、加载失败还是环境不兼容。
+
+先保存文档并完全退出 Word，从 App 的 **Office 插件**面板安装／更新配套插件，再重开 Word。旧的 30 公式演示是普通 DOCX，不携带插件代码，无需因为这条提示重新生成演示文件。仍失败时提供 App、Word 版本、Mac 芯片及连接诊断，便于继续定位。
+
 ## 更新
 
 默认每天检查一次，有新版时在工具栏显示更新按钮。在 **Equation Lab → 检查更新…** 中可随时手动检查、设置自动下载；下载完成后选择合适的时间安装。
@@ -107,6 +113,12 @@ You can keep typing and updating the equation preview during preflight. Unsuppor
 Quit Word completely. Install or repair the plugin from Equation Lab’s **Office plugin** window, then reopen Word. The app detects Word and its Startup folder. Run repair again if you moved Word or changed its startup location.
 
 If prompted to choose an Office folder, follow the window’s instructions. The panel also provides a connection check and Copy connection diagnostics, which lists versions, component status, local service status, and recent operation stages for a problem report.
+
+### The ribbon appears, but the native component is not connected
+
+`Word native component is not connected.` means the ribbon macro ran, but the local native component has not loaded and registered successfully. A visible ribbon alone does not establish a working connection. This message does not identify whether the component is missing, failed to load, or is incompatible with the environment.
+
+Save your documents and quit Word completely. Install or update the matching plugin from the app’s **Office plugin** panel, then reopen Word. The 30-equation demo is an ordinary DOCX and contains no plugin code; this message does not require regenerating that document. If it persists, provide the app and Word versions, Mac chip, and connection diagnostics.
 
 ## Updates
 

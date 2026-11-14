@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {assertStopped,assertBuildSafe,dependencyIdentity,requireResolvedApplication,wordTestAction,validateWordTestConfig,requireAcceptedNativeVersion,wordReceiptMatches,WORD_TEST_DESTINATION,applicationSwapPaths,validateSwapPaths,isMissingWordTestRegistration,classifyPreviousApplication,wordTestBaselineState,replaceApplicationAtomically} from '../scripts/build/word-test.mjs';
+import {createHash} from 'node:crypto';
+import {assertStopped,assertBuildSafe,dependencyIdentity,requireResolvedApplication,wordTestAction,validateWordTestConfig,validateExplicitBaselineMetadata,requireAcceptedNativeVersion,wordReceiptMatches,WORD_TEST_DESTINATION,applicationSwapPaths,validateSwapPaths,isMissingWordTestRegistration,classifyPreviousApplication,wordTestBaselineState,replaceApplicationAtomically} from '../scripts/build/word-test.mjs';
 
 const app='/Users/developer/Equation Lab/.local/word-test/Equation Lab.app';
 test('build-only allows other app copies but never replaces its running test copy',()=>{
@@ -30,6 +31,21 @@ test('configuration types and native source/accepted seed versions must match',(
  for(const change of [{build:55},{nodeVersion:'24.21.0'},{version:0.6},{bundleIdentifier:'local.xuchang.equationlab'}])assert.throws(()=>validateWordTestConfig({...config,...change}),/requires string/);
  assert.doesNotThrow(()=>requireAcceptedNativeVersion('0.0.18','0.0.18'));
  assert.throws(()=>requireAcceptedNativeVersion('0.0.19','0.0.18'),/未静默复用旧 helper/);
+});
+test('explicit baseline metadata admits only non-development builds matching the release identity',()=>{
+ const config={version:'0.6.14',build:'102',architecture:'arm64'},info={CFBundleShortVersionString:'0.6.14',CFBundleVersion:'102'},release={equationlabBundle:true,purpose:'release',version:'0.6.14',build:'102',architecture:'arm64'};
+ assert.doesNotThrow(()=>validateExplicitBaselineMetadata(info,release,config));
+ assert.doesNotThrow(()=>validateExplicitBaselineMetadata(info,{...release,purpose:'qa'},config));
+ for(const change of [{EquationLabDevelopmentBuild:'x'},{EquationLabDevelopmentRoot:'/other'},{CFBundleShortVersionString:'0.6.13'},{CFBundleVersion:'101'}])assert.throws(()=>validateExplicitBaselineMetadata({...info,...change},release,config),/显式基线/);
+ for(const change of [{developmentBuild:'x'},{developmentRoot:'/other'},{equationlabBundle:false},{purpose:'local-word-test'},{version:'0.6.13'},{build:'101'},{architecture:'x86_64'}])assert.throws(()=>validateExplicitBaselineMetadata(info,{...release,...change},config),/显式基线/);
+});
+test('an explicit baseline binds the exact complete inventory, owner, version and purpose, independently of the seed',()=>{
+ const entries=[['Contents/Info.plist',420,'a'.repeat(64)]],digest=createHash('sha256').update(JSON.stringify(entries)).digest('hex');
+ const info={CFBundleIdentifier:'app.equationlab.mac',CFBundleExecutable:'EquationLab',EquationLabNode:'runtime/bin/node',CFBundleShortVersionString:'0.6.14',CFBundleVersion:'102'},release={purpose:'release'},baseline={path:WORD_TEST_DESTINATION,uid:0,version:'0.6.14',build:'102',purpose:'release',inventory:{sha256:digest,files:1,entries}},record={seed:{bundleSha256:'different-qualified-seed'},explicitBaseline:baseline},previous={info,release,uid:0,bundleSha256:digest};
+ assert.equal(classifyPreviousApplication(previous,record,'/workspace',501),'baseline');
+ const adopted=wordTestBaselineState({baselineBackup:{path:'/old'}},previous,applicationSwapPaths('aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',true),'baseline');assert.equal(adopted.baselineBackup.bundleSha256,digest);assert.deepEqual(adopted.historicalBaselines,[{path:'/old'}]);
+ for(const change of [{uid:501},{bundleSha256:'different-qualified-seed'},{info:{...info,CFBundleVersion:'103'}},{info:{...info,CFBundleShortVersionString:'0.6.15'}},{release:{purpose:'qa'}}])assert.throws(()=>classifyPreviousApplication({...previous,...change},record,'/workspace',501),/显式基线/);
+ for(const changed of [{path:'/tmp/other'},{uid:502},{inventory:{...baseline.inventory,files:2}},{inventory:{...baseline.inventory,entries:[['changed']]}}])assert.throws(()=>classifyPreviousApplication(previous,{...record,explicitBaseline:{...baseline,...changed}},'/workspace',501),/显式基线/);
 });
 test('a matching process alone cannot satisfy the actual cold receipt contract',()=>{
  const startup='/Users/developer/Word',record={native:{version:'0.0.18',helperSha256:'a'.repeat(64),templateSha256:'b'.repeat(64),templateBuildId:'native-context-v13'}},state={installId:'new-install',installedAt:'2026-10-20T00:00:00Z'},word=[{pid:40}];

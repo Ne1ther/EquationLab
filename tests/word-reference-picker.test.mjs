@@ -21,7 +21,8 @@ test('reference cancellation, protected targets and error recovery have explicit
  assert.match(source,/Doc\.ReadOnly Or Doc\.ProtectionType <> wdNoProtection/);
  assert.match(source,/For Each candidate In Application\.Documents/);
  assert.match(source,/Doc\.Bookmarks\.ShowHidden = oldShowHidden/);
- assert.match(source,/undoRecord\.StartCustomRecord "Equation Lab equation reference"/);
- assert.match(source,/Doc\.Undo/);assert.doesNotMatch(source,/Application\.Undo\b/);
+ assert.match(source,/ELBeginNumberingTransaction\(Doc, "Equation Lab equation reference"\)/);
+ assert.match(source,/ELTransactionRecoveryMessage\(Doc, transaction\)/);assert.doesNotMatch(source,/Application\.Undo\b/);
+ assert.ok(source.indexOf('answer = ChooseReference')<source.indexOf('ELBeginNumberingTransaction'));
  assert.match(source,/Kill WorkDirectory\(\) & "ribbon-reference-picker\.txt"/);
 });

@@ -134,6 +134,10 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         guard let path = Bundle.main.object(forInfoDictionaryKey: "EquationLabNode") as? String else { return nil }
         return path.hasPrefix("/") ? URL(fileURLWithPath: path) : Bundle.main.resourceURL?.appendingPathComponent(path)
     }
+    func prewarmEngine() {
+        guard let root = Bundle.main.resourceURL?.appendingPathComponent("engine"), let node = bundledNodeURL() else { return }
+        engine.prewarm(node: node, root: root)
+    }
     func ensureNativeService() {
         let record = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/Equation Lab/word-service-install.json")
         if let data = try? Data(contentsOf: record), let state = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

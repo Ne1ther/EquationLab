@@ -7,7 +7,7 @@ import {join} from 'node:path';
 import {tmpdir} from 'node:os';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
 import {makeNewOle,factoryTypography} from '../src/new-formula.mjs';
-import {createDocx,hash} from '../src/document.mjs';
+import {createDocx,inspectDocx,hash} from '../src/document.mjs';
 import {inspectOle,oleLatex,characters} from '../src/native.mjs';
 import {renderNative} from '../src/font-renderer.mjs';
 
@@ -20,6 +20,46 @@ test('Editor control requests bypass rendering warmup and queued previews',async
  assert.equal(await finished,0,errors);const replies=out.trim().split('\n').map(s=>JSON.parse(s));
  assert.ok(replies.every(r=>r.ok),out);assert.equal(replies[0].id,'control','cancel/status/open use the same control path and must not queue behind rendering');
  assert.equal(replies.length,9);
+});
+
+async function mockWorker(t,dir,preload){
+ const hook=join(dir,'preload.mjs');await writeFile(hook,preload);
+ const child=spawn(process.execPath,['--import',hook,fileURLToPath(new URL('../src/desktop-rpc.mjs',import.meta.url)),'--stdio-worker'],{stdio:['pipe','pipe','pipe']});
+ t.after(()=>{if(child.exitCode===null)child.kill('SIGTERM');});
+ const pending=new Map(),order=[];let buffer='',stderr='';const listeners=[];
+ child.stderr.on('data',data=>{stderr+=data;for(const notify of listeners)notify();});
+ child.stdout.on('data',data=>{buffer+=data;let end;while((end=buffer.indexOf('\n'))>=0){const reply=JSON.parse(buffer.slice(0,end));buffer=buffer.slice(end+1);order.push(reply.id);pending.get(reply.id)?.(reply);pending.delete(reply.id);}});
+ const ended=new Promise((resolve,reject)=>{child.once('error',reject);child.once('close',resolve);});
+ const send=request=>new Promise(resolve=>{pending.set(request.id,resolve);child.stdin.write(JSON.stringify(request)+'\n');});
+ const marker=text=>new Promise((resolve,reject)=>{let timer;const check=()=>{if(stderr.includes(text)){clearTimeout(timer);resolve();}};listeners.push(check);timer=setTimeout(()=>reject(Error('worker marker not observed: '+text+' '+stderr)),5000);check();});
+ return {send,marker,order,finish:async()=>{child.stdin.end();assert.equal(await ended,0,stderr);}};
+}
+
+test('a delayed Word enrichment status does not hold the production preview queue',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'equationlab-worker-enrich-wait-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const worker=await mockWorker(t,dir,`globalThis.fetch=async url=>{if(!String(url).endsWith('/native-enrich-request'))throw Error('unexpected request');process.stderr.write('ENRICH_WAIT\\n');await new Promise(r=>setTimeout(r,800));return {ok:true,json:async()=>({state:'pending'})};};`);
+ assert.equal((await worker.send({id:'warm',action:'validate',payload:{latex:'x+1'}})).ok,true);
+ const waiting=worker.send({id:'list',action:'wordSessionDocument',payload:{ticket:'a'.repeat(64)}});await worker.marker('ENRICH_WAIT');
+ const preview=worker.send({id:'preview',action:'validate',payload:{latex:'y+2',previewOnly:true}});
+ const [p,l]=await Promise.all([preview,waiting]);assert.equal(p.ok,true,p.error);assert.equal(l.ok,true,l.error);assert.equal(l.data.state,'pending');
+ assert.ok(worker.order.indexOf('preview')<worker.order.indexOf('list'),worker.order.join(','));await worker.finish();
+});
+
+test('list parsing yields to an independent preview and same-path cache waits without deadlock',async t=>{
+ const dir=await mkdtemp(join(tmpdir(),'equationlab-worker-enrich-parse-'));t.after(()=>rm(dir,{recursive:true,force:true}));
+ const file=join(dir,'snapshot.docx'),bytes=await createDocx(Array.from({length:30},(_,i)=>({latex:`x_{${i+1}}+1`})),{fragment:true});await writeFile(file,bytes);
+ const original=await inspectDocx(bytes),ticket='b'.repeat(64),native=inspectOle(original.objects[0].ole).native.toString('base64');
+ const session={ticket,session:'88',native,path:file,document:{path:file,index:0,name:'fixture',identity:'test:identity',snapshot:2}};
+ const preload=`const original=globalThis.setImmediate;let paused=false,armed=false;globalThis.setImmediate=(fn,...args)=>{if(armed&&!paused&&new Error().stack.includes('desktop-rpc.mjs')){paused=true;process.stderr.write('INDEX_PAUSED\\n');return setTimeout(()=>original(fn,...args),800);}return original(fn,...args);};globalThis.fetch=async (url,options)=>{if(String(url).endsWith('/native-enrich-request'))return {ok:true,json:async()=>({state:'available'})};armed=true;const request=JSON.parse(options.body),session=${JSON.stringify(session)};if(request.ticket==='c'.repeat(64)){session.ticket=request.ticket;session.native=Buffer.from('wrong native').toString('base64');}return {ok:true,json:async()=>session};};`;
+ const worker=await mockWorker(t,dir,preload);assert.equal((await worker.send({id:'warm',action:'validate',payload:{latex:'x+1'}})).ok,true);
+ const list=worker.send({id:'list',action:'wordSessionDocument',payload:{ticket}});await worker.marker('INDEX_PAUSED');
+ const preview=worker.send({id:'preview',action:'validate',payload:{latex:'y+2',previewOnly:true}});
+ const same=worker.send({id:'same-path',action:'editPreview',payload:{input:file,index:0,mode:'rebuild',latex:'z+2',previewOnly:true}});
+ const [p,l,s]=await Promise.all([preview,list,same]);assert.equal(p.ok,true,p.error);assert.equal(l.ok,true,l.error);assert.equal(s.ok,true,s.error);
+ assert.equal(l.data.document.documentIdentity,'test:identity');assert.equal(l.data.document.documentSnapshot,2);assert.deepEqual(l.data.document.objects.map(o=>o.nativeSha256),original.objects.map(o=>o.nativeSha256));
+ assert.ok(worker.order.indexOf('preview')<worker.order.indexOf('list'),worker.order.join(','));
+ const mismatch=await worker.send({id:'mismatch',action:'wordSessionDocument',payload:{ticket:'c'.repeat(64)}});assert.equal(mismatch.ok,false);assert.match(mismatch.error,/快照与当前公式不一致/);
+ await worker.finish();
 });
 
 test('production worker serves a preview inside readonly preflight while copy writes stay FIFO',async t=>{

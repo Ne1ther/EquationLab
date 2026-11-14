@@ -228,7 +228,7 @@ function mathTypeNumberLayout(scan,element){
  return {bookmarkName:bookmark.name,numberText:bookmark.cachedText,numberFormat:bookmark.numberFormat,numberingFamily:'mathtype',mode:bookmark.start<object.order?'numbered-left':'numbered-right',...context,equation:/^\d+$/.test(cached)&&Number.isSafeInteger(Number(cached))?Number(cached):null,...increments.length===1&&increments[0].instruction.reset!==null?{equationReset:increments[0].instruction.reset}:{}};
 }
 
-export async function inspectDocx(buffer,{checkpoint}={}) {
+export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) {
   const zip = await JSZip.loadAsync(buffer);
   const rootRelationships=zip.file('_rels/.rels');
   if(!rootRelationships)throw Error('Word document is missing its package relationships');
@@ -248,8 +248,8 @@ export async function inspectDocx(buffer,{checkpoint}={}) {
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
-  const numberingScan=scanWordNumberingPart(partDoc,part);
-  const references=new Map();for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
+  const numberingScan=nativeIndexOnly?null:scanWordNumberingPart(partDoc,part);
+  const references=new Map();if(!nativeIndexOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
   for(const e of Array.from(partDoc.getElementsByTagNameNS(NS.o,'OLEObject'))) {
     const progId = e.getAttribute('ProgID'); if(!['Equation.DSMT4','Equation.3'].includes(progId)) continue;
@@ -257,6 +257,11 @@ export async function inspectDocx(buffer,{checkpoint}={}) {
     const path=partPath(rel.getAttribute('Target'),part); if(!zip.file(path)) throw Error('Missing embedded object part');
     const ole=await zip.file(path).async('nodebuffer'); let inspected,parseError;
     try {inspected=inspectOle(ole);}catch(error){parseError=error.message;}
+    if(nativeIndexOnly){
+      objects.push({part,mainDocument:part===mainPart,parseError,nativeSha256:inspected?hash(inspected.native):null});
+      if(checkpoint)await checkpoint();
+      continue;
+    }
     const shape=e.parentNode.getElementsByTagNameNS(NS.v,'shape')[0], image=shape?.getElementsByTagNameNS(NS.v,'imagedata')[0], imageRel=image ? byId.get(image.getAttributeNS(NS.r,'id')) : null;
     let latex,previewError;try {latex=oleLatex(ole);}catch(error){previewError=error.message;}
     let paragraph=e;while(paragraph&&!(paragraph.namespaceURI===NS.w&&paragraph.localName==='p'))paragraph=paragraph.parentNode;
@@ -294,7 +299,15 @@ export async function inspectDocx(buffer,{checkpoint}={}) {
   }
   const legacyNumbers=objects.some(object=>object.layout?.bookmarkName&&object.layout.numberingFamily!=='mathtype');
   if((numberFormat===null||!legacyNumbers)&&zip.file('docProps/custom.xml')){
-   const custom=parseXml(await zip.file('docProps/custom.xml').async('string'));
+   let custom;
+   try{custom=parseXml(await zip.file('docProps/custom.xml').async('string'));}
+   catch(error){
+    // The full inspector may legitimately ignore this part when an Equation
+    // Lab numbering default is already authoritative. Preserve that exact
+    // acceptance boundary without doing numbering scans on the common path.
+    if(nativeIndexOnly)return inspectDocx(buffer,{checkpoint});
+    throw error;
+   }
    const property=Array.from(custom.getElementsByTagName('*')).find(n=>n.localName==='property'&&n.getAttribute('name')==='MTEquationNumber2');
    if(property){const value=property.textContent;try{previewNumberFormat(value);numberFormat=value;}catch{/* Unsupported MathType tokens remain host-owned. */}}
   }

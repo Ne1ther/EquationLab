@@ -2,6 +2,7 @@
 #include "ribbon_commands.mm"
 #include <iostream>
 #include <stdexcept>
+namespace {std::int32_t testGeneration=0;}
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState(){return 0;}
 void EquationLabDocumentContextDidCapture(){}
 void EquationLabDocumentContextDidClear(){}
@@ -16,6 +17,8 @@ std::int32_t EquationLabWordInsertionInline(){return 0;}
 std::int32_t EquationLabWordInsertionNumberingNext(){return 0;}
 void EquationLabCancelWordInsertion(){}
 NSData* EquationLabClaimWordInsertion(std::int32_t*){return nil;}
+std::int32_t EquationLabTakeWordInsertionFile(){return 0;}
+std::int32_t EquationLabWordInsertionFileNameNext(){return 0;}
 void EquationLabFinishWordInsertion(bool){}
 void EquationLabFinishWordInsertionUncertain(){}
 std::int32_t EquationLabWordInsertionError(){return 0;}
@@ -26,7 +29,7 @@ void EquationLabFailInsertionDocumentCapture(){}
 namespace bridge_probe {
 void publishWordWorkspace(NSDictionary*,NSArray<NSDictionary*>*){}
 void closeWordWorkspaceIdentity(NSString*){}
-std::int32_t diagnosticValue(std::uint32_t){return 0;}
+std::int32_t diagnosticValue(std::uint32_t){return testGeneration;}
 std::int32_t takeWordDocumentRequest(){return 0;}
 NSDictionary* wordDocumentRequestEnvelope(std::int32_t){return nil;}
 BOOL wordDocumentRequestIsCurrent(std::int32_t){return NO;}
@@ -35,7 +38,64 @@ std::int32_t currentWordDocumentRequestToken(){return 0;}
 std::int32_t finishWordDocumentRequest(std::int32_t,NSString*,NSString*){return -1;}
 }
 namespace {void check(bool value,const char* message){if(!value)throw std::runtime_error(message);}}
-int main(){@autoreleasepool{try{
+int main(int argc,char** argv){@autoreleasepool{try{
+    check(argc==2,"saved snapshot fixture path required");
+    NSString* source=[NSString stringWithUTF8String:argv[1]];
+    NSData* originalSavedBytes=[NSData dataWithContentsOfFile:source];check(originalSavedBytes.length>0,"saved fixture unavailable");
+    NSString* savedIdentityText=[NSString stringWithFormat:@"%@:42",documentProcessIdentity()];
+    auto savedPacket=^NSString*(int nonce,int identity,int snapshot,int index){return [NSString stringWithFormat:@"ELREUSE1\n%d\n%d\n%d\n%d",nonce,identity,snapshot,index];};
+    auto freshSavedSnapshot=^{
+        check([originalSavedBytes writeToFile:source atomically:YES],"cannot restore saved fixture");
+        BOOL selected=NO;NSString* recordedPath=nil;struct stat recorded{};
+        NSString* input=[NSString stringWithFormat:@"ELFILE1\n0\n42\n71\n0\n2\nfixture.docx\n%@",source];
+        NSDictionary* context=decodeDocumentContext(input,&selected,&recordedPath,&recorded);
+        check(context&&[context[@"encoding"] isEqual:@"docx-base64"]&&[context[@"identity"] isEqual:savedIdentityText]&&[recordedPath isEqual:source],"saved file capture failed");
+        check(!context[@"path"]&&!context[@"fileIdentity"],"private source leaked into public context");
+        rememberReusableSaved(context,recordedPath,recorded);
+        check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==1,"saved file not available for peek");
+    };
+    freshSavedSnapshot();
+    check(reuseSavedDocumentCaptureText(savedPacket(0,43,71,0),NO)==0&&reuseSavedDocumentCaptureText(savedPacket(0,42,72,0),NO)==0,"peek accepted another document or snapshot");
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,1),NO)==0&&reuseSavedDocumentCaptureText([savedPacket(0,42,71,0) stringByAppendingString:@"\n"],NO)==0,"malformed peek accepted");
+    int oldNonce=EquationLabIssuePreCapturedDocumentActivationNonce(@{@"identity":savedIdentityText,@"index":@1});
+    check(oldNonce>0&&reuseSavedDocumentCaptureText(savedPacket(oldNonce,42,71,1),YES)==0,"matching live file did not reuse with a fresh nonce");
+    check(EquationLabArmPreCapturedDocumentActivation(@{@"nonce":@(oldNonce),@"identity":savedIdentityText,@"snapshot":@71,@"index":@1}),"reused context could not arm exact target");
+    NSDictionary* consumed=EquationLabTakePreCapturedDocumentActivation();
+    check([consumed[@"_preCapturedActivation"] boolValue]&&[consumed[@"index"] intValue]==1&&[consumed[@"captureToken"] intValue]==oldNonce&&!consumed[@"path"],"reused candidate lost exact binding or leaked its private path");
+    check(reuseSavedDocumentCaptureText(savedPacket(oldNonce,42,71,1),YES)<0,"consumed nonce reused");
+    int newNonce=EquationLabIssuePreCapturedDocumentActivationNonce(@{@"identity":savedIdentityText,@"index":@1});
+    check(reuseSavedDocumentCaptureText(savedPacket(oldNonce,42,71,1),YES)<0&&reuseSavedDocumentCaptureText(savedPacket(newNonce,42,71,0),YES)<0,"old nonce or mismatched index accepted");
+    preCaptureExpiry=[NSDate dateWithTimeIntervalSinceNow:-1];
+    check(reuseSavedDocumentCaptureText(savedPacket(newNonce,42,71,1),YES)<0,"expired nonce accepted");
+    ++testGeneration;check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"generation change retained reusable snapshot");
+    freshSavedSnapshot();
+    struct stat oldStat{};check(bridge_probe::savedFileIdentity(source,oldStat),"same-size fixture stat failed");
+    int fd=open(source.fileSystemRepresentation,O_WRONLY|O_CLOEXEC);check(fd>=0,"same-size fixture open failed");
+    char changed=0;check(pwrite(fd,&changed,1,0)==1,"same-size rewrite failed");close(fd);
+    struct stat changedStat{};check(bridge_probe::savedFileIdentity(source,changedStat)&&oldStat.st_size==changedStat.st_size&&!bridge_probe::snapshot_zip::sameFile(oldStat,changedStat),"same-size rewrite did not alter identity");
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"same-size rewrite reused old snapshot");
+    freshSavedSnapshot();check([originalSavedBytes writeToFile:source atomically:YES],"atomic replacement failed");
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"renamed replacement reused old snapshot");
+    freshSavedSnapshot();
+    int raceNonce=EquationLabIssuePreCapturedDocumentActivationNonce(@{@"identity":savedIdentityText,@"index":@1});
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==1&&[originalSavedBytes writeToFile:source atomically:YES],"peek race setup failed");
+    check(reuseSavedDocumentCaptureText(savedPacket(raceNonce,42,71,1),YES)<0&&!preCaptureCandidate&&!reusableSavedContext,"replacement between peek and commit produced a reused candidate");
+    freshSavedSnapshot();raceNonce=EquationLabIssuePreCapturedDocumentActivationNonce(@{@"identity":savedIdentityText,@"index":@1});
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==1,"generation race setup failed");++testGeneration;
+    check(reuseSavedDocumentCaptureText(savedPacket(raceNonce,42,71,1),YES)<0&&!preCaptureCandidate&&!reusableSavedContext,"edit between peek and commit produced a reused candidate");
+    freshSavedSnapshot();NSString* linkTarget=[source stringByAppendingString:@".target"];
+    check([originalSavedBytes writeToFile:linkTarget atomically:YES]&&unlink(source.fileSystemRepresentation)==0&&symlink(linkTarget.fileSystemRepresentation,source.fileSystemRepresentation)==0,"symlink replacement failed");
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"symlink reused old snapshot");
+    unlink(source.fileSystemRepresentation);unlink(linkTarget.fileSystemRepresentation);
+    freshSavedSnapshot();check(unlink(source.fileSystemRepresentation)==0&&reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"unlinked source reused old snapshot");
+    freshSavedSnapshot();reusableSavedExpiry=[NSDate dateWithTimeIntervalSinceNow:-1];
+    check(reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0&&!reusableSavedContext,"expired saved snapshot remained reusable");
+    freshSavedSnapshot();clearDocumentCaptureState();check(!reusableSavedContext&&!reusableSavedPath,"document clear retained saved snapshot");
+    struct stat limitIdentity{};check(bridge_probe::savedFileIdentity(source,limitIdentity),"size limit fixture stat failed");
+    NSString* oversized=[@"a" stringByPaddingToLength:MaxReusableSavedBytes/sizeof(unichar)+1 withString:@"a" startingAtIndex:0];
+    NSDictionary* oversizedContext=@{@"identity":savedIdentityText,@"snapshot":@71,@"index":@0,@"count":@2,@"encoding":@"docx-base64",@"ooxml":oversized};
+    rememberReusableSaved(oversizedContext,source,limitIdentity);
+    check(!reusableSavedContext&&reuseSavedDocumentCaptureText(savedPacket(0,42,71,0),NO)==0,"oversized saved snapshot retained");
     using namespace bridge_probe::numbering_prompt;
     check(request(@"ELNUM1\nformat\n(#C1.#E1)\n\n")!=nil,"native numbering format packet rejected");
     check(request(@"ELNUM1\ncontext\n3\n2\n")!=nil,"native chapter/section packet rejected");
@@ -211,5 +271,5 @@ int main(){@autoreleasepool{try{
     std::int32_t replacementNonce=EquationLabIssuePreCapturedDocumentActivationNonce(@{@"identity":fastIdentity,@"index":@13});
     check(replacementNonce>0&&replacementNonce!=fastNonce&&!EquationLabArmPreCapturedDocumentActivation(@{@"nonce":@(fastNonce),@"identity":fastIdentity,@"snapshot":@906,@"index":@12})&&[EquationLabTakePreCapturedDocumentActivation()[@"_preCaptureRejected"] boolValue],"superseded nonce retained or consumed the earlier candidate");
     for(NSString* invalid in @[@"ELCTX2\n0\n2\n0\nfile\n<xml/>",@"ELCTX2\n1\n0\n0\nfile\n<xml/>",@"ELCTX2\n1\n2\n10001\nfile\n<xml/>",@"ELCTX2\n1\n2\n-1\nfile\n<xml/>",@"ELCTX2\n1\n2\n0",@"ELCTX2\n1bad\n2\n0\nfile\n<xml/>",@"invalid"]){check(!decodeDocumentContext(invalid),"malformed context accepted");}
-    std::cout<<"{\"legacy_context_preserved\":true,\"bound_context_header_and_xml_preserved\":true,\"elctx3_selection_marker_is_sidechannel_only\":true,\"elctx4_request_token_and_document_fields_preserved\":true,\"elact1_exact_activation_coordinates_and_validation\":true,\"elact2_nonce_and_binding_validation\":true,\"precapture_candidate_is_independent_and_one_shot\":true,\"prepared_activation_nonce_getter_is_read_only_and_one_shot\":true,\"ordinary_selection_clear_preserves_prepared_nonce\":true,\"document_clear_removes_prepared_nonce\":true,\"precapture_mismatch_expiry_clear_supersession_and_cross_document_rejected\":true,\"elctx3_consumption_requires_same_dictionary\":true,\"elsel3_index_marker_preserved\":true,\"elsel4_cached_snapshot_selection\":true,\"text_clear_requires_explicit_matching_tokens\":true,\"document_clear_and_token_mismatch_rejected\":true,\"ordinary_selection_clear_preserves_activation_hint\":true,\"fresh_activation_replaces_previous_hint\":true,\"activation_hint_expiry_and_explicit_clear\":true,\"elctx2_remains_unanchored\":true,\"same_named_documents_have_distinct_identities\":true,\"malformed_bindings_rejected\":10,\"real_word_or_gui_used\":false}\n";return 0;
+    std::cout<<"{\"saved_snapshot_reuse_fresh_nonce_and_private_identity\":true,\"saved_snapshot_peek_commit_races_rejected\":true,\"saved_snapshot_modified_replaced_symlink_unlinked_rejected\":true,\"saved_snapshot_memory_expiry_generation_clear\":true,\"legacy_context_preserved\":true,\"bound_context_header_and_xml_preserved\":true,\"elctx3_selection_marker_is_sidechannel_only\":true,\"elctx4_request_token_and_document_fields_preserved\":true,\"elact1_exact_activation_coordinates_and_validation\":true,\"elact2_nonce_and_binding_validation\":true,\"precapture_candidate_is_independent_and_one_shot\":true,\"prepared_activation_nonce_getter_is_read_only_and_one_shot\":true,\"ordinary_selection_clear_preserves_prepared_nonce\":true,\"document_clear_removes_prepared_nonce\":true,\"precapture_mismatch_expiry_clear_supersession_and_cross_document_rejected\":true,\"elctx3_consumption_requires_same_dictionary\":true,\"elsel3_index_marker_preserved\":true,\"elsel4_cached_snapshot_selection\":true,\"text_clear_requires_explicit_matching_tokens\":true,\"document_clear_and_token_mismatch_rejected\":true,\"ordinary_selection_clear_preserves_activation_hint\":true,\"fresh_activation_replaces_previous_hint\":true,\"activation_hint_expiry_and_explicit_clear\":true,\"elctx2_remains_unanchored\":true,\"same_named_documents_have_distinct_identities\":true,\"malformed_bindings_rejected\":10,\"real_word_or_gui_used\":false}\n";return 0;
 }catch(const std::exception& error){std::cerr<<error.what()<<'\n';return 1;}}}

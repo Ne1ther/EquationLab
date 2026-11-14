@@ -107,6 +107,8 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic,copy) ProbeReply completion;
 @property(nonatomic) BOOL statusValid;
 @property(nonatomic) BOOL cancelled;
+@property(nonatomic) BOOL measureOpen;
+@property(nonatomic,strong) NSDate* requestStartedAt;
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion;
 - (void)cancel;
 @end
@@ -131,6 +133,18 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
     if(request)[request URLSession:session dataTask:task didReceiveResponse:response completionHandler:completionHandler];else completionHandler(NSURLSessionResponseCancel);
 }
 - (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)task didReceiveData:(NSData*)data {[self.requests[@(task.taskIdentifier)] URLSession:session dataTask:task didReceiveData:data];}
+- (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didFinishCollectingMetrics:(NSURLSessionTaskMetrics*)metrics {
+    (void)session;
+    ProbeJsonRequest* request=self.requests[@(task.taskIdentifier)];
+    if(!request.measureOpen||!request.requestStartedAt)return;
+    NSURLSessionTaskTransactionMetrics* transaction=metrics.transactionMetrics.lastObject;
+    NSDate* start=transaction.responseStartDate;NSDate* end=transaction.responseEndDate;NSDate* now=NSDate.date;
+    const double firstMs=start?[start timeIntervalSinceDate:request.requestStartedAt]*1000.0:-1.0;
+    const double endMs=end?[end timeIntervalSinceDate:request.requestStartedAt]*1000.0:-1.0;
+    const double callbackLagMs=end?[now timeIntervalSinceDate:end]*1000.0:-1.0;
+    static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
+    os_log_info(logger,"word_open_http response_start_ms=%.3f response_end_ms=%.3f metrics_callback_lag_ms=%.3f",firstMs,endMs,callbackLagMs);
+}
 - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didCompleteWithError:(NSError*)error {
     ProbeJsonRequest* request=self.requests[@(task.taskIdentifier)];[self.requests removeObjectForKey:@(task.taskIdentifier)];
     [request URLSession:session task:task didCompleteWithError:error];
@@ -140,6 +154,8 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion {
     if((self=[super init])){
         _response=[NSMutableData data];_completion=[completion copy];
+        _measureOpen=[url.path isEqualToString:@"/api/native-open"];
+        if(_measureOpen)_requestStartedAt=NSDate.date;
         ProbeHttpSession* client=[ProbeHttpSession shared];_session=client.session;
         NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];
         request.HTTPMethod=@"POST";[request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
@@ -164,6 +180,10 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 }
 - (void)URLSession:(NSURLSession*)session task:(NSURLSessionTask*)task didCompleteWithError:(NSError*)error {
     (void)task;ProbeReply callback=self.completion;self.completion=nil;
+    if(self.measureOpen&&self.requestStartedAt){
+        static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
+        os_log_info(logger,"word_open_http completion_callback_ms=%.3f",[NSDate.date timeIntervalSinceDate:self.requestStartedAt]*1000.0);
+    }
     NSDictionary* json=nil;
     if(!error&&self.statusValid){id parsed=[NSJSONSerialization JSONObjectWithData:self.response options:0 error:&error];if([parsed isKindOfClass:NSDictionary.class])json=parsed;}
     if(!json&&!error)error=[NSError errorWithDomain:@"NativeEquationTransport" code:InvalidReply userInfo:nil];

@@ -1,9 +1,11 @@
 #import <AppKit/AppKit.h>
 #include <unistd.h>
 #include <os/log.h>
+#include <chrono>
 #include "word_host_pump.hpp"
 
 static constexpr NSTimeInterval kWorkspaceReconciliationInterval=4.0;
+enum : NSUInteger { WakeExplicit=1, WakeScheduled=2, WakePeriodic=4, WakeInitialization=8 };
 
 static BOOL textClientHasMarkedText(id client){
     if(![client respondsToSelector:@selector(hasMarkedText)])return NO;
@@ -41,10 +43,12 @@ static OSStatus sendHostMacro(NSString* macro) {
 @property(nonatomic) BOOL pending;
 @property(nonatomic) BOOL initializationPending;
 @property(nonatomic) BOOL navigationRequested;
+@property(nonatomic) NSUInteger wakeReasons;
 @property(nonatomic) BOOL pollScheduled;
 @property(nonatomic) NSUInteger scheduledPollGeneration;
 @property(nonatomic,strong) dispatch_source_t periodicWakeTimer;
 - (void)wake;
+- (void)wakeForReason:(NSUInteger)reason;
 - (void)initializeWordEvents;
 - (void)requestDispatch;
 - (void)acknowledgeInitialization;
@@ -64,8 +68,14 @@ static OSStatus sendHostMacro(NSString* macro) {
         return;
     }
     ++self.attempts;
+    const NSUInteger reasons=self.wakeReasons,attempt=self.attempts;
+    const bool initializing=self.initializationPending;
+    const auto started=std::chrono::steady_clock::now();
+    os_log_info(OS_LOG_DEFAULT,"WordHostPump begin attempt=%lu reasons=%lu init=%d",static_cast<unsigned long>(attempt),static_cast<unsigned long>(reasons),initializing);
     OSStatus status=self.send(self.initializationPending?@"EquationLabEntryPoints.ELInitializeDocumentEvents":@"EquationLabDocumentContext.ELPollNavigation");
-    os_log_info(OS_LOG_DEFAULT,"WordHostPump sent attempt=%lu status=%d",static_cast<unsigned long>(self.attempts),status);
+    const double elapsed=std::chrono::duration<double,std::milli>(std::chrono::steady_clock::now()-started).count();
+    const bool acknowledged=!self.pending||self.generation!=generation;
+    os_log_info(OS_LOG_DEFAULT,"WordHostPump sent attempt=%lu status=%d reasons=%lu init=%d acknowledged=%d send_ms=%.3f",static_cast<unsigned long>(attempt),status,static_cast<unsigned long>(reasons),initializing,acknowledged,elapsed);
     // The callback acknowledges on entry, including when the event is handled
     // inline. A delayed retry can never consume a newer wake's generation.
     if(!self.pending||self.generation!=generation)return;
@@ -74,10 +84,13 @@ static OSStatus sendHostMacro(NSString* macro) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<int64_t>(delay*NSEC_PER_SEC)),dispatch_get_main_queue(),^{[self dispatch:generation];});
 }
 - (void)wake {
-    self.navigationRequested=YES;[self requestDispatch];
+    [self wakeForReason:WakeExplicit];
+}
+- (void)wakeForReason:(NSUInteger)reason {
+    self.wakeReasons|=reason;self.navigationRequested=YES;[self requestDispatch];
 }
 - (void)initializeWordEvents {
-    self.initializationPending=YES;[self requestDispatch];
+    self.wakeReasons|=WakeInitialization;self.initializationPending=YES;[self requestDispatch];
 }
 - (void)requestDispatch {
     if(self.pending)return;
@@ -92,17 +105,17 @@ static OSStatus sendHostMacro(NSString* macro) {
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,NSEC_PER_SEC),dispatch_get_main_queue(),^{
         ELWordHostPump* pump=weakSelf;
         if(!pump||!pump.pollScheduled||pump.scheduledPollGeneration!=generation)return;
-        pump.pollScheduled=NO;[pump wake];
+        pump.pollScheduled=NO;[pump wakeForReason:WakeScheduled];
     });
 }
-- (void)acknowledge {self.pending=NO;self.navigationRequested=NO;++self.generation;self.pollScheduled=NO;++self.scheduledPollGeneration;}
+- (void)acknowledge {self.pending=NO;self.navigationRequested=NO;self.wakeReasons=0;++self.generation;self.pollScheduled=NO;++self.scheduledPollGeneration;}
 - (void)acknowledgeInitialization {
     if(!self.initializationPending)return;
-    BOOL navigate=self.navigationRequested;self.initializationPending=NO;
+    BOOL navigate=self.navigationRequested;NSUInteger reasons=self.wakeReasons&~WakeInitialization;self.initializationPending=NO;
     // Initialization did not consume a scheduled navigation poll. Retire
     // only its own dispatch generation; leave the delayed poll intact.
-    self.pending=NO;self.navigationRequested=NO;++self.generation;
-    if(navigate)[self wake];
+    self.pending=NO;self.navigationRequested=NO;self.wakeReasons=0;++self.generation;
+    if(navigate)[self wakeForReason:reasons];
 }
 - (void)startPeriodicWakeWithInterval:(NSTimeInterval)interval leeway:(NSTimeInterval)leeway {
     // One process-lifetime timer recovers missed Word events. All work shares
@@ -117,7 +130,7 @@ static OSStatus sendHostMacro(NSString* macro) {
     __weak ELWordHostPump* weakSelf=self;
     dispatch_source_set_event_handler(timer,^{
         ELWordHostPump* pump=weakSelf;
-        if(pump&&(!pump.periodicWakeAllowed||pump.periodicWakeAllowed()))[pump wake];
+        if(pump&&(!pump.periodicWakeAllowed||pump.periodicWakeAllowed()))[pump wakeForReason:WakePeriodic];
     });
     dispatch_resume(timer);
 }

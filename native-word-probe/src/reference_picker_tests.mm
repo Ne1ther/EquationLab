@@ -18,11 +18,18 @@ int main(){@autoreleasepool{
     assert(!request(@"ELREF1\n01\n1\tEL_ok\t(1)\ttext\n"));
     assert(!request(@"ELREF1\n1\n2\tEL_ok\t(1)\ttext\n"));
     assert(!request(@"ELREF1\n1\n1\tunsafe-name\t(1)\ttext\n"));
+    auto shared=request(@"ELREF1\n2\n1\tZEqnNum123456\t(3.18)\tEquation\n2\tEL_existing\t(3.19)\tEquation\n");
+    assert(shared.count==2);assert([shared[0][@"bookmark"] isEqual:@"ZEqnNum123456"]);
+    assert(!request(@"ELREF1\n1\n1\tZEqnNum\t(1)\ttext\n"));
+    assert(!request(@"ELREF1\n1\n1\tZEqnNum_bad name\t(1)\ttext\n"));
+    assert(!request(@"ELREF1\n2\n1\tZEqnNum123\t(1)\ttext\n2\tzeqnnum123\t(2)\ttext\n"));
     assert(!request(@"ELREF1\n1\n1\tEL_unsafe name\t(1)\ttext\n"));
     assert(!request(@"ELREF1\n2\n1\tEL_same\t(1)\ttext\n2\tEL_SAME\t(2)\ttext\n"));
     assert(!request(@"ELREF1\n1\n1\tEL_ok\t\ttext\n"));
     assert(!request(@"ELREF1\n1\n1\tEL_ok\t(1)\ttext\textra\n"));
     assert(!request(@"ELREF1\n1\n1\tEL_ok\t(1)\tcontrol\rcharacter\n"));
+    assert(request(@"ELREF1\n1\n1\tEL_ok\t(1)\tf\u2061(x)\n").count==1);
+    assert(!request(@"ELREF1\n1\n1\tEL_ok\t(1)\tbad\u0085value\n"));
     NSString* longNumber=[@"n" stringByPaddingToLength:129 withString:@"n" startingAtIndex:0];
     assert(!request([NSString stringWithFormat:@"ELREF1\n1\n1\tEL_ok\t%@\ttext\n",longNumber]));
     NSString* longContext=[@"x" stringByPaddingToLength:257 withString:@"x" startingAtIndex:0];

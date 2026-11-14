@@ -173,6 +173,33 @@ test('Opening a Word formula renders and syncs once, skips the debounce, and wai
  for(const value of Object.values(timingMessages[0].payload))assert.ok(Number.isFinite(value)&&value>=0&&value<60_000);
 });
 
+test('The first preview runs while the sidebar acknowledgement is pending, but Word delivery waits for both',async()=>{
+ const ticket='8'.repeat(64),editor=createEditor(async action=>action==='wordSessionRead'?snapshot(25,'open'):{}),context=editor.context;
+ let releaseSidebar,previewStarted,ready=false;
+ const sidebar=new Promise(resolve=>{releaseSidebar=resolve;}),preview=new Promise(resolve=>{previewStarted=resolve;});
+ context.selectObject=index=>{context.selected=context.source.objects[index];context.mf.value=context.selected.latex;context.selected.editorBaseline=context.mf.value;return sidebar;};
+ context.validate=async()=>{previewStarted();};
+ const opening=context.window.nativeOpenWordSession(ticket).then(result=>{ready=true;return result;});
+ await preview;
+ await Promise.resolve();
+ assert.equal(ready,false,'Word must not be marked ready before the sidebar acknowledgement');
+ assert.equal(context.busy,true,'the delivery keeps the editor bound while the acknowledgement is outstanding');
+ releaseSidebar();
+ assert.equal(await opening,true);
+ assert.equal(context.busy,false);
+});
+
+test('A generation change during the concurrent sidebar acknowledgement cannot publish a stale ready',async()=>{
+ const ticket='7'.repeat(64),editor=createEditor(async action=>action==='wordSessionRead'?snapshot(25,'open'):{}),context=editor.context;
+ let releaseSidebar,previewStarted;const sidebar=new Promise(resolve=>{releaseSidebar=resolve;}),preview=new Promise(resolve=>{previewStarted=resolve;});
+ context.selectObject=index=>{context.selected=context.source.objects[index];context.mf.value=context.selected.latex;context.selected.editorBaseline=context.mf.value;return sidebar;};
+ context.validate=async()=>{previewStarted();};
+ const opening=context.window.nativeOpenWordSession(ticket);await preview;
+ context.window.wordSessionGeneration=(context.window.wordSessionGeneration??0)+1;releaseSidebar();
+ assert.equal(await opening,false);
+ assert.equal(editor.messages.includes('已载入 Word 文档中的 30 个公式。'),false);
+});
+
 test('Repeated live same-ticket activation validates the native session without overwriting an unsaved formula-26 draft',async()=>{
  const ticket='d'.repeat(64);let reads=0,statusChecks=0;
  const editor=createEditor(async(action,payload={})=>{

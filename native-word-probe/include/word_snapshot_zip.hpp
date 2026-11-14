@@ -71,11 +71,17 @@ inline NSData* compact(int fd,const struct stat& before,WordSnapshotStats& stats
  struct stat after{};if(fstat(fd,&after)||!sameFile(before,after)||output.length>MaxPacked)return nil;stats.entries=retained.size();return output;
 }
 }
-inline NSData* compactSavedWordDocument(NSString* path,WordSnapshotStats* measured=nullptr){
+inline bool savedFileIdentity(NSString* path,struct stat& identity){
+ if(![path hasPrefix:@"/"]||[path rangeOfString:@"\n"].location!=NSNotFound)return false;
+ int fd=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return false;
+ struct stat current{};const bool valid=!fstat(fd,&current)&&S_ISREG(current.st_mode)&&current.st_uid==geteuid();close(fd);
+ if(valid)identity=current;return valid;
+}
+inline NSData* compactSavedWordDocument(NSString* path,WordSnapshotStats* measured=nullptr,struct stat* identity=nullptr){
  if(![path hasPrefix:@"/"]||[path rangeOfString:@"\n"].location!=NSNotFound)return nil;
  int fd=open(path.fileSystemRepresentation,O_RDONLY|O_CLOEXEC|O_NOFOLLOW);if(fd<0)return nil;
  struct stat before{};WordSnapshotStats stats;NSData* result=nil;
  if(!fstat(fd,&before)&&S_ISREG(before.st_mode)&&before.st_uid==geteuid())result=snapshot_zip::compact(fd,before,stats);
- close(fd);if(measured)*measured=stats;return result;
+ close(fd);if(measured)*measured=stats;if(result&&identity)*identity=before;return result;
 }
 }

@@ -39,6 +39,19 @@ test('App insert binds the selected document and carries a standalone draft with
  }
 });
 
+test('A Word insertion failure reports its host reason and retains the draft for each mode',async()=>{
+ for(const mode of ['inline','display','numbered-left','numbered-right']){
+  const e=setup(),draft={latex:'x^2+1'};
+  e.api.captureInsertionDraft=()=>draft;e.state.draftChanged=true;e.workspace.accepted(document());
+  e.behavior(async action=>action==='wordWorkspaceStatus'?{connected:true,insertionRequestSupport:true,revision:1,active:{identity:'word:1:2',name:'A.docx'},documents:[{identity:'word:1:2',name:'A.docx',readOnly:false}]}:action==='wordDocumentStatus'?{state:'failed',reason:'Another reference bookmark overlaps the number.'}:undefined);
+  assert.equal(await e.workspace.insert(mode),true);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(e.workspace.pending,false);assert.equal(e.state.draftChanged,true);
+  assert.ok(e.messages.some(m=>m.error&&m.text.includes('Another reference bookmark overlaps the number.')&&m.text.includes('草稿仍保留')));
+  assert.equal(e.calls.some(c=>['wordSessionInsert','wordSessionSave'].includes(c.action)),false);
+ }
+});
+
 test('App insert after a selected equation uses the retained range and rejects changed native data',async()=>{
  const e=setup();e.state.source={...document(),insertion:false};e.state.wordTicket=ticket;e.state.selectedIndex=1;
  e.workspace.accepted(e.state.source);

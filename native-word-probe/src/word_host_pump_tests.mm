@@ -25,17 +25,19 @@ int main(){@autoreleasepool{try{
     client.marked=YES;
     check(textClientHasMarkedText(client)&&client.queries==2,"marked client was not queried correctly");
     ELWordHostPump* initial=[ELWordHostPump new];__block NSUInteger initSent=0,navSent=0;__block BOOL initMarked=YES;
+    __block NSUInteger initialReasons=0,navigationReasons=0;
     __weak ELWordHostPump* initWeak=initial;
     initial.deferMacro=^BOOL{return initMarked;};
     initial.send=^OSStatus(NSString* macro){
-        if([macro isEqual:@"EquationLabEntryPoints.ELInitializeDocumentEvents"]){++initSent;[initWeak acknowledgeInitialization];}
-        else {check([macro isEqual:@"EquationLabDocumentContext.ELPollNavigation"],"unexpected initialization macro");++navSent;[initWeak acknowledge];}
+        if([macro isEqual:@"EquationLabEntryPoints.ELInitializeDocumentEvents"]){++initSent;initialReasons=initWeak.wakeReasons;[initWeak acknowledgeInitialization];}
+        else {check([macro isEqual:@"EquationLabDocumentContext.ELPollNavigation"],"unexpected initialization macro");++navSent;navigationReasons=initWeak.wakeReasons;[initWeak acknowledge];}
         return noErr;
     };
-    [initial initializeWordEvents];[initial wake];[initial wake];runFor(0.6);
+    [initial initializeWordEvents];[initial wake];[initial wakeForReason:WakeScheduled];[initial wakeForReason:WakePeriodic];runFor(0.6);
     check(initSent==0&&navSent==0&&initial.pending&&initial.attempts==0,"initialization bypassed marked text or spent retries");
     initMarked=NO;runFor(0.45);
     check(initSent==1&&navSent==1&&!initial.pending&&!initial.initializationPending,"initialization did not hand queued navigation off once");
+    check(initialReasons==(WakeInitialization|WakeExplicit|WakeScheduled|WakePeriodic)&&navigationReasons==(WakeExplicit|WakeScheduled|WakePeriodic)&&initial.wakeReasons==0,"coalesced wake reasons changed across initialization or acknowledgement");
     runFor(0.35);check(initSent==1&&navSent==1,"initialization or queued navigation repeated");
     initMarked=YES;[initial wake];runFor(0.1);NSUInteger initGeneration=initial.generation;
     [initial acknowledgeInitialization];[initial acknowledgeInitialization];

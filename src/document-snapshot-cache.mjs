@@ -57,14 +57,14 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   if(await fileIdentity(path)!==id)throw Error('Document changed while reading');
   return bytes;
  }
- async function parse(bytes,key){
+ async function parse(bytes,key,{checkpoint}={}){
   let entry=entries.get(key);
   if(entry){hits++;touch(key,entry);return entry.document;}
   let promise=pendingContent.get(key);
   if(!promise){
    misses++;
    promise=(async()=>{
-    const inspected=await inspect(bytes);
+    const inspected=await inspect(bytes,{checkpoint});
     let preset;try{preset=await readTypographyPreset(inspected);}catch{preset=null;}
     const document=projectDocumentSnapshot(inspected,preset),size=estimateSnapshotBytes(document);
     if(size<=maxBytes&&maxEntries>0){entry={document,size};entries.set(key,entry);retainedBytes+=size;evict();}
@@ -77,7 +77,7 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   entry=entries.get(key);if(entry)touch(key,entry);
   return document;
  }
- async function get(path){
+ async function get(path,{checkpoint}={}){
   const id=await fileIdentity(path),previous=files.get(path);
   if(previous?.id===id){
    const entry=entries.get(previous.key);
@@ -87,7 +87,7 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   let promise=pendingPaths.get(inflightKey);
   if(!promise){
    promise=(async()=>{
-    const bytes=await readStable(path,id),key=digest(bytes),document=await parse(bytes,key);
+    const bytes=await readStable(path,id),key=digest(bytes),document=await parse(bytes,key,{checkpoint});
     if(await fileIdentity(path)!==id)throw Error('Document changed while inspecting');
     rememberFile(path,id,key);
     return {document,contentHash:key};

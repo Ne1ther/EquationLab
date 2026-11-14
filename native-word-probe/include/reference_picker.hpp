@@ -17,13 +17,18 @@ inline NSArray<NSDictionary*>* request(NSString* text){
     if(lines.count<4 || ![lines[0] isEqual:@"ELREF1"] || lines.lastObject.length)return nil;
     NSInteger count=lines[1].integerValue;
     if(count<1 || count>2000 || ![lines[1] isEqual:[@(count) stringValue]] || lines.count!=static_cast<NSUInteger>(count+3))return nil;
-    NSRegularExpression* name=[NSRegularExpression regularExpressionWithPattern:@"^EL_[A-Za-z0-9_]{1,37}$" options:0 error:nil];
+    NSRegularExpression* name=[NSRegularExpression regularExpressionWithPattern:@"^(?:EL_[A-Za-z0-9_]{1,37}|ZEqnNum[A-Za-z0-9_]{1,33})$" options:NSRegularExpressionCaseInsensitive error:nil];
     NSMutableSet<NSString*>* names=[NSMutableSet set];NSMutableArray<NSDictionary*>* values=[NSMutableArray arrayWithCapacity:count];
     for(NSInteger i=0;i<count;i++){
         NSArray<NSString*>* fields=[lines[i+2] componentsSeparatedByString:@"\t"];
         if(fields.count!=4 || ![fields[0] isEqual:[@(i+1) stringValue]] || !fields[2].length || fields[2].length>128 || fields[3].length>256)return nil;
         if([name numberOfMatchesInString:fields[1] options:0 range:NSMakeRange(0,fields[1].length)]!=1 || [names containsObject:fields[1].lowercaseString])return nil;
-        for(NSString* field in fields)if([field rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return nil;
+        // Reject wire controls, not Unicode format characters such as U+2061
+        // (INVISIBLE FUNCTION APPLICATION), which Word may use in math text.
+        for(NSString* field in fields)for(NSUInteger j=0;j<field.length;j++){
+            unichar c=[field characterAtIndex:j];
+            if(c<0x20 || (c>=0x7f && c<=0x9f))return nil;
+        }
         [names addObject:fields[1].lowercaseString];
         [values addObject:@{@"ordinal":@(i+1),@"bookmark":fields[1],@"number":fields[2],@"context":fields[3]}];
     }

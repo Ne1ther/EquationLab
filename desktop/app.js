@@ -295,9 +295,18 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
  $('word-session-actions').hidden=false;$('export').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
  $('title').textContent=r.insertion?'新建 Word 公式':'编辑 Word 中的原生公式';$('subtitle').textContent=r.insertion?'输入或粘贴公式，完成后插入 Word；取消不会修改文档。':'编辑后点击更新公式；也可以取消并保留 Word 原公式。';
  if(r.documentLoading)r.layoutBaseline=JSON.stringify(wordLayout());
- const prepareFinished=performance.now();await sidebarSync;const sidebarFinished=performance.now();await validate();const validatedAt=performance.now();
+ // Publishing the selected sidebar state and checking its preview are
+ // independent. Keep delivery pending until both finish, without making the
+ // first preview wait for the native sidebar acknowledgement.
+ const prepareFinished=performance.now();let sidebarFinished,validatedAt;
+ const [sidebarResult,validationResult]=await Promise.allSettled([
+  Promise.resolve(sidebarSync).finally(()=>{sidebarFinished=performance.now();}),
+  validate().finally(()=>{validatedAt=performance.now();})
+ ]);
+ if(sidebarResult.status==='rejected')throw sidebarResult.reason;
+ if(validationResult.status==='rejected')throw validationResult.reason;
  if(generation!==(window.wordSessionGeneration??0))return false;
- try{window.webkit.messageHandlers.native.postMessage({action:'wordOpenTiming',payload:{readMs:readFinished-readStarted,prepareMs:prepareFinished-readFinished,sidebarMs:sidebarFinished-prepareFinished,validateMs:validatedAt-sidebarFinished,totalMs:validatedAt-timingStart}});}catch{}
+ try{window.webkit.messageHandlers.native.postMessage({action:'wordOpenTiming',payload:{readMs:readFinished-readStarted,prepareMs:prepareFinished-readFinished,sidebarMs:sidebarFinished-prepareFinished,validateMs:validatedAt-prepareFinished,totalMs:performance.now()-timingStart}});}catch{}
  setTimeout(()=>r.documentLoading?loadWordDocument(ticket,r):loadWordThumbnails(ticket,r),250);void window.wordDocumentWorkspace?.refreshList();message(r.insertion?'输入或粘贴公式，完成后插入 Word。':r.documentLoading?'当前公式已就绪，正在加载文档中的其他公式…':r.hasDocumentContext?'已载入 Word 文档中的 '+r.objects.length+' 个公式。':'已载入当前公式；未能读取文档列表，请回到 Word 重新打开。');
  }catch(e){await native('wordSessionCancel',{ticket}).catch(()=>{});throw e;}
  },true);

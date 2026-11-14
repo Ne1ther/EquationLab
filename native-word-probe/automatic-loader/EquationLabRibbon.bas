@@ -1,5 +1,6 @@
 Attribute VB_Name = "EquationLabRibbon"
 Option Explicit
+Private mTransactionDocument As Document
 
 ' Compiled by the developer. Installed as a global Startup template by PKG.
 Public Sub ELRibbonAction(ByVal control As IRibbonControl)
@@ -71,6 +72,184 @@ Private Sub SavePreferenceForDocument(ByVal Doc As Document, ByVal key As String
     Next
     Doc.Variables.Add Name:=key, value:=value
 End Sub
+
+' One synchronous operation owns one Word undo record. Word does not undo
+' document variables or custom properties, so capture those separately.
+Public Function ELBeginNumberingTransaction(ByVal Doc As Document, ByVal title As String) As Collection
+    Dim transaction As Collection, variables As Collection, item As Variable
+    Dim propertyState As Variant, prop As Object, key As Variant, found As Boolean
+    Dim record As UndoRecord, sentinel As String, serial As Long, sentinelAdded As Boolean, undoOK As Boolean, recovery As String
+    Set record = Application.UndoRecord
+    If record.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Another Word edit is in progress."
+    Set transaction = New Collection: Set variables = New Collection
+    For Each key In Array("EquationLabNumberFormat", "EquationLabChapter", "EquationLabSection", "EquationLabNumberingRevision")
+        found = False
+        For Each item In Doc.Variables
+            If StrComp(item.Name, CStr(key), vbTextCompare) = 0 Then
+                variables.Add Array(item.Name, True, item.Value): found = True: Exit For
+            End If
+        Next
+        If Not found Then variables.Add Array(CStr(key), False, "")
+    Next
+    propertyState = Array("MTEquationNumber2", False, 0, False, "", "")
+    For Each prop In Doc.CustomDocumentProperties
+        If StrComp(prop.Name, "MTEquationNumber2", vbTextCompare) = 0 Then
+            If prop.LinkToContent Then
+                propertyState = Array(prop.Name, True, prop.Type, True, prop.Value, prop.LinkSource)
+            Else
+                propertyState = Array(prop.Name, True, prop.Type, False, prop.Value, "")
+            End If
+            Exit For
+        End If
+    Next
+    transaction.Add record, "record": transaction.Add variables, "variables"
+    transaction.Add propertyState, "property": transaction.Add False, "started"
+    record.StartCustomRecord title
+    transaction.Remove "started": transaction.Add True, "started"
+    ' A net-zero bookmark edit ensures that this record, even if the next
+    ' operation fails before its first write, cannot undo a user's prior edit.
+    sentinel = "EL_Transaction"
+    Do While Doc.Bookmarks.Exists(sentinel)
+        serial = serial + 1: sentinel = "EL_Transaction" & CStr(serial)
+    Loop
+    On Error GoTo Failed
+    Doc.Bookmarks.Add Name:=sentinel, Range:=Doc.Range(0, 0)
+    sentinelAdded = True
+    Doc.Bookmarks(sentinel).Delete
+    Set mTransactionDocument = Doc
+    Set ELBeginNumberingTransaction = transaction
+    Exit Function
+Failed:
+    Dim failureNumber As Long, failureDescription As String
+    failureNumber = Err.Number: failureDescription = Err.Description
+    On Error Resume Next
+    If Doc.Bookmarks.Exists(sentinel) Then sentinelAdded = True
+    Err.Clear
+    record.EndCustomRecord
+    If Err.Number <> 0 Then
+        recovery = " Could not close the undo record."
+    ElseIf sentinelAdded Then
+        Err.Clear: undoOK = Doc.Undo
+        If Err.Number <> 0 Or Not undoOK Or Doc.Bookmarks.Exists(sentinel) Then recovery = " Undo of the temporary bookmark failed."
+    Else
+        recovery = " The attempted bookmark change could not be verified."
+    End If
+    On Error GoTo 0
+    Err.Raise failureNumber, "Equation Lab", "Could not establish the undo record; inspect the document before saving: " & failureDescription & recovery
+End Function
+
+Public Sub ELCommitNumberingTransaction(ByVal transaction As Collection)
+    Dim record As UndoRecord
+    Set record = transaction("record")
+    record.EndCustomRecord
+    transaction.Remove "started": transaction.Add False, "started"
+    Set mTransactionDocument = Nothing
+End Sub
+
+Public Sub ELRollbackNumberingTransaction(ByVal Doc As Document, ByVal transaction As Collection)
+    Dim record As UndoRecord, variables As Collection, state As Variant, item As Variable, prop As Object
+    Dim existing As Object, key As String, exists As Boolean, undoOK As Boolean, failure As String
+    Set record = transaction("record"): Set variables = transaction("variables")
+    On Error Resume Next
+    If CBool(transaction("started")) Then
+        Err.Clear: record.EndCustomRecord
+        If Err.Number <> 0 Then failure = failure & " Cannot close undo record: " & Err.Description
+        If Err.Number = 0 Then
+            Err.Clear: undoOK = Doc.Undo
+            If Err.Number <> 0 Or Not undoOK Then failure = failure & " Word undo failed."
+        End If
+    End If
+    For Each state In variables
+        key = CStr(state(0)): exists = False
+        For Each item In Doc.Variables
+            If StrComp(item.Name, key, vbTextCompare) = 0 Then
+                exists = True: Err.Clear
+                If CBool(state(1)) Then
+                    If item.Value <> CStr(state(2)) Then item.Value = CStr(state(2))
+                Else
+                    item.Delete
+                End If
+                If Err.Number <> 0 Then failure = failure & " Cannot restore variable " & key & "."
+                Exit For
+            End If
+        Next
+        If CBool(state(1)) And Not exists Then
+            Err.Clear: Doc.Variables.Add Name:=key, Value:=CStr(state(2))
+            If Err.Number <> 0 Then failure = failure & " Cannot restore variable " & key & "."
+        End If
+    Next
+    state = transaction("property"): Set existing = Nothing
+    For Each prop In Doc.CustomDocumentProperties
+        If StrComp(prop.Name, CStr(state(0)), vbTextCompare) = 0 Then Set existing = prop: Exit For
+    Next
+    Err.Clear
+    If Not existing Is Nothing Then
+        If Not CBool(state(1)) Then
+            existing.Delete: Set existing = Nothing
+        ElseIf existing.Type <> CLng(state(2)) Or existing.LinkToContent <> CBool(state(3)) Then
+            existing.Delete: Set existing = Nothing
+        ElseIf CBool(state(3)) Then
+            If CStr(existing.LinkSource) <> CStr(state(5)) Then existing.Delete: Set existing = Nothing
+        ElseIf existing.Value <> state(4) Then
+            existing.Value = state(4)
+        End If
+    End If
+    If Err.Number <> 0 Then failure = failure & " Cannot restore custom property."
+    If CBool(state(1)) And existing Is Nothing Then
+        Err.Clear
+        If CBool(state(3)) Then
+            Doc.CustomDocumentProperties.Add Name:=CStr(state(0)), LinkToContent:=True, Type:=CLng(state(2)), LinkSource:=CStr(state(5))
+        Else
+            Doc.CustomDocumentProperties.Add Name:=CStr(state(0)), LinkToContent:=False, Type:=CLng(state(2)), Value:=state(4)
+        End If
+        If Err.Number <> 0 Then failure = failure & " Cannot recreate custom property."
+    End If
+    On Error GoTo 0
+    Set mTransactionDocument = Nothing
+    If Not ELNumberingMetadataMatches(Doc, transaction) Then failure = failure & " Metadata verification failed."
+    If failure <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", "Recovery failed; inspect the document before saving." & failure
+End Sub
+
+Private Function ELNumberingMetadataMatches(ByVal Doc As Document, ByVal transaction As Collection) As Boolean
+    On Error GoTo Failed
+    Dim variables As Collection, state As Variant, item As Variable, prop As Object, found As Boolean
+    Set variables = transaction("variables")
+    For Each state In variables
+        found = False
+        For Each item In Doc.Variables
+            If StrComp(item.Name, CStr(state(0)), vbTextCompare) = 0 Then
+                If found Or Not CBool(state(1)) Then Exit Function
+                If item.Name <> CStr(state(0)) Or item.Value <> CStr(state(2)) Then Exit Function
+                found = True
+            End If
+        Next
+        If found <> CBool(state(1)) Then Exit Function
+    Next
+    state = transaction("property"): found = False
+    For Each prop In Doc.CustomDocumentProperties
+        If StrComp(prop.Name, CStr(state(0)), vbTextCompare) = 0 Then
+            If found Or Not CBool(state(1)) Then Exit Function
+            If prop.Name <> CStr(state(0)) Or prop.Type <> CLng(state(2)) Or prop.LinkToContent <> CBool(state(3)) Then Exit Function
+            If CBool(state(3)) Then
+                If CStr(prop.LinkSource) <> CStr(state(5)) Then Exit Function
+            ElseIf prop.Value <> state(4) Then
+                Exit Function
+            End If
+            found = True
+        End If
+    Next
+    If found <> CBool(state(1)) Then Exit Function
+    ELNumberingMetadataMatches = True
+Failed:
+End Function
+
+Public Function ELTransactionRecoveryMessage(ByVal Doc As Document, ByVal transaction As Collection) As String
+    On Error GoTo Failed
+    ELRollbackNumberingTransaction Doc, transaction
+    Exit Function
+Failed:
+    ELTransactionRecoveryMessage = Err.Description
+End Function
 
 ' Compute preview counters from fields before the insertion point. A chapter
 ' reset is a hidden SEQ field, not a visible equation to count.
@@ -200,7 +379,6 @@ Public Sub ELStartEquationInsertion(ByVal kind As String, ByVal selectedRange As
     Set Doc = selectedRange.Document
     If Not (Doc Is ActiveDocument) Then Err.Raise vbObjectError + 7346, "Equation Lab", "The insertion document changed."
     If selectedRange.Start <> selectedRange.End Or selectedRange.StoryType <> wdMainTextStory Then Err.Raise vbObjectError + 7346, "Equation Lab", "Place an empty cursor in the document body."
-    ELUpgradeNumberingForInterop Doc
     selectedRange.Select
     chapter = CurrentCounter("ELChapter", Preference("EquationLabChapter", "1"))
     section = CurrentCounter("ELSection", Preference("EquationLabSection", "1"))
@@ -245,29 +423,61 @@ Private Sub OpenDocumentEditor()
 End Sub
 
 Private Sub NavigateEquation(ByVal forward As Boolean)
+    On Error GoTo Failed
     RequireDocument
     Dim equation As InlineShape, chosen As InlineShape, current As InlineShape, position As Long
+    Dim Doc As Document, span As Range, shapes As InlineShapes, boundary As Long, cursor As Long, edge As Long, i As Long
+    Dim oldScreenUpdating As Boolean, screenGuard As Boolean
     ' Selection.Start can precede an embedded field's InlineShape range. Resolve
     ' an exact supported selection first, then step from the object boundary.
     Set current = ELSelectedEquation(Selection)
     position = Selection.Start
     If Not current Is Nothing Then position = current.Range.Start
-    For Each equation In ActiveDocument.InlineShapes
-        If IsEquation(equation) Then
-            If forward Then
-                If equation.Range.Start > position Then
-                    If chosen Is Nothing Then Set chosen = equation
-                    If equation.Range.Start < chosen.Range.Start Then Set chosen = equation
-                End If
-            Else
-                If equation.Range.Start < position Then
-                    If chosen Is Nothing Then Set chosen = equation
-                    If equation.Range.Start > chosen.Range.Start Then Set chosen = equation
-                End If
-            End If
-        End If
-    Next
-    If Not chosen Is Nothing Then chosen.Range.Select
+    Set Doc = ActiveDocument
+    ELBeginRibbonNavigation
+    oldScreenUpdating = Application.ScreenUpdating
+    screenGuard = True
+    If oldScreenUpdating Then Application.ScreenUpdating = False
+    If forward Then
+        boundary = Doc.Content.End: cursor = position + 1
+        Do While cursor < boundary
+            edge = cursor + 8192
+            If edge > boundary Then edge = boundary
+            Set span = Doc.Range(cursor, edge): Set shapes = span.InlineShapes
+            For i = 1 To shapes.Count
+                Set equation = shapes(i)
+                If equation.Range.StoryType = wdMainTextStory And equation.Range.Start > position And IsEquation(equation) Then Set chosen = equation: Exit For
+            Next
+            If Not chosen Is Nothing Then Exit Do
+            cursor = edge
+        Loop
+    Else
+        boundary = Doc.Content.Start: cursor = position
+        Do While cursor > boundary
+            edge = cursor - 8192
+            If edge < boundary Then edge = boundary
+            Set span = Doc.Range(edge, cursor): Set shapes = span.InlineShapes
+            For i = shapes.Count To 1 Step -1
+                Set equation = shapes(i)
+                If equation.Range.StoryType = wdMainTextStory And equation.Range.Start < position And IsEquation(equation) Then Set chosen = equation: Exit For
+            Next
+            If Not chosen Is Nothing Then Exit Do
+            cursor = edge
+        Loop
+    End If
+    If oldScreenUpdating Then Application.ScreenUpdating = True
+    screenGuard = False
+    If Not chosen Is Nothing Then ELSelectRibbonNavigationTarget chosen
+    Exit Sub
+Failed:
+    Dim number As Long, description As String
+    number = Err.Number: description = Err.Description
+    If screenGuard Then
+        On Error Resume Next
+        If oldScreenUpdating Then Application.ScreenUpdating = True
+        On Error GoTo 0
+    End If
+    Err.Raise number, "Equation Lab", description
 End Sub
 
 Private Sub BrowseEquations()
@@ -301,17 +511,15 @@ End Sub
 ' Numbering a selected equation is deliberately restricted to a plain, single
 ' equation paragraph. It never inserts/replaces the OLE or imports a DOCX.
 Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1)
-    Dim record As UndoRecord, changed As Boolean, own As Boolean
-    Dim failureNumber As Long, failureDescription As String, futureFormat As String
+    Dim transaction As Collection, changed As Boolean
+    Dim failureNumber As Long, failureDescription As String, futureFormat As String, recovery As String
     On Error GoTo Failed
     If Doc Is Nothing Or equation Is Nothing Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected equation is unavailable."
     If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Or Doc.TrackRevisions Then Err.Raise vbObjectError + 7360, "Equation Lab", "The document is not available for numbering."
     If Not (equation.Range.Document Is Doc) Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected equation belongs to a different document."
     If Not verifiedBackgroundTarget And EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Finish the active Equation Lab edit before changing equation numbering."
-    Set record = Application.UndoRecord
-    If record.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Another Word edit is in progress."
     futureFormat = ELDocumentNumberFormat(Doc, equation.Range.Start)
-    record.StartCustomRecord "Equation Lab equation numbering": own = True
+    Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab equation numbering")
     UnwrapSelectedSharedNumber Doc, equation, changed
     NumberSelectedEquationCore Doc, equation, rightSide, changed, patternOverride, verifiedBackgroundTarget, chapter, section, expectedChapter, expectedSection
     UpgradeLegacyNumbering Doc, changed
@@ -319,16 +527,14 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     If patternOverride <> "" Then futureFormat = patternOverride
     SaveSharedNumberFormat Doc, futureFormat
     NumberingChanged Doc: ELInvalidateDocumentSnapshot
-    record.EndCustomRecord: own = False
+    ELCommitNumberingTransaction transaction: Set transaction = Nothing
     Exit Sub
 Failed:
     failureNumber = Err.Number: failureDescription = Err.Description
-    On Error Resume Next
-    If own Then
-        record.EndCustomRecord
-        If changed Then Doc.Undo
+    If Not transaction Is Nothing Then
+        recovery = ELTransactionRecoveryMessage(Doc, transaction)
+        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
     End If
-    On Error GoTo 0
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
@@ -875,6 +1081,31 @@ Public Function ELStoredNumberFormat(ByVal Doc As Document) As String
 Missing:
 End Function
 
+' Workspace publication runs on selection and polling. Only inspect declared
+' settings here; the actual numbering commands still resolve legacy fields.
+Private Function ELWorkspaceValidNumberFormat(ByVal pattern As String) As String
+    On Error GoTo Missing
+    If Len(pattern) = 0 Then Exit Function
+    ValidateRibbonNumberFormat pattern
+    ELWorkspaceValidNumberFormat = pattern
+Missing:
+End Function
+
+Public Function ELWorkspaceNumberFormat(ByVal Doc As Document) As String
+    On Error GoTo Missing
+    Dim explicitFormat As String, sharedFormat As String
+    explicitFormat = ELWorkspaceValidNumberFormat(PreferenceForDocument(Doc, "EquationLabNumberFormat", ""))
+    On Error Resume Next
+    sharedFormat = CStr(Doc.CustomDocumentProperties("MTEquationNumber2").Value)
+    Err.Clear
+    On Error GoTo Missing
+    sharedFormat = ELWorkspaceValidNumberFormat(sharedFormat)
+    ' Without inspecting fields we cannot safely resolve conflicting families.
+    If explicitFormat <> "" And sharedFormat <> "" And explicitFormat <> sharedFormat Then Exit Function
+    If explicitFormat <> "" Then ELWorkspaceNumberFormat = explicitFormat Else ELWorkspaceNumberFormat = sharedFormat
+Missing:
+End Function
+
 Public Function ELDocumentNumberFormat(ByVal Doc As Document, ByVal beforePosition As Long) As String
     Dim pattern As String, bookmark As Bookmark, formats As Collection, counts As Collection
     Dim i As Long, found As Boolean, total As Long, bestCount As Long, closestStart As Long, closest As String
@@ -1256,25 +1487,59 @@ Public Sub ELUpdateNumbersForDocument(ByVal Doc As Document)
     NumberingChanged Doc
 End Sub
 
-Private Sub InsertPreparedFragment(ByVal tool As String)
-    Dim start As Long, beforeLength As Long, target As Range
+Private Sub InsertPreparedFragment(ByVal tool As String, Optional ByVal chapter As String = "", Optional ByVal section As String = "")
+    Dim start As Long, beforeLength As Long, target As Range, Doc As Document, transaction As Collection
+    Dim failureNumber As Long, failureDescription As String, recovery As String
+    Set Doc = ActiveDocument
     start = Selection.Start
     Set target = Selection.Range.Duplicate
     beforeLength = ActiveDocument.Content.End
     NativeTool tool
     If Selection.Start <> start Or Selection.End <> start Then Err.Raise vbObjectError + 7357, "Equation Lab", "The cursor changed; nothing was inserted."
+    If Not (ActiveDocument Is Doc) Then Err.Raise vbObjectError + 7357, "Equation Lab", "The document changed; nothing was inserted."
+    On Error GoTo Failed
+    Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab " & tool)
+    ELUpgradeNumberingForInterop Doc
+    If chapter <> "" Then SavePreferenceForDocument Doc, "EquationLabChapter", chapter
+    If section <> "" Then SavePreferenceForDocument Doc, "EquationLabSection", section
+    start = target.Start: beforeLength = Doc.Content.End
     target.InsertFile FileName:=WorkDirectory() & "ribbon-insert.docx", ConfirmConversions:=False, Link:=False, Attachment:=False
-    Selection.SetRange start + ActiveDocument.Content.End - beforeLength, start + ActiveDocument.Content.End - beforeLength
-    UpdateNumbers
+    Selection.SetRange start + Doc.Content.End - beforeLength, start + Doc.Content.End - beforeLength
+    UpdateNumbersForDocument Doc
+    NumberingChanged Doc: ELInvalidateDocumentSnapshot
+    ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    Exit Sub
+Failed:
+    failureNumber = Err.Number: failureDescription = Err.Description
+    If Not transaction Is Nothing Then
+        recovery = ELTransactionRecoveryMessage(Doc, transaction)
+        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
+    End If
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Function ReferenceDisplayText(ByVal value As String) As String
-    Dim i As Long
-    For i = 0 To 31
-        value = Replace(value, Chr$(i), " ")
-    Next
-    value = Replace(value, ChrW$(127), " ")
-    ReferenceDisplayText = Trim$(value)
+    Dim i As Long, unit As Long, following As Long, safe As String
+    i = 1
+    Do While i <= Len(value)
+        unit = AscW(Mid$(value, i, 1)) And &HFFFF&
+        If unit >= &HD800& And unit <= &HDBFF& Then
+            If i < Len(value) Then following = AscW(Mid$(value, i + 1, 1)) And &HFFFF& Else following = 0
+            If following >= &HDC00& And following <= &HDFFF& Then
+                safe = safe & Mid$(value, i, 2): i = i + 1
+            Else
+                safe = safe & " "
+            End If
+        ElseIf unit >= &HDC00& And unit <= &HDFFF& Then
+            safe = safe & " "
+        ElseIf unit < 32 Or (unit >= 127 And unit <= 159) Then
+            safe = safe & " "
+        Else
+            safe = safe & Mid$(value, i, 1)
+        End If
+        i = i + 1
+    Loop
+    ReferenceDisplayText = Trim$(safe)
 End Function
 
 Private Function ChooseReference(ByVal request As String) As String
@@ -1305,17 +1570,18 @@ Private Sub InsertReference()
     Dim Doc As Document, candidate As Document, target As Range, selectedNumber As Range, context As Range
     Dim bookmark As Bookmark, list As String, answer As String, field As Field, i As Long, index As Long
     Dim names As Collection, anchors As Collection, starts As Collection, ends As Collection, originalTexts As Collection
+    Dim pending As Collection, equations As Collection, equation As InlineShape, pendingName As String, fresh As Range
     Dim originalStart As Long, originalEnd As Long, beforeLength As Long, title As String, nearby As String, isOpen As Boolean
-    Dim oldShowHidden As Boolean, visibilityChanged As Boolean, undoRecord As UndoRecord, customUndo As Boolean, changed As Boolean
+    Dim oldShowHidden As Boolean, visibilityChanged As Boolean, transaction As Collection, changed As Boolean
     Set Doc = Selection.Document
     Set target = Selection.Range.Duplicate
     originalStart = target.Start: originalEnd = target.End
     If Doc.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7353, "Equation Lab", "This document is protected."
     On Error GoTo Failed
     showing = True
-    ELUpgradeNumberingForInterop Doc
     Set names = New Collection: Set anchors = New Collection
     Set starts = New Collection: Set ends = New Collection: Set originalTexts = New Collection
+    Set pending = New Collection: Set equations = New Collection
     oldShowHidden = Doc.Bookmarks.ShowHidden
     Doc.Bookmarks.ShowHidden = True: visibilityChanged = True
     For Each bookmark In Doc.Bookmarks
@@ -1329,7 +1595,27 @@ Private Sub InsertReference()
             nearby = ReferenceDisplayText(Right$(context.Text, 180))
             names.Add bookmark.Name: anchors.Add selectedNumber
             starts.Add selectedNumber.Start: ends.Add selectedNumber.End: originalTexts.Add selectedNumber.Text
+            pending.Add False: equations.Add 0
             list = list & CStr(names.Count) & vbTab & bookmark.Name & vbTab & title & vbTab & nearby & vbLf
+        End If
+    Next
+    For Each equation In Doc.InlineShapes
+        If IsEquation(equation) Then
+            Set selectedNumber = PendingSharedNumberSpan(Doc, equation)
+            If Not selectedNumber Is Nothing Then
+                If names.Count >= 2000 Then Err.Raise vbObjectError + 7353, "Equation Lab", "This document has too many reference targets for one selection."
+                title = ReferenceDisplayText(selectedNumber.Text)
+                If Len(title) = 0 Or Len(title) > 128 Then Err.Raise vbObjectError + 7353, "Equation Lab", "An equation reference target has invalid number text."
+                Set context = selectedNumber.Paragraphs(1).Range.Duplicate
+                context.SetRange IIf(context.Start > 180, context.Start - 180, 0), selectedNumber.Start
+                nearby = ReferenceDisplayText(Right$(context.Text, 180))
+                pendingName = "EL_pending" & CStr(names.Count + 1)
+                Do While Doc.Bookmarks.Exists(pendingName): pendingName = pendingName & "X": Loop
+                names.Add pendingName: anchors.Add selectedNumber
+                starts.Add selectedNumber.Start: ends.Add selectedNumber.End: originalTexts.Add selectedNumber.Text
+                pending.Add True: equations.Add equation
+                list = list & CStr(names.Count) & vbTab & pendingName & vbTab & title & vbTab & nearby & vbLf
+            End If
         End If
     Next
     Doc.Bookmarks.ShowHidden = oldShowHidden: visibilityChanged = False
@@ -1350,48 +1636,72 @@ Private Sub InsertReference()
     If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7354, "Equation Lab", "The original document is no longer writable."
     If Not (Selection.Document Is Doc) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The active document changed; no reference was inserted."
     If target.Start <> originalStart Or target.End <> originalEnd Or Selection.Start <> originalStart Or Selection.End <> originalEnd Or Selection.Range.StoryType <> wdMainTextStory Then Err.Raise vbObjectError + 7354, "Equation Lab", "The insertion cursor changed; no reference was inserted."
-    If Not Doc.Bookmarks.Exists(answer) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target has disappeared."
-    Set selectedNumber = Doc.Bookmarks(answer).Range.Duplicate
+    If CBool(pending(index)) Then
+        Set equation = equations(index)
+        Set selectedNumber = PendingSharedNumberSpan(Doc, equation)
+        If selectedNumber Is Nothing Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target has changed."
+    Else
+        If Not Doc.Bookmarks.Exists(answer) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target has disappeared."
+        Set selectedNumber = Doc.Bookmarks(answer).Range.Duplicate
+    End If
     Set context = anchors(index)
     If selectedNumber.StoryType <> wdMainTextStory Or selectedNumber.Start <> CLng(starts(index)) Or selectedNumber.End <> CLng(ends(index)) Or context.Start <> selectedNumber.Start Or context.End <> selectedNumber.End Or selectedNumber.Text <> CStr(originalTexts(index)) Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected reference target changed; no reference was inserted."
     If target.Start >= selectedNumber.Start And target.Start < selectedNumber.End Then Err.Raise vbObjectError + 7354, "Equation Lab", "Place the cursor outside the target equation number."
-    Set undoRecord = Application.UndoRecord
-    If undoRecord.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7354, "Equation Lab", "Another Word edit is in progress."
     beforeLength = Doc.Content.End
-    undoRecord.StartCustomRecord "Equation Lab equation reference": customUndo = True
+    Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab equation reference")
+    If CBool(pending(index)) Then
+        EnsureSharedNumberBookmark Doc, equation, changed
+        answer = ""
+        For Each bookmark In Doc.Bookmarks
+            If IsNumberBookmarkName(bookmark.Name) Then
+                Set fresh = bookmark.Range
+                If fresh.Start = selectedNumber.Start And fresh.End = selectedNumber.End Then answer = bookmark.Name: Exit For
+            End If
+        Next
+        If answer = "" Then Err.Raise vbObjectError + 7354, "Equation Lab", "The selected number could not be anchored."
+    End If
     Set field = Doc.Fields.Add(Range:=target, Type:=wdFieldRef, Text:=answer & " \h \!", PreserveFormatting:=True)
     changed = True
     field.Update
     NumberingChanged Doc
     ELInvalidateDocumentSnapshot
-    undoRecord.EndCustomRecord: customUndo = False
+    ELCommitNumberingTransaction transaction: Set transaction = Nothing
 Done:
     showing = False
     Exit Sub
 Failed:
-    Dim failureNumber As Long, failureDescription As String
+    Dim failureNumber As Long, failureDescription As String, recovery As String
     failureNumber = Err.Number: failureDescription = Err.Description
+    If Not transaction Is Nothing Then recovery = ELTransactionRecoveryMessage(Doc, transaction)
     On Error Resume Next
     If visibilityChanged Then Doc.Bookmarks.ShowHidden = oldShowHidden
-    If customUndo Then
-        undoRecord.EndCustomRecord
-        If changed Or Doc.Content.End <> beforeLength Then Doc.Undo
-    End If
     Kill WorkDirectory() & "ribbon-reference-picker.txt"
     showing = False
     On Error GoTo 0
+    If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 ' Shared by the Ribbon and Word's assignable macro commands.
 Public Sub UpdateNumbers()
     RequireDocument
-    Dim Doc As Document
+    Dim Doc As Document, transaction As Collection, failureNumber As Long, failureDescription As String, recovery As String
     Set Doc = ActiveDocument
+    On Error GoTo Failed
+    Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab update numbers")
     ELUpgradeNumberingForInterop Doc
     UpdateNumbersForDocument Doc
     NumberingChanged Doc
     ELInvalidateDocumentSnapshot
+    ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    Exit Sub
+Failed:
+    failureNumber = Err.Number: failureDescription = Err.Description
+    If Not transaction Is Nothing Then
+        recovery = ELTransactionRecoveryMessage(Doc, transaction)
+        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
+    End If
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Sub OpenNumberingSettings(ByVal chapterSettings As Boolean)
@@ -1431,16 +1741,28 @@ End Function
 
 Private Sub SetNumberFormat()
     RequireDocument
-    Dim value As String, Doc As Document
+    Dim value As String, Doc As Document, transaction As Collection
+    Dim failureNumber As Long, failureDescription As String, recovery As String
     Set Doc = ActiveDocument
     value = PromptNumberingSettings("format", ELDocumentNumberFormat(Doc, Selection.Start))
     If value = "" Then Exit Sub
     If Not Doc Is ActiveDocument Then Err.Raise vbObjectError + 7355, "Equation Lab", "The Word document changed while the dialog was open."
     If Len(value) > 128 Or InStr(value, vbLf) > 0 Or InStr(value, vbCr) > 0 Then Err.Raise vbObjectError + 7355, "Equation Lab", "Invalid number format."
     ValidateRibbonNumberFormat value
+    On Error GoTo Failed
+    Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab number format")
     SaveSharedNumberFormat Doc, value
     NumberingChanged Doc
     ELInvalidateDocumentSnapshot
+    ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    Exit Sub
+Failed:
+    failureNumber = Err.Number: failureDescription = Err.Description
+    If Not transaction Is Nothing Then
+        recovery = ELTransactionRecoveryMessage(Doc, transaction)
+        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
+    End If
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Sub SetChapter()
@@ -1459,10 +1781,8 @@ Private Sub SetChapter()
     If Selection.Start <> anchor.Start Or Selection.End <> anchor.End Then Err.Raise vbObjectError + 7356, "Equation Lab", "The Word cursor changed while the dialog was open."
     If Not IsNumeric(chapter) Or Not IsNumeric(section) Then Exit Sub
     If CDbl(chapter) < 1 Or CDbl(chapter) > 32767 Or CDbl(chapter) <> Fix(CDbl(chapter)) Or CDbl(section) < 1 Or CDbl(section) > 32767 Or CDbl(section) <> Fix(CDbl(section)) Then Exit Sub
-    SavePreferenceForDocument Doc, "EquationLabChapter", CStr(CLng(chapter))
-    SavePreferenceForDocument Doc, "EquationLabSection", CStr(CLng(section))
     ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", ELDocumentNumberFormat(ActiveDocument, Selection.Start) & vbLf & CStr(CLng(chapter)) & vbLf & CStr(CLng(section)) & vbLf & CStr(NextNumber()) & vbLf
-    InsertPreparedFragment "Chapter"
+    InsertPreparedFragment "Chapter", CStr(CLng(chapter)), CStr(CLng(section))
 End Sub
 
 Private Sub EncodeTextUtf8(ByVal value As String, ByRef bytes() As Byte)
@@ -1548,10 +1868,10 @@ Private Function CounterDisplay(ByVal value As Long, ByVal format As String) As 
     End Select
 End Function
 
-Private Function NumberRangeXML(ByVal pattern As String, ByVal bookmarkName As String, ByVal chapter As Long, ByVal section As Long, ByVal equationNumber As Long, ByVal sharedCounters As Boolean, Optional ByVal equationReset As Long = -1) As String
+Private Function NumberRangeXML(ByVal pattern As String, ByVal bookmarkName As String, ByVal chapter As Long, ByVal section As Long, ByVal equationNumber As Long, ByVal sharedCounters As Boolean, Optional ByVal equationReset As Long = -1, Optional ByVal aliases As Collection = Nothing) As String
     ValidateRibbonNumberFormat pattern
     Dim i As Long, literalStart As Long, token As String, format As String, formatName As String
-    Dim sequence As String, value As Long, contents As String, command As String
+    Dim sequence As String, value As Long, contents As String, command As String, iAlias As Long
     literalStart = 1: i = 1
     Do While i <= Len(pattern)
         If Mid$(pattern, i, 1) = "#" Then
@@ -1579,6 +1899,11 @@ Private Function NumberRangeXML(ByVal pattern As String, ByVal bookmarkName As S
     Loop
     If literalStart <= Len(pattern) Then contents = contents & NumberXMLRun(Mid$(pattern, literalStart), sharedCounters)
     contents = "<w:bookmarkStart w:id=""0"" w:name=""" & NumberXMLText(bookmarkName) & """/>" & contents & "<w:bookmarkEnd w:id=""0""/>"
+    If Not aliases Is Nothing Then
+        For iAlias = 1 To aliases.Count
+            contents = "<w:bookmarkStart w:id=""" & CStr(iAlias) & """ w:name=""" & NumberXMLText(CStr(aliases(iAlias))) & """/>" & contents & "<w:bookmarkEnd w:id=""" & CStr(iAlias) & """/>"
+        Next
+    End If
     If sharedCounters Then
         command = "\n"
         If equationReset >= 1 Then command = "\r " & CStr(equationReset)
@@ -1596,15 +1921,27 @@ Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal
     Dim beforeObjects As Long, beforeParagraphs As Long, xml As String
     Dim other As Bookmark, showHidden As Boolean, atParagraphStart As Boolean, oldSmartCutPaste As Boolean
     Dim failureNumber As Long, failureDescription As String
+    Dim aliases As Collection, enclosingNames As Collection, enclosingStarts As Collection, enclosingEnds As Collection
+    Dim originalNumber As Range, beforeEnd As Long, delta As Long, i As Long
     If target.StoryType <> wdMainTextStory Or target.Paragraphs.Count <> 1 Or target.Tables.Count <> 0 Or target.Revisions.Count <> 0 Or target.ContentControls.Count <> 0 Or target.InlineShapes.Count <> 0 Then Err.Raise vbObjectError + 7374, "Equation Lab", "The number range contains unsupported content."
     showHidden = Doc.Bookmarks.ShowHidden
     oldSmartCutPaste = Options.SmartCutPaste
     On Error GoTo Failed
     Doc.Bookmarks.ShowHidden = True
+    Set originalNumber = Doc.Bookmarks(name).Range.Duplicate
+    Set aliases = New Collection: Set enclosingNames = New Collection
+    Set enclosingStarts = New Collection: Set enclosingEnds = New Collection
     For Each other In Doc.Bookmarks
-        If other.Name <> name And other.Name <> "_GoBack" And other.Range.Start < target.End And other.Range.End > target.Start Then
-            Doc.Bookmarks.ShowHidden = showHidden
-            Err.Raise vbObjectError + 7374, "Equation Lab", "Another reference bookmark overlaps the number."
+        If other.Name <> name And other.Name <> "_GoBack" And other.Range.StoryType = target.StoryType Then
+            If other.Range.Start < target.End And other.Range.End > target.Start Then
+                If other.Range.Start = originalNumber.Start And other.Range.End = originalNumber.End Then
+                    aliases.Add other.Name
+                ElseIf other.Range.Start < target.Start And other.Range.End > target.End Then
+                    enclosingNames.Add other.Name: enclosingStarts.Add other.Range.Start: enclosingEnds.Add other.Range.End
+                Else
+                    Err.Raise vbObjectError + 7374, "Equation Lab", "Another reference bookmark overlaps the number."
+                End If
+            End If
         End If
     Next
     Doc.Bookmarks.ShowHidden = showHidden
@@ -1612,8 +1949,8 @@ Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal
     atParagraphStart = (target.Start = paragraph.Start)
     Set formatting = paragraph.ParagraphFormat.Duplicate: Set font = Doc.Bookmarks(name).Range.Font.Duplicate
     style = paragraph.Style
-    beforeObjects = Doc.InlineShapes.Count: beforeParagraphs = Doc.Paragraphs.Count
-    xml = NumberRangeXML(pattern, name, chapter, section, equationNumber, sharedCounters, equationReset)
+    beforeObjects = Doc.InlineShapes.Count: beforeParagraphs = Doc.Paragraphs.Count: beforeEnd = Doc.Content.End
+    xml = NumberRangeXML(pattern, name, chapter, section, equationNumber, sharedCounters, equationReset, aliases)
     changed = True
     Options.SmartCutPaste = False
     target.InsertXML xml
@@ -1627,6 +1964,17 @@ Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal
         End If
     End If
     If Doc.InlineShapes.Count <> beforeObjects Or Doc.Paragraphs.Count <> beforeParagraphs Or Not Doc.Bookmarks.Exists(name) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed the number boundary; the operation was rolled back."
+    For i = 1 To aliases.Count
+        If Not Doc.Bookmarks.Exists(CStr(aliases(i))) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+        Set other = Doc.Bookmarks(CStr(aliases(i)))
+        If other.Range.Start <> Doc.Bookmarks(name).Range.Start Or other.Range.End <> Doc.Bookmarks(name).Range.End Or other.Range.StoryType <> target.StoryType Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+    Next
+    delta = Doc.Content.End - beforeEnd
+    For i = 1 To enclosingNames.Count
+        If Not Doc.Bookmarks.Exists(CStr(enclosingNames(i))) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+        Set other = Doc.Bookmarks(CStr(enclosingNames(i)))
+        If other.Range.StoryType <> target.StoryType Or other.Range.Start <> CLng(enclosingStarts(i)) Or other.Range.End <> CLng(enclosingEnds(i)) + delta Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+    Next
     Set paragraph = PhysicalNumberingParagraph(Doc, Doc.Bookmarks(name).Range)
     paragraph.Style = style: paragraph.ParagraphFormat = formatting
     Doc.Bookmarks(name).Range.Font = font
@@ -1818,12 +2166,41 @@ Private Sub UnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal equation As 
     ReplaceNumberXML Doc, envelope, pattern, target.Name, chapter, section, equationNumber, False, changed, equationReset
 End Sub
 
+' Find an unanchored MathType number without changing the document. The
+' picker uses a temporary identity and creates its real bookmark only after
+' the user chooses that number.
+Private Function PendingSharedNumberSpan(ByVal Doc As Document, ByVal equation As InlineShape) As Range
+    Dim paragraph As Range, field As Field, outer As Field, increment As Field, span As Range, bookmark As Bookmark
+    Dim hidden As Long
+    Set paragraph = NumberingEquationParagraph(Doc, equation)
+    For Each field In paragraph.Fields
+        If UCase$(FieldWord(field.Code.Text, 0)) = "MACROBUTTON" And UCase$(FieldWord(field.Code.Text, 1)) = "MTPLACEREF" Then
+            If Not outer Is Nothing Then Err.Raise vbObjectError + 7374, "Equation Lab", "Several equation numbers share this paragraph."
+            Set outer = field
+        End If
+    Next
+    If outer Is Nothing Then Exit Function
+    If paragraph.InlineShapes.Count <> 1 Or paragraph.Revisions.Count <> 0 Or paragraph.ContentControls.Count <> 0 Then Err.Raise vbObjectError + 7374, "Equation Lab", "The equation number does not have a single editable target."
+    For Each bookmark In Doc.Bookmarks
+        If IsNumberBookmarkName(bookmark.Name) And bookmark.Range.Start >= outer.Code.Start And bookmark.Range.End <= outer.Code.End Then Exit Function
+    Next
+    For Each field In outer.Code.Fields
+        If ValidDisplaySequence(field, True) Then hidden = hidden + 1: Set increment = field
+    Next
+    If hidden <> 1 Then Err.Raise vbObjectError + 7374, "Equation Lab", "The MathType number needs exactly one hidden increment."
+    Set span = Doc.Range(NumberEnvelopeEnd(Doc, increment), outer.Code.End)
+    ValidateSharedNumberEnvelope Doc, outer, span
+    If NumberRangeFormat(Doc, span) = "" Then Err.Raise vbObjectError + 7374, "Equation Lab", "The MathType number format is unavailable."
+    Set PendingSharedNumberSpan = span
+End Function
+
 ' Native MathType adds a ZEqnNum bookmark when the number is first referenced.
 ' Before that, anchor only the validated display, keeping its hidden increment
 ' outside the REF target. Adding an anchor never replaces an equation or field.
 Private Sub EnsureSharedNumberBookmark(ByVal Doc As Document, ByVal equation As InlineShape, ByRef changed As Boolean)
     Dim paragraph As Range, field As Field, outer As Field, increment As Field, span As Range
     Dim bookmark As Bookmark, name As String, hidden As Long, pattern As String, showHidden As Boolean
+    Dim enclosingNames As Collection, enclosingStarts As Collection, enclosingEnds As Collection, i As Long
     Dim failureNumber As Long, failureDescription As String
     Set paragraph = NumberingEquationParagraph(Doc, equation)
     For Each field In paragraph.Fields
@@ -1851,14 +2228,28 @@ Private Sub EnsureSharedNumberBookmark(ByVal Doc As Document, ByVal equation As 
     ValidateSharedNumberEnvelope Doc, outer, span
     pattern = NumberRangeFormat(Doc, span)
     If pattern = "" Then Err.Raise vbObjectError + 7374, "Equation Lab", "The MathType number format is unavailable."
+    Set enclosingNames = New Collection: Set enclosingStarts = New Collection: Set enclosingEnds = New Collection
     For Each bookmark In Doc.Bookmarks
-        If bookmark.Name <> "_GoBack" And bookmark.Range.Start < span.End And bookmark.Range.End > span.Start Then Err.Raise vbObjectError + 7374, "Equation Lab", "Another reference bookmark overlaps the number."
+        If bookmark.Name <> "_GoBack" And bookmark.Range.StoryType = span.StoryType Then
+            If bookmark.Range.Start < span.End And bookmark.Range.End > span.Start Then
+                ' Adding a nested anchor does not replace the existing range.
+                ' Keep exact aliases and enclosing references, but reject an
+                ' intersection where either endpoint lies inside the number.
+                If bookmark.Range.Start > span.Start Or bookmark.Range.End < span.End Then Err.Raise vbObjectError + 7374, "Equation Lab", "Another reference bookmark overlaps the number."
+                enclosingNames.Add bookmark.Name: enclosingStarts.Add bookmark.Range.Start: enclosingEnds.Add bookmark.Range.End
+            End If
+        End If
     Next
     Randomize
     name = "ZEqnNum" & CStr(100000 + CLng(Rnd() * 899999))
     Do While Doc.Bookmarks.Exists(name): name = name & "X": Loop
     changed = True
     Doc.Bookmarks.Add Name:=name, Range:=span
+    For i = 1 To enclosingNames.Count
+        If Not Doc.Bookmarks.Exists(CStr(enclosingNames(i))) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+        Set bookmark = Doc.Bookmarks(CStr(enclosingNames(i)))
+        If bookmark.Range.StoryType <> span.StoryType Or bookmark.Range.Start <> CLng(enclosingStarts(i)) Or bookmark.Range.End <> CLng(enclosingEnds(i)) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing reference bookmark."
+    Next
     Doc.Bookmarks.ShowHidden = showHidden
     Exit Sub
 Failed:
@@ -1870,17 +2261,21 @@ Failed:
 End Sub
 
 Public Sub ELUpgradeNumberingForInterop(ByVal Doc As Document)
-    Dim record As UndoRecord, changed As Boolean, own As Boolean, futureFormat As String, equation As InlineShape
+    Dim transaction As Collection, changed As Boolean, futureFormat As String, equation As InlineShape
     On Error GoTo Failed
     If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Then Err.Raise vbObjectError + 7374, "Equation Lab", "The document is not writable."
     If Doc.TrackRevisions Then
         If HasLegacyNumbering(Doc) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Turn off Track Changes before synchronizing legacy equation numbers."
         Exit Sub
     End If
-    Set record = Application.UndoRecord
-    If record.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7374, "Equation Lab", "Another Word edit is in progress."
     futureFormat = ELDocumentNumberFormat(Doc, Doc.Content.End)
-    record.StartCustomRecord "Equation Lab shared numbering": own = True
+    If Application.UndoRecord.CustomRecordLevel = 0 Then
+        Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab shared numbering")
+    ElseIf mTransactionDocument Is Nothing Then
+        Err.Raise vbObjectError + 7374, "Equation Lab", "Another Word edit is in progress."
+    ElseIf Not (mTransactionDocument Is Doc) Then
+        Err.Raise vbObjectError + 7374, "Equation Lab", "Another Word document edit is in progress."
+    End If
     UpgradeLegacyNumbering Doc, changed
     For Each equation In Doc.InlineShapes
         If IsEquation(equation) Then EnsureSharedNumberBookmark Doc, equation, changed
@@ -1890,17 +2285,15 @@ Public Sub ELUpgradeNumberingForInterop(ByVal Doc As Document)
         SaveSharedNumberFormat Doc, futureFormat
         NumberingChanged Doc: ELInvalidateDocumentSnapshot
     End If
-    If own Then record.EndCustomRecord
+    If Not transaction Is Nothing Then ELCommitNumberingTransaction transaction: Set transaction = Nothing
     Exit Sub
 Failed:
-    Dim failureNumber As Long, failureDescription As String
+    Dim failureNumber As Long, failureDescription As String, recovery As String
     failureNumber = Err.Number: failureDescription = Err.Description
-    On Error Resume Next
-    If own Then
-        record.EndCustomRecord
-        If changed Then Doc.Undo
+    If Not transaction Is Nothing Then
+        recovery = ELTransactionRecoveryMessage(Doc, transaction)
+        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
     End If
-    On Error GoTo 0
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 

@@ -76,9 +76,9 @@ async function checkedDocumentToolsInput(payload){
  }
  return input;
 }
-async function readWordSession(ticket){
+async function readWordSession(ticket,execution={}){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
- const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}}),insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
+ const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}},execution),insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
  if(insertion){
   if(session.document?.index!==-1||!session.layout)throw Error('Word 插入会话源数据无效');
  }else{
@@ -209,7 +209,7 @@ export async function desktopRequest(request,execution={}) {
  if(action==='wordSessionRead')return readWordSession(payload.ticket);
  if(action==='wordSessionDocument'){
   const status=await wordSession('native-enrich-request',{ticket:payload.ticket});
-  return status.state==='available'?{state:'available',document:await readWordSession(payload.ticket)}:status;
+  return status.state==='available'?{state:'available',document:await readWordSession(payload.ticket,execution)}:status;
  }
  if(action==='wordSessionInsert')return insertWordEquation(payload);
  if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
@@ -260,7 +260,7 @@ export async function desktopRequest(request,execution={}) {
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
  if(action==='inspect') {
-  const {document:{objects,numberFormat,numberingRevision,typographyPreset},contentHash}=await documentCache.get(payload.path);
+  const {document:{objects,numberFormat,numberingRevision,typographyPreset},contentHash}=await documentCache.get(payload.path,{checkpoint:execution.snapshotCheckpoint});
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
@@ -346,7 +346,7 @@ export async function desktopRequest(request,execution={}) {
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
   const rendering=createRenderScheduler(warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n')));
-  const control=new Set(['wordSessionRead','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
+  const control=new Set(['wordSessionRead','wordSessionDocument','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.
@@ -361,7 +361,7 @@ if(await isMainModule(import.meta.url)){
    const isPreview=['validate','editPreview'].includes(request.action);
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;
-   const execution=control.has(request.action)?(async()=>{const before=performance.now();const result=await run();timing={queuedMs:0,executionMs:performance.now()-before,elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};return result;})():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
+   const execution=control.has(request.action)?(async()=>{const before=performance.now();let lastYield=-Infinity;const checkpoint=async()=>{if(performance.now()-lastYield>=8){await new Promise(resolve=>setImmediate(resolve));lastYield=performance.now();}};const result=await run(request.action==='wordSessionDocument'?{snapshotCheckpoint:checkpoint}:undefined);timing={queuedMs:0,executionMs:performance.now()-before,elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};return result;})():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
    const task=execution.then(result=>{if(result.superseded)result={ok:false,cancelled:true,superseded:true};process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start,timing})+'\n');});
    inflight.add(task);task.finally(()=>inflight.delete(task));
   }
