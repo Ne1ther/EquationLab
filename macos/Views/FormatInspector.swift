@@ -5,17 +5,12 @@ struct FormatInspector: View {
     @ObservedObject var bridge: DesktopBridge
     @State private var showAllFonts = false
     @State private var showExtraSizes = false
-    @State private var showSpaces = false
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Text(bridge.t("检查器")).font(.headline)
-                Spacer()
-            }.padding(.horizontal, 18).padding(.top, 15).padding(.bottom, 12)
             Picker(bridge.t("检查器"), selection: $bridge.inspectorTab) {
                 ForEach(InspectorTab.allCases) { Text(bridge.t($0.rawValue)).tag($0) }
-            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.bottom, 10)
+            }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -64,13 +59,6 @@ struct FormatInspector: View {
                     }.padding(.top, 8)
                 }.font(.caption)
             }
-            Divider()
-            Button { bridge.inspectorTab = .spacing; showSpaces = true } label: { Label(bridge.t("定义间距…"), systemImage: "arrow.left.and.right") }
-                .buttonStyle(WorkbenchButtonStyle()).font(.caption)
-            Button { bridge.action("category", ["name": "矩阵"]) } label: { Label(bridge.t("矩阵与多行模板"), systemImage: "square.grid.2x2") }
-                .buttonStyle(WorkbenchButtonStyle()).font(.caption)
-            Button { bridge.inspectorTab = .document } label: { Label(bridge.t("Word 位置与编号"), systemImage: "doc.text") }
-                .buttonStyle(WorkbenchButtonStyle()).font(.caption)
         }
     }
 
@@ -245,7 +233,8 @@ private struct DimensionEditorRow: View {
         HStack(spacing: 7) {
             Text(bridge.t(field.label)).font(.system(size: 11)).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
             TextField(bridge.t("数值"), text: bridge.fieldBinding(field.id, fallback: field.value))
-                .textFieldStyle(.roundedBorder).frame(width: 62).multilineTextAlignment(.trailing)
+                .textFieldStyle(.roundedBorder).frame(width: 64).multilineTextAlignment(.trailing)
+                .font(.system(size: 11.5, design: .rounded)).monospacedDigit()
                 .accessibilityLabel(bridge.t("\(field.label)数值"))
             Picker(bridge.t("单位"), selection: Binding(get: { field.unit }, set: { bridge.action("unit", ["id": field.id, "value": $0]) })) {
                 ForEach(field.units, id: \.self) { Text($0).tag($0) }

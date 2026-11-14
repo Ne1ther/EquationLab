@@ -2,6 +2,7 @@ import SwiftUI
 
 struct FormulaSidebar: View {
     @ObservedObject var bridge: DesktopBridge
+    @Environment(\.colorScheme) private var colorScheme
     @State private var showingFavorites = false
     @State private var query = ""
     private var allItems: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
@@ -27,7 +28,7 @@ struct FormulaSidebar: View {
         VStack(spacing: 0) {
             Picker(bridge.t("公式来源"), selection: $showingFavorites) {
                 Text(bridge.t("文档")).tag(false)
-                Text(bridge.t("收藏")).tag(true)
+                Text(bridge.t("收藏夹")).tag(true)
             }.pickerStyle(.segmented).labelsHidden().padding(14)
             if !showingFavorites {
                 VStack(alignment: .leading, spacing: 5) {
@@ -169,19 +170,25 @@ struct FormulaSidebar: View {
                                     }
                                 }
                                 if let thumbnail = item.thumbnail {
+                                    let cardFill = colorScheme == .dark ? Color(red: 0.925, green: 0.922, blue: 0.906) : Color.white
                                     Image(nsImage: thumbnail).resizable().interpolation(.high)
-                                        .scaledToFit().frame(maxWidth: .infinity).frame(height: 62)
-                                        .padding(6).background(.white, in: RoundedRectangle(cornerRadius: 5))
+                                        .scaledToFit().frame(maxWidth: .infinity).frame(height: 52)
+                                        .padding(.horizontal, 8).padding(.vertical, 5)
+                                        .background(cardFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                        .overlay {
+                                            RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                                .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.07), lineWidth: 0.5)
+                                        }
                                         .accessibilityLabel(item.latex)
                                 } else {
                                     VStack(alignment: .leading, spacing: 4) {
                                         Image(systemName: "function").font(.title2)
                                         Text(bridge.t(item.readOnly ? "未能预览" : "正在生成预览")).font(.caption2)
-                                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 74).foregroundStyle(.secondary)
+                                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 62).foregroundStyle(.secondary)
                                 }
                                 }
                                 if item.readOnly { Image(systemName: "lock").font(.caption2).foregroundStyle(.secondary) }
-                            }.frame(minHeight: 70).contentShape(Rectangle())
+                            }.frame(minHeight: 62).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(selectionUnavailable)

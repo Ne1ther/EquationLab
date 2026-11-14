@@ -39,10 +39,16 @@ struct WorkbenchView: View {
                     }.help(bridge.t("查看更新与下载进度"))
                 }
                 Button { bridge.showCommands = true } label: {
-                    Image(systemName: "magnifyingglass").font(.system(size: 15, weight: .medium)).foregroundStyle(.purple)
-                        .frame(width: 28, height: 26)
+                    HStack(spacing: 4) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 14, weight: .medium)).foregroundStyle(.purple)
+                        Text("⌘K")
+                            .font(.system(size: 10.5, weight: .medium, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                    }
+                    .padding(.horizontal, 3)
+                    .frame(height: 26)
                 }
-                .buttonStyle(WorkbenchButtonStyle(tint: .purple, horizontalPadding: 2))
+                .buttonStyle(WorkbenchButtonStyle(tint: .purple, horizontalPadding: 4))
                 .help(bridge.t("搜索现有命令、符号与模板 (⌘K)"))
                 .accessibilityLabel(bridge.t("搜索命令"))
                 Button { bridge.showOfficePlugins = true } label: { OfficeProductLabel(bridge: bridge, showsTitle: false).frame(width: 28, height: 26) }
@@ -88,22 +94,6 @@ struct WorkbenchView: View {
     private var editorPane: some View {
             VStack(spacing: 0) {
                 TemplateShelf(bridge: bridge)
-                HStack(spacing: 8) {
-                    Label(bridge.t("编辑公式"), systemImage: "pencil.line").font(.system(size: 12, weight: .semibold))
-                    Spacer()
-                    Button { bridge.showRuler.toggle() } label: { Image(systemName: "ruler").foregroundStyle(bridge.showRuler ? .blue : .secondary) }.help(bridge.t("显示或隐藏标尺"))
-                    Button { bridge.showEditorMenu() } label: { Image(systemName: "ellipsis.circle") }.help(bridge.t("公式菜单"))
-                    Button { bridge.action("click", ["id": "undo"]) } label: { Image(systemName: "arrow.uturn.backward").frame(width: 18) }.help(bridge.t("撤销")).disabled(bridge.state.busy || bridge.state.readOnly)
-                    Button { bridge.action("click", ["id": "redo"]) } label: { Image(systemName: "arrow.uturn.forward").frame(width: 18) }.help(bridge.t("重做")).disabled(bridge.state.busy || bridge.state.readOnly)
-                    Divider().frame(height: 15)
-                    Picker(bridge.t("缩放"), selection: Binding(get: { bridge.state.zoom }, set: { bridge.action("zoom", ["value": $0]) })) {
-                        Text(bridge.t("适合窗口")).tag(0)
-                        ForEach([50, 75, 100, 125, 150, 200, 250, 300], id: \.self) { Text("\($0)%").tag($0) }
-                    }.labelsHidden().frame(width: 100).controlSize(.small)
-                }
-                .buttonStyle(WorkbenchButtonStyle())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 18).frame(height: 42)
                 if bridge.state.draftRecovery.available && bridge.state.draftRecovery.restored != true {
                     HStack(spacing: 10) {
                         Label(bridge.language.usesEnglish ? "A previous draft is available" : "有上次编辑的恢复草稿", systemImage: "clock.arrow.circlepath")
@@ -119,7 +109,7 @@ struct WorkbenchView: View {
                     Text(bridge.language.usesEnglish ? "Local draft backup is incomplete. Save or export this equation." : error)
                         .font(.caption).foregroundStyle(.orange).padding(.horizontal, 18).padding(.vertical, 6)
                 }
-                if bridge.showRuler { EquationRuler(bridge: bridge).frame(height: 39).padding(.horizontal, 18) }
+                if bridge.showRuler { EquationRuler(bridge: bridge).frame(height: 39).padding(.horizontal, 18).padding(.top, 8) }
                 EquationWebView(bridge: bridge)
                     .frame(minHeight: 280)
                 WorkbenchStatusBar(bridge: bridge)

@@ -6,18 +6,6 @@ private enum WorkbenchArtwork {
     static let darkHeader = load("EquationLab-header-dark")
     static let word = load("Word")
     static let office = load("Microsoft365")
-    static let language: NSImage? = {
-        guard let source = NSImage(systemSymbolName: "globe.asia.australia.fill", accessibilityDescription: nil),
-              let symbol = source.withSymbolConfiguration(NSImage.SymbolConfiguration(paletteColors: [.systemGreen, .systemBlue])) else { return nil }
-        // Native Menu labels otherwise become template images and lose their
-        // palette. Cache the SF Symbol's original-color rendering once.
-        let image = NSImage(size: NSSize(width: 18, height: 18))
-        image.lockFocus()
-        symbol.draw(in: NSRect(x: 0, y: 0, width: 18, height: 18))
-        image.unlockFocus()
-        image.isTemplate = false
-        return image
-    }()
     private static func load(_ name: String) -> NSImage? {
         guard let url = Bundle.main.resourceURL?.appendingPathComponent("brand/\(name).png") else { return nil }
         return NSImage(contentsOf: url)
@@ -61,16 +49,21 @@ struct InterfaceLanguageMenu: View {
                 Text("English").tag(InterfaceLanguage.english)
             }
         } label: {
-            HStack(spacing: 5) {
-                if let image = WorkbenchArtwork.language {
-                    Image(nsImage: image).resizable().renderingMode(.original).scaledToFit().frame(width: 17, height: 17)
-                } else {
-                    Image(systemName: "globe").foregroundStyle(.blue)
-                }
-                Text(bridge.language.shortLabel).font(.system(size: 12, weight: .medium))
-            }.fixedSize()
+            Text(bridge.language.shortLabel)
+                .font(.system(size: 12, weight: .medium))
+                .padding(.leading, 19)
         }
-        .menuStyle(.borderlessButton).modifier(WorkbenchMenuSurface()).fixedSize()
+        .menuStyle(.borderlessButton)
+        .overlay(alignment: .leading) {
+            Image(systemName: "globe.asia.australia.fill")
+                .symbolRenderingMode(.palette)
+                .foregroundStyle(.green, .blue)
+                .font(.system(size: 14.5))
+                .padding(.leading, 8)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+        .modifier(WorkbenchMenuSurface()).fixedSize()
         .help(bridge.t("界面语言"))
         .accessibilityLabel(bridge.t("界面语言"))
     }

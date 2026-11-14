@@ -31,9 +31,3 @@ The workbench combines document selection, equation browsing, editing, and Word 
 新版图标和 30 条合成公式的实际 Word 界面。
 
 Refreshed ribbon artwork in Word, shown with 30 synthetic equations.
-
-## 较早版本
-
-![0.6.5 工作台](workbench-0.6.5.png)
-
-![0.6.5 文档菜单](word-document-selector-0.6.5.png)

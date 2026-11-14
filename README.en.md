@@ -23,13 +23,21 @@ Save your documents, quit Word and Equation Lab, then open the installer. Open t
 - Check document numbering and references, preview batch style and numbering changes, and save a Word copy.
 - Store a document style preset for future equations, export PDF, SVG, or PNG, and copy LaTeX.
 
+### Word integration and open documents
+
 Select a document at the top of the sidebar, then click Insert into Word to choose inline, centered, or left/right numbered placement. If you are editing an existing equation, the new one is inserted after its paragraph. For a standalone draft, place the cursor in the selected Word document without selecting text or an object. The draft's content and formatting carry over. After you click Finish and insert, the app shows the save result returned by Word.
 
 The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. For large documents, it opens the selected equation first and loads the rest of the list in batches. You can keep typing and updating the preview during style or numbering preflight. Thumbnails appear as you browse, and the app scrolls to the equation you open.
 
+Unsaved equations stay on this Mac, so you can click Restore draft after reopening the app to keep editing them as standalone drafts. [Draft recovery](docs/draft-recovery.md)
+
+### Numbering, references, and batch tools
+
 Under **Document → Word layout**, adjust the number format, chapter, and section, then choose Update equation to apply them to the current equation and use the format for later numbered insertions. To organize existing numbers, open **Document checks and batch tools**, choose the current equation, existing numbered equations, or future equations, then preview and save a copy. Use the Word ribbon to adjust legacy MathType numbering; Update Numbers recalculates equation sequences and cross-references.
 
 The same panel lets you search numbers and references, find broken references, and apply the current equation’s fonts, sizes, and spacing to a document copy. The copy tools list the results before saving, then offer Open in Word and Show in Finder. Centered and numbered equations use the current page width and equal-column layout; inline insertion preserves the surrounding paragraph formatting. [Read the document tools guide](docs/document-tools.md)
+
+### Input details and updates
 
 During Chinese input, the Word plugin defers macro calls until composition finishes. The formula editors also wait before updating previews. When typing formulas by hand, the controls below the canvas show the active structure. You can place sum and integral limits above and below the symbol or to its right.
 

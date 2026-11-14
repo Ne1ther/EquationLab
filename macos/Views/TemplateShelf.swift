@@ -32,36 +32,111 @@ struct TemplateShelf: View {
         let items = bridge.state.templates.filter { $0.category == bridge.state.activeCategory }
         return bridge.state.activeCategory == "矩阵" ? [FormulaTemplate(id: "matrix:custom", label: "", hint: "自定义矩阵", category: "矩阵", latex: "")] + items : items
     }
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 14) {
-                Picker(bridge.t("工具类型"), selection: $shelf) {
-                    Label(bridge.t("符号"), systemImage: "sum").tag("符号"); Label(bridge.t("模板"), systemImage: "square.grid.2x2").tag("模板"); Label(bridge.t("收藏"), systemImage: "star").tag("收藏")
-                }.pickerStyle(.segmented).labelsHidden().frame(width: 210).controlSize(.small)
-                    .onChange(of: shelf) { _, value in
-                        if value == "符号" && !["希腊字母", "运算与关系", "标记与函数"].contains(bridge.state.activeCategory) {
-                            bridge.action("category", ["name": "希腊字母"])
-                        }
-                    }
-                    .onChange(of: bridge.state.activeCategory) { _, category in
-                        if shelf == "符号" && !["希腊字母", "运算与关系", "标记与函数"].contains(category) { shelf = "模板" }
-                    }
-                Spacer()
-                Button { bridge.action("click", ["id": "add-favorite"]) } label: { Label(bridge.t("收藏公式"), systemImage: "star") }
-                    .font(.system(size: 11, weight: .medium))
-                    .buttonStyle(WorkbenchButtonStyle(surface: true, horizontalPadding: 10))
-                    .disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy).fixedSize()
-                Button {
-                    if bridge.state.activeCategory == "希腊字母" { bridge.showLetterLibrary.toggle() }
-                    else { bridge.showFeatureLibrary.toggle() }
-                } label: {
-                    Label(bridge.t(FeatureCatalog.title(bridge.state.activeCategory)), systemImage: bridge.state.activeCategory == "希腊字母" ? "character.book.closed.fill" : "square.grid.3x3.fill").foregroundStyle(.purple)
-                }
-                .font(.system(size: 11, weight: .medium))
-                .buttonStyle(WorkbenchButtonStyle(tint: .purple, selected: bridge.showLetterLibrary, surface: true, horizontalPadding: 10)).fixedSize()
-                .popover(isPresented: $bridge.showLetterLibrary, arrowEdge: .bottom) { LetterLibrary(bridge: bridge) }
-                .popover(isPresented: $bridge.showFeatureLibrary, arrowEdge: .bottom) { FeatureLibrary(bridge: bridge) }
+    @ViewBuilder
+    private func shelfTopBar(compact: Bool) -> some View {
+        let catalogTitle = bridge.t(FeatureCatalog.title(bridge.state.activeCategory))
+        let catalogIcon = bridge.state.activeCategory == "希腊字母" ? "character.book.closed.fill" : "square.grid.3x3.fill"
+        HStack(spacing: compact ? 4 : 6) {
+            Picker(bridge.t("工具类型"), selection: $shelf) {
+                Label(bridge.t("符号"), systemImage: "sum").tag("符号")
+                Label(bridge.t("模板"), systemImage: "square.grid.2x2").tag("模板")
+                Label(bridge.t("收藏"), systemImage: "star").tag("收藏")
             }
+            .pickerStyle(.segmented).labelsHidden().frame(width: compact ? 176 : 192).controlSize(.small)
+
+            Spacer(minLength: 4)
+
+            Button { bridge.action("click", ["id": "add-favorite"]) } label: {
+                if compact {
+                    Image(systemName: "star.fill").foregroundStyle(.orange).frame(width: 18)
+                } else {
+                    HStack(spacing: 4) {
+                        Image(systemName: "star.fill").foregroundStyle(.orange)
+                        Text(bridge.t("收藏公式"))
+                    }
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .buttonStyle(WorkbenchButtonStyle(tint: .orange, surface: true, horizontalPadding: compact ? 5 : 9))
+            .fixedSize()
+            .disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
+            .help(bridge.t("收藏公式"))
+            .accessibilityLabel(bridge.t("收藏公式"))
+
+            Button {
+                if bridge.state.activeCategory == "希腊字母" { bridge.showLetterLibrary.toggle() }
+                else { bridge.showFeatureLibrary.toggle() }
+            } label: {
+                if compact {
+                    Image(systemName: catalogIcon).foregroundStyle(.purple).frame(width: 18)
+                } else {
+                    Label(catalogTitle, systemImage: catalogIcon).foregroundStyle(.purple)
+                }
+            }
+            .font(.system(size: 11, weight: .medium))
+            .buttonStyle(WorkbenchButtonStyle(tint: .purple, selected: bridge.showLetterLibrary || bridge.showFeatureLibrary, surface: true, horizontalPadding: compact ? 5 : 9))
+            .fixedSize()
+            .help(catalogTitle)
+            .accessibilityLabel(catalogTitle)
+
+            Divider().frame(height: 15).padding(.horizontal, compact ? 1 : 2)
+
+            HStack(spacing: 2) {
+                Button { bridge.showRuler.toggle() } label: {
+                    Image(systemName: "ruler").foregroundStyle(bridge.showRuler ? .blue : .secondary).frame(width: 18)
+                }
+                .buttonStyle(WorkbenchButtonStyle(selected: bridge.showRuler, horizontalPadding: 4))
+                .help(bridge.t("显示或隐藏标尺"))
+                .accessibilityLabel(bridge.t("显示或隐藏标尺"))
+
+                Button { bridge.showEditorMenu() } label: {
+                    Image(systemName: "ellipsis.circle").foregroundStyle(.indigo).frame(width: 18)
+                }
+                .buttonStyle(WorkbenchButtonStyle(tint: .indigo, horizontalPadding: 4))
+                .help(bridge.t("公式菜单"))
+                .accessibilityLabel(bridge.t("公式菜单"))
+
+                Button { bridge.action("click", ["id": "undo"]) } label: {
+                    Image(systemName: "arrow.uturn.backward").frame(width: 17)
+                }
+                .buttonStyle(WorkbenchButtonStyle(horizontalPadding: 4))
+                .help(bridge.t("撤销"))
+                .accessibilityLabel(bridge.t("撤销"))
+                .disabled(bridge.state.busy || bridge.state.readOnly)
+
+                Button { bridge.action("click", ["id": "redo"]) } label: {
+                    Image(systemName: "arrow.uturn.forward").frame(width: 17)
+                }
+                .buttonStyle(WorkbenchButtonStyle(horizontalPadding: 4))
+                .help(bridge.t("重做"))
+                .accessibilityLabel(bridge.t("重做"))
+                .disabled(bridge.state.busy || bridge.state.readOnly)
+            }
+            .foregroundStyle(.secondary)
+
+            Picker(bridge.t("缩放"), selection: Binding(get: { bridge.state.zoom }, set: { bridge.action("zoom", ["value": $0]) })) {
+                Text(bridge.t("适合窗口")).tag(0)
+                ForEach([50, 75, 100, 125, 150, 200, 250, 300], id: \.self) { Text("\($0)%").tag($0) }
+            }.labelsHidden().frame(width: compact ? 78 : 88).controlSize(.small)
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ViewThatFits(in: .horizontal) {
+                shelfTopBar(compact: false)
+                shelfTopBar(compact: true)
+            }
+            .onChange(of: shelf) { _, value in
+                if value == "符号" && !["希腊字母", "运算与关系", "标记与函数"].contains(bridge.state.activeCategory) {
+                    bridge.action("category", ["name": "希腊字母"])
+                }
+            }
+            .onChange(of: bridge.state.activeCategory) { _, category in
+                if shelf == "符号" && !["希腊字母", "运算与关系", "标记与函数"].contains(category) { shelf = "模板" }
+            }
+            .popover(isPresented: $bridge.showLetterLibrary, arrowEdge: .bottom) { LetterLibrary(bridge: bridge) }
+            .popover(isPresented: $bridge.showFeatureLibrary, arrowEdge: .bottom) { FeatureLibrary(bridge: bridge) }
             if shelf == "收藏" {
                 if bridge.state.favorites.isEmpty {
                     Text(bridge.t("收藏常用公式后，可在这里快速插入。")).font(.caption).foregroundStyle(.secondary).frame(height: 100)

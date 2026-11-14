@@ -19,7 +19,7 @@ export async function buildWorkbenchAssets({root, resources}) {
   await writeFile(join(target,name+'.png'),png);
   assets.push({name,source:path,sourceSha256:createHash('sha256').update(bytes).digest('hex'),bytes:png.length});
   if(name==='EquationLab-header'){
-   const dark=bytes.toString().replaceAll('#35383c','#f5f5f7').replaceAll('#292c30','#e8e8ed').replaceAll('#23262a','#d2d2d7').replaceAll('#77756e','#dadadd');
+   const dark=bytes.toString().replaceAll('#35383c','#f5f5f7').replaceAll('#292c30','#e8e8ed').replaceAll('#23262a','#d2d2d7').replaceAll('#77756e','#f2f2f7').replace('id="lab-watermark" clip-path="url(#labOutline)" opacity=".31"','id="lab-watermark" clip-path="url(#labOutline)" opacity=".76"');
    await writeFile(join(target,'EquationLab-header-dark.png'),await sharp(Buffer.from(dark),{density:192}).resize(width,height,{fit:'inside'}).png().toBuffer());
   }
  }
