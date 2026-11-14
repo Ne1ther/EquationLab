@@ -1,5 +1,23 @@
 # 版本记录
 
+## 0.6.15 · build103
+
+修复旧 MathType 编号与跨段落引用书签的兼容问题，以及编号失败后的部分写入。取消编辑和引用选择不再预先修改全文编号；失败时恢复正文与编号设置。改善长文档导航、快照复用、App 启动和预览调度，并更新彩色工作台、模板分类及窄窗口布局。
+
+已在独立论文副本上完成 Word 和 App 各四种插入、保存重开，以及编号、引用、章节、默认格式和冲突回滚测试；原有 112 个公式 Native 与 28 个其他 OLE 对象保留。以上宿主测试对应所保留的匹配 Word 组件，正式安装后的核验另行记录。
+
+适用于 Apple Silicon、macOS 14+ 和桌面版 Word for Mac。旧字体编码和复杂编号段落仍可能安全跳过；未覆盖所有 MathType 格式或 Windows 往返。安装前请保存并完全退出 Word 和 Equation Lab。App 使用 ad-hoc 签名，尚未公证；自动更新清单使用 Ed25519 签名。
+
+---
+
+Fixes legacy MathType numbering with enclosing reference bookmarks and partial writes after numbering failures. Cancelling an editor or reference selection no longer upgrades document numbering in advance; failures restore document edits and numbering settings. Improves long-document navigation, snapshot reuse, app startup and preview scheduling, and refreshes the colorful workbench, template categories and narrow-window layout.
+
+On independent thesis copies, the matching Word components passed all four insertion modes from both Word and the app, save/reopen, numbering, references, chapters, default formats and conflict rollback. The original 112 Native equation payloads and 28 other OLE objects were preserved. Release-package installation is checked separately.
+
+Apple Silicon, macOS 14 or later, and desktop Word for Mac. Unsupported font encodings and complex numbering paragraphs may still be safely skipped; not all MathType formats or Windows round trips have been verified. Save your documents and quit Word and Equation Lab before installing. The app is ad-hoc signed and not notarized; update metadata is signed with Ed25519.
+
+[下载 0.6.15](https://github.com/Ne1ther/EquationLab/releases/tag/v0.6.15)
+
 ## 0.6.14 · build102
 
 长文档的字号和编号预检现在会给编辑预览让出执行时间，预检期间仍可输入；侧栏使用更精简的文档快照，按需读取旧预览。修复新 Word 会话与文档状态竞争、宿主回退成功后被误判超时，以及后台目标更新后 Word 普通保存可能漏写的问题。
