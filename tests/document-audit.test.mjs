@@ -41,10 +41,14 @@ test('broken, locked and unknown numbering are reported without treating Figure 
 });
 
 test('references in a footnote resolve against the document-wide bookmark index',async()=>{
- const audit=await auditDocx(await fixture('cross-story-reference'));
+ const bytes=await fixture('cross-story-reference'),audit=await auditDocx(bytes);
  const ref=audit.references.find(r=>r.location.part==='word/footnotes.xml');
  assert.equal(ref.state,'resolved');assert.equal(ref.bookmark,'EL_CORPUS_1');
  assert.equal(audit.targets[0].referenceIds.length,2);assert.equal(audit.summary.warnings,0);
+ const main=await auditDocx(bytes,{mainStoryOnly:true});
+ assert.equal(main.coverage.scope,'main-story');
+ assert.deepEqual(main.coverage.parts,[main.mainPart]);
+ assert.equal(main.targets[0].referenceIds.length,1);
 });
 
 test('mixed formats and heading-dependent resets remain explicit, informational unknowns',async()=>{

@@ -21,7 +21,7 @@ function editor(){
   mf:{value:reported},$:element,source:{path:'seed.docx',activePath:'seed.docx',insertion:true,insertionLayout:{mode:'numbered-right',numberFormat:'(#E1)',chapter:1,section:1,equation:11}},selected:null,
   mode:'rebuild',revision:0,timer:null,valid:false,validationRunning:null,validationRequested:false,validationPending:false,validatedFormulaKey:null,
   busy:false,wordNavigating:false,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,wordTicket:'a'.repeat(64),idleWaiters:new Set(),editingRuler:undefined,
-  clearTimeout,setTimeout,controls(){},status(){},message:text=>messages.push(text),
+  clearTimeout,setTimeout,performance,controls(){},status(){},message:text=>messages.push(text),
   rulerPatch:()=>({}),wordLayout:()=>({}),sourceEditMode:()=> 'rebuild',syncSidebar:async()=>{},resetNewFormula(){},
   native:async(action,payload)=>{calls.push({action,payload});if(action==='validate'||action==='editPreview')return {svg:JSON.stringify([payload.latex??reported,payload.typography]),latex:payload.latex??reported,nativeBytes:100};return {acknowledgement:false};}
  });

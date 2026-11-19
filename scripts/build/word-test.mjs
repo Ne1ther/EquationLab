@@ -166,6 +166,7 @@ export async function buildWordTestBundle({root,buildDirectory}){
   await fs.copyFile(path.join(buildDirectory,'EquationLab'),path.join(stage,'Contents/MacOS/EquationLab'));
   await fs.copyFile(path.join(buildDirectory,'EquationFontMetrics'),path.join(engine,'bin/EquationFontMetrics'));
   await copyTree(path.join(root,'src'),path.join(engine,'src'));
+  await copyTree(path.join(root,'skills/equation-lab'),path.join(resources,'skills/equation-lab'));
   await copyTree(path.join(root,'assets/fonts'),path.join(engine,'fonts'));
   for(const file of await fs.readdir(path.join(resources,'web')))if(/\.(html|css|js)$/.test(file))await fs.unlink(path.join(resources,'web',file));
   for(const file of await fs.readdir(path.join(root,'desktop')))if(/\.(html|css|js)$/.test(file))await fs.copyFile(path.join(root,'desktop',file),path.join(resources,'web',file));
@@ -202,6 +203,8 @@ export async function buildWordTestBundle({root,buildDirectory}){
   if(native.manifestSha256!==seed.native.manifestSha256||sha(await fs.readFile(path.join(resources,'runtime/bin/node')))!==seed.runtimeSha256)throw Error('Accepted native inputs or bundled runtime changed during build.');
   const validation=JSON.parse(await command(path.join(resources,'runtime/bin/node'),[path.join(engine,'src/desktop-rpc.mjs')],{cwd:os.tmpdir(),input:JSON.stringify({action:'validate',payload:{latex:'\\frac{a+c}{\\sqrt{x^2+y^2}}'}}),env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'},timeout:30000}));
   if(!validation.ok||!validation.data?.nativeBytes||!validation.data.svg?.includes('<svg'))throw Error('Bundled equation engine failed its standalone check.');
+  const skill=JSON.parse(await command('/bin/sh',[path.join(resources,'skills/equation-lab/scripts/run'),'inspect',path.join(root,'docs/examples/equation-lab-30-formulas.docx')],{cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'},timeout:30000}));
+  if(skill.equationCount!==30||!skill.equations?.every(row=>row.nativeSha256))throw Error('Bundled Equation Lab Skill failed its standalone check.');
   const engineVersion=await command(path.join(resources,'runtime/bin/node'),['--input-type=module','-e','const {pathToFileURL}=await import("node:url");const {APP_VERSION}=await import(pathToFileURL(process.argv[1]));process.stdout.write(APP_VERSION);',path.join(engine,'src/version.mjs')],{cwd:os.tmpdir(),env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'}});
   if(engineVersion!==config.version)throw Error('Bundled engine and App versions differ.');
   const previousRecord=await readJson(paths.record).catch(error=>{if(error.code==='ENOENT')return null;throw error;});

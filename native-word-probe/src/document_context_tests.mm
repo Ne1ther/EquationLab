@@ -28,6 +28,7 @@ std::int32_t EquationLabFinishInsertionDocumentCapture(NSDictionary*){return -1;
 void EquationLabFailInsertionDocumentCapture(){}
 namespace bridge_probe {
 void publishWordWorkspace(NSDictionary*,NSArray<NSDictionary*>*){}
+NSNumber* wordWorkspaceNumberingRevision(NSString*){return nil;}
 void closeWordWorkspaceIdentity(NSString*){}
 std::int32_t diagnosticValue(std::uint32_t){return testGeneration;}
 std::int32_t takeWordDocumentRequest(){return 0;}

@@ -49,20 +49,19 @@ struct InterfaceLanguageMenu: View {
                 Text("English").tag(InterfaceLanguage.english)
             }
         } label: {
-            Text(bridge.language.shortLabel)
-                .font(.system(size: 12, weight: .medium))
-                .padding(.leading, 19)
+            HStack(spacing: 6) {
+                Image(systemName: "globe.asia.australia.fill")
+                    .symbolRenderingMode(.palette)
+                    .foregroundStyle(.green, .blue)
+                    .font(.system(size: 14))
+                    .accessibilityHidden(true)
+                Text(bridge.language.shortLabel)
+                    .font(.system(size: 12, weight: .medium))
+                    .lineLimit(1)
+            }
+            .fixedSize(horizontal: true, vertical: false)
         }
         .menuStyle(.borderlessButton)
-        .overlay(alignment: .leading) {
-            Image(systemName: "globe.asia.australia.fill")
-                .symbolRenderingMode(.palette)
-                .foregroundStyle(.green, .blue)
-                .font(.system(size: 14.5))
-                .padding(.leading, 8)
-                .allowsHitTesting(false)
-                .accessibilityHidden(true)
-        }
         .modifier(WorkbenchMenuSurface()).fixedSize()
         .help(bridge.t("界面语言"))
         .accessibilityLabel(bridge.t("界面语言"))

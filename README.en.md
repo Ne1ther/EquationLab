@@ -5,7 +5,9 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.6.15 (build103)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.15/Equation-Lab-0.6.15.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.7.0 (build104)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+
+**Work with Word equations in Codex.** Choose **AI → Install or Export Skill… → Install for Codex** in the toolbar. Then try `Use $equation-lab to check this Word file’s equations, numbers, and cross-references.` Save batch edits to a new copy.
 
 For Apple Silicon Macs running macOS 14 or later. The installer includes the app, Word plugin, and runtime. No separate Node, Python, or MathType installation is needed. Word features require desktop Word for Mac.
 
@@ -27,7 +29,7 @@ Save your documents, quit Word and Equation Lab, then open the installer. Open t
 
 Select a document at the top of the sidebar, then click Insert into Word to choose inline, centered, or left/right numbered placement. If you are editing an existing equation, the new one is inserted after its paragraph. For a standalone draft, place the cursor in the selected Word document without selecting text or an object. The draft's content and formatting carry over. After you click Finish and insert, the app shows the save result returned by Word.
 
-The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. For large documents, it opens the selected equation first and loads the rest of the list in batches. You can keep typing and updating the preview during style or numbering preflight. Thumbnails appear as you browse, and the app scrolls to the equation you open.
+The sidebar menu lists open Word documents and distinguishes files that share the same name. If you switch documents with unsaved changes, the app asks how you want to handle the draft. Supported long documents can show a selectable equation directory first, then fill in numbers and formula text. Thumbnails load as you browse.
 
 Unsaved equations stay on this Mac, so you can click Restore draft after reopening the app to keep editing them as standalone drafts. [Draft recovery](docs/draft-recovery.md)
 

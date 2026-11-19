@@ -104,7 +104,7 @@ export function scanWordNumberingPart(doc,part){
     else if(kind==='separate'){
      if(stack.length&&!stack.at(-1).simple)stack.at(-1).mode='result';else structural.push({code:'unmatched-field-separator',location:location()});
     }else if(kind==='end'){
-     if(stack.length&&!stack.at(-1).simple){const field=stack.pop();field.end=ordinal;field.endParagraph=paragraph;}else structural.push({code:'unmatched-field-end',location:location()});
+     if(stack.length&&!stack.at(-1).simple){const field=stack.pop();field.end=ordinal;field.endNode=node;field.endParagraph=paragraph;}else structural.push({code:'unmatched-field-end',location:location()});
     }
    }else if(node.localName==='instrText'){
     if(stack.at(-1)?.mode==='code'){stack.at(-1).code+=node.textContent;stack.at(-1).codeParts.push({text:node.textContent,position:ordinal});}
@@ -195,10 +195,10 @@ function singleNumberChain(sequences){
  * informational; headings, manually typed numbering and field evaluation remain
  * host-owned. No macros, OLE verbs, fields or external relationships are executed.
  */
-export async function auditDocx(input){
+export async function auditDocx(input,{mainStoryOnly=false}={}){
  const {zip,mainPart,sourceSha256}=await openDocxPackage(input);
  // Match inspectDocx's object enumeration for exact same-snapshot index use.
- const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(?:header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
+ const parts=[mainPart,...mainStoryOnly?[]:Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(?:header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
  const scans=[];
  for(const part of parts)scans.push(scanWordNumberingPart(parseDocxXml(await zip.file(part).async('string')),part));
  const fields=scans.flatMap(s=>s.fields),bookmarks=scans.flatMap(s=>s.bookmarks),issues=[],targets=[],equations=[],references=[];
@@ -277,7 +277,7 @@ export async function auditDocx(input){
  }
  return {schema:'equationlab.document-audit.v1',sourceSha256,mainPart,targets,references,equations,issues,
   summary:{equations:equations.length,numberedTargets:targets.length,equationReferences:references.filter(r=>r.targetId).length,warnings:issues.filter(i=>i.severity==='warning').length,information:issues.filter(i=>i.severity==='info').length},
-  coverage:{parts,positionKind:'zero-based-xml-ordinal',liveWordPositions:false,fieldResults:'cached-not-evaluated',readOnly:true,limitations:['This is a saved DOCX snapshot, not the current unsaved Word state.','Paragraph/field ordinals are not Word Range positions.','Headings, manually typed numbers, text boxes and other story-specific counters are not evaluated.','Legacy MathType and Equation Lab fields are reported separately; no migration or automatic repair is performed.']}};
+  coverage:{parts,...mainStoryOnly?{scope:'main-story'}:{},positionKind:'zero-based-xml-ordinal',liveWordPositions:false,fieldResults:'cached-not-evaluated',readOnly:true,limitations:[mainStoryOnly?'This capture covers the main story. Audit a saved DOCX to include headers, footers, footnotes and endnotes.':'This is a saved DOCX snapshot, not the current unsaved Word state.','Paragraph/field ordinals are not Word Range positions.','Headings, manually typed numbers, text boxes and other story-specific counters are not evaluated.','Legacy MathType and Equation Lab fields are reported separately; no migration or automatic repair is performed.']}};
 }
 
 export function getReferenceTargets(audit,{query=''}={}){

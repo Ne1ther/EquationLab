@@ -80,6 +80,14 @@ test('Word numbering dialogs use English native controls while the app keeps loc
  assert.match(shared,/SavePreferenceForDocument Doc, "EquationLabNumberFormat", pattern/);assert.match(shared,/CustomDocumentProperties\("MTEquationNumber2"\)\.Value = pattern/);
 });
 
+test('The numbering inspector sends changes from the controls, not when it loads a default',async()=>{
+ const swift=await readFile(new URL('../macos/Views/NumberingFormatEditor.swift',import.meta.url),'utf8');
+ assert.match(swift,/set: \{ value in if value != "custom" \{ editFormat\(value\) \} \}/);
+ assert.match(swift,/text: Binding\(get: \{ draft \}, set: editFormat\)/);
+ assert.match(swift,/\.onChange\(of: field\.value\)[^\n]*draft = next/);
+ assert.doesNotMatch(swift,/\.onChange\(of: draft\)/);
+});
+
 test('a numbered insertion recalculates the owning document even when MathType wraps its SEQs inside macrobutton code',async()=>{
  const vba=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
  const update=vba.slice(vba.indexOf('Private Function ELTryUpdateInsertedNumbers'),vba.indexOf('End Function',vba.indexOf('Private Function ELTryUpdateInsertedNumbers')));

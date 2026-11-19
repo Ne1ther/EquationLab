@@ -1,5 +1,7 @@
 import test from 'node:test';import assert from 'node:assert/strict';import vm from 'node:vm';import {readFile} from 'node:fs/promises';
+import {setImmediate as settle} from 'node:timers/promises';
 const app=await readFile(new URL('../desktop/app.js',import.meta.url),'utf8'),loader=app.slice(app.indexOf('async function loadWordDocument('),app.indexOf('async function loadWordThumbnails('));
+const thumbnailLoader=app.slice(app.indexOf('async function loadWordThumbnails('),app.indexOf('async function bindSelectedWordFormula('));
 function editor(reply){
  const initial={documentLoading:true,documentPosition:25,documentTotal:30,documentIdentity:'word:42',documentSnapshot:100,path:'partial.docx'},old={index:0,nativeSha256:'f'.repeat(64),editorBaseline:'original',ruler:[{position:50,type:1}]};
  const field={value:'live draft',selection:{ranges:[[2,4]]}},ruler=[{position:70,type:2}],history=['original','live draft'],calls=[];
@@ -25,7 +27,7 @@ test('A foreign or failed list preserves the partial owner and live draft',async
 test('A thesis renders the selected formula and live scroll demand, dropping pending off-screen thumbnails',async()=>{
  const source={objects:Array.from({length:112},(_,index)=>({index})),activeIndex:14,documentIdentity:'word:42',documentSnapshot:101},batches=[];
  const context=vm.createContext({window:{},source,selected:source.objects[14],wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordCommitRunning:null,validationRunning:null,validationPending:false,Set,Number,setTimeout:fn=>queueMicrotask(fn),requestWorkbenchSync(){},native:async(action,payload)=>{batches.push(payload);return {images:payload.indices.map(index=>({index,image:'image-'+index}))};}});
- vm.runInContext(app.slice(app.indexOf('async function loadWordThumbnails('),app.indexOf('async function bindSelectedWordFormula(')),context);
+ vm.runInContext(thumbnailLoader,context);
  await context.loadWordThumbnails(context.wordTicket,source);
  assert.deepEqual(batches.flatMap(b=>Array.from(b.indices)),[14]);
  assert.equal(source.objects[80].image,undefined);assert.ok(batches.every(b=>b.indices.length===1&&b.documentIdentity==='word:42'&&b.documentSnapshot===101));
@@ -33,4 +35,87 @@ test('A thesis renders the selected formula and live scroll demand, dropping pen
  const count=batches.length;await context.loadWordThumbnails(context.wordTicket,source,[80]);assert.equal(batches.length,count);
  const loading=context.loadWordThumbnails(context.wordTicket,source,[70,81]);context.window.nativeReleaseWordThumbnail(70);await loading;
  assert.equal(source.objects[70].image,undefined);assert.equal(source.objects[81].image,'image-81');
+});
+
+function thumbnailVisibilityTest(reply) {
+ const source={objects:Array.from({length:112},(_,index)=>({index})),path:'full.docx',activeIndex:0,documentIdentity:'word:42',documentSnapshot:101};
+ const requests=[];
+ const context=vm.createContext({
+  window:{},source,selected:source.objects[0],wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,
+  wordCommitRunning:null,validationRunning:null,validationPending:false,setTimeout:queueMicrotask,
+  requestWorkbenchSync(){},
+  async native(action,payload){
+   assert.equal(action,'wordSessionThumbnails');
+   assert.equal(payload.documentSnapshot,101);
+   assert.equal(payload.documentIdentity,'word:42');
+   const indices=Array.from(payload.indices);
+   requests.push(...indices);
+   await reply(indices);
+   return {images:indices.map(index=>({index,image:'image-'+index}))};
+  }
+ });
+ vm.runInContext(thumbnailLoader,context);
+ const show=(index,visible=true)=>context.window.nativeWordThumbnailVisibility(JSON.stringify({index,visible,path:source.path}));
+ return {show,source,requests};
+}
+
+test('A thumbnail request remains deduplicated when its row leaves and re-enters while the RPC is pending',async()=>{
+ let notifyStarted,deliver;
+ const started=new Promise(resolve=>{notifyStarted=resolve;});
+ const pending=new Promise(resolve=>{deliver=resolve;});
+ const {show,source,requests}=thumbnailVisibilityTest(async()=>{notifyStarted();await pending;});
+ show(80);
+ await started;
+ show(80,false);
+ show(80);
+ deliver();
+ await settle();
+ assert.deepEqual(requests,[80]);
+ assert.equal(source.objects[80].image,'image-80');
+});
+
+test('A transient thumbnail failure retries once without stranding another visible row',async()=>{
+ let failed=false;
+ const {show,source,requests}=thumbnailVisibilityTest(async indices=>{
+  if(indices.includes(70)&&!failed){failed=true;throw Error('Temporarily unavailable');}
+ });
+ show(70);
+ show(71);
+ await settle();
+ assert.equal(requests.filter(index=>index===70).length,2);
+ assert.equal(requests.filter(index=>index===71).length,2);
+ assert.equal(source.objects[70].image,'image-70');
+ assert.equal(source.objects[71].image,'image-71');
+});
+
+test('Rapid scrolling coalesces surviving visible rows into bounded thumbnail batches',async()=>{
+ const batches=[];
+ const {show,source}=thumbnailVisibilityTest(async indices=>batches.push(indices));
+ for(const index of [4,5,6,7,8])show(index);
+ for(const index of [4,5,6,7,8])show(index,false);
+ for(const index of [71,72,73,74,75,76])show(index);
+ await settle();
+ assert.deepEqual(batches,[[71,72,73,74],[75,76]]);
+ assert.equal(source.objects[4].image,undefined);
+ assert.equal(source.objects[76].image,'image-76');
+});
+
+test('Favorites reuse an available preview when an earlier document row has the same LaTeX without an image',async()=>{
+ const image='data:image/png;base64,preview',source={objects:[{index:0,latex:'x'},{index:1,latex:'x',image}]};
+ const messages=[],nativeCalls=[];
+ const element={value:'',options:[],children:[],textContent:'',disabled:false,hidden:false,classList:{contains:()=>false,toggle(){}}};
+ const context=vm.createContext({
+  window:{sidebarPublisher:{snapshot:()=>({objects:source.objects,delta:null})},webkit:{messageHandlers:{native:{postMessage:message=>messages.push(message)}}}},
+  document:{body:element},$(){return element;},source,selected:null,mf:{value:''},favorites:['x'],groups:{},
+  wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordOutcomeUnknown:false,valid:true,mode:'rebuild',
+  workbenchFavoriteImages:new Map(),workbenchFavoriteRenderRunning:false,workbenchLastFields:new Map(),workbenchZoom:0,
+  editorViewport:{effectiveZoom:100},editingRuler:null,validationPending:false,validationRunning:false,
+  workbenchFields:()=>[],matrixContext:()=>null,exportAvailable:()=>true,setTimeout:queueMicrotask,
+  native:async(...args)=>{nativeCalls.push(args);return {};},requestWorkbenchSync(){}
+ });
+ vm.runInContext(app.slice(app.indexOf('function documentSidebarState('),app.indexOf('function workbenchField(')),context);
+ context.publishWorkbenchState();
+ await settle();
+ assert.equal(messages[0].payload.favorites[0].image,image);
+ assert.deepEqual(nativeCalls,[]);
 });

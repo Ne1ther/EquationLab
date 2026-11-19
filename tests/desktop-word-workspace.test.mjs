@@ -16,6 +16,29 @@ function setup(){
  const workspace=context.window.createWordDocumentWorkspace(api);return {workspace,api,state,calls,messages,discard:()=>{discard=true;},behavior:fn=>{behavior=fn;}};
 }
 
+test('A loading Word directory can open a far-away row and rejects wrong or unverifiable replies',async()=>{
+ for(const variant of ['correct','position','identity','digest','insertion']){
+  const e=setup(),partial={...document(),insertion:false,activeIndex:0,documentPosition:1,documentLoading:true,documentTotal:112,catalogProof:'receipt',objects:[{index:0,nativeSha256:digest}]};
+  e.state.source=partial;e.state.wordTicket=ticket;e.state.draftChanged=true;
+  assert.equal(await e.workspace.select(79),false);
+  assert.equal(e.calls.length,0,'dirty drafts block catalog navigation before detaching');
+  e.state.draftChanged=false;
+  assert.equal(await e.workspace.select(112),false);
+  assert.equal(await e.workspace.select(1),false);
+  assert.equal(await e.workspace.select(79),true);
+  const request=e.calls.find(call=>call.action==='wordDocumentOpen').payload;
+  assert.deepEqual({...request.catalogTarget},{identity:partial.documentIdentity,snapshot:17,index:79,count:112,proof:'receipt'});
+  assert.equal(e.workspace.visibleSource(null),partial,'in-flight navigation keeps the scroll positions visible');
+  assert.equal(await e.workspace.select(80),false);
+  const incoming={...partial,documentSnapshot:18,documentPosition:variant==='position'?78:79,
+   documentIdentity:variant==='identity'?'word:other':partial.documentIdentity,insertion:variant==='insertion',
+   objects:[{index:0,nativeSha256:variant==='digest'?undefined:digest}]};
+  if(variant==='correct')assert.equal(await e.workspace.prepareIncoming(incoming,requestId),true);
+  else await assert.rejects(e.workspace.prepareIncoming(incoming,requestId),/不一致|已变化/);
+  assert.equal(e.workspace.pending,false);
+ }
+});
+
 test('Automatic metadata sync preserves an exact OLE edit without document metadata',async()=>{
  const e=setup(),owner={hasDocumentContext:false,activeIndex:0,objects:[{index:0,latex:'x',nativeSha256:digest}]};
  e.state.source=owner;e.state.wordTicket=ticket;e.workspace.accepted(owner);
@@ -23,6 +46,182 @@ test('Automatic metadata sync preserves an exact OLE edit without document metad
  assert.equal(await e.workspace.syncCurrent(),false);
  assert.equal(e.state.source,owner);assert.equal(e.state.wordTicket,ticket);
  assert.equal(e.calls.some(call=>call.action==='detach'||call.action==='wordDocumentOpen'),false);
+});
+
+test('reload keeps the cached rows visible while reading an independently bound new snapshot',()=>{
+ const {workspace}=setup(),cached=document();
+ workspace.remember(cached);
+ const partial={...cached,documentSnapshot:18,documentLoading:true,documentTotal:2,documentPosition:1,objects:[{index:0,latex:'y+2'}]};
+ const presentation=workspace.visibleSource(partial);
+ assert.equal(presentation.objects.length,2);
+ assert.equal(presentation.numberingRefreshNeeded,true);
+ assert.equal(presentation.documentLoading,true);
+ assert.equal(workspace.visibleSource(partial),presentation);
+ assert.equal(partial.objects.length,1);
+ const other={...partial,documentIdentity:'unrelated'};
+ assert.equal(workspace.visibleSource(other),other);
+ const fresh={...cached,documentSnapshot:19};
+ assert.equal(workspace.visibleSource(fresh),fresh);
+});
+
+test('Dock reuses a confirmed content-only save and reopens the changed row by exact target',async()=>{
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ source.objects[0].image='stale thumbnail';
+ source.objects[1].image='current thumbnail';
+ const change={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,previousNativeSha256:digest,nativeSha256:'e'.repeat(64),numberingChanged:false};
+ e.workspace.rememberAfterSave(source,0,change,'new formula',false);
+ const cached=e.workspace.visibleSource(null);
+ assert.equal(cached.objects[0].nativeSha256,change.nativeSha256);
+ assert.equal(cached.objects[0].latex,'new formula');
+ assert.equal(cached.objects[0].image,null);
+ assert.equal(cached.objects[1].image,'current thumbnail');
+ assert.equal(cached.numberingRefreshNeeded,false);
+ assert.equal(source.objects[0].nativeSha256,digest,'retain the original editor binding');
+ e.behavior(action=>action==='wordWorkspaceStatus'?{
+  connected:true,active:{identity:source.documentIdentity,name:source.documentName},
+  documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:3}]
+ }:undefined);
+ assert.equal(await e.workspace.resume(),true);
+ assert.equal(e.workspace.pending,false);
+ assert.equal(e.workspace.visibleSource(null),cached);
+ assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+ assert.equal(await e.workspace.select(0),true);
+ const target=e.calls.find(call=>call.action==='wordDocumentOpen').payload.target;
+ assert.equal(target.identity,source.documentIdentity);
+ assert.equal(target.snapshot,source.documentSnapshot);
+ assert.equal(target.index,0);
+ assert.equal(target.nativeSha256,change.nativeSha256);
+ const incoming={...source,documentSnapshot:18,activeIndex:0,objects:cached.objects};
+ await e.workspace.prepareIncoming(incoming,requestId);
+ assert.equal(await e.workspace.select(0),true);
+ const editedAgain={...incoming,objects:[{...cached.objects[0],nativeSha256:digest},cached.objects[1]]};
+ await assert.rejects(e.workspace.prepareIncoming(editedAgain,requestId),/内容或位置已经变化/);
+ assert.equal(e.workspace.pending,false);
+ assert.equal(await e.workspace.resume(),true);
+ assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').at(-1).payload.target,undefined);
+});
+
+test('Dock still requests a fresh capture when the content acknowledgement or live metadata cannot verify the cache',async()=>{
+ for(const variant of ['different identity','changed revision','missing revision','read-only','missing catalog','disconnected','stale','numbering change','insertion','unknown acknowledgement']){
+  const e=setup(),source={...document(),insertion:variant==='insertion',numberingRefreshNeeded:variant==='stale',documentNumberingRevision:3};
+  const change={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,previousNativeSha256:digest,nativeSha256:'e'.repeat(64),numberingChanged:variant==='numbering change'};
+  e.workspace.rememberAfterSave(source,0,variant==='unknown acknowledgement'?null:change,'new formula',false);
+  const identity=variant==='different identity'?'same-named-other-document':source.documentIdentity;
+  const entry={identity,name:source.documentName,readOnly:variant==='read-only'};
+  if(variant!=='missing revision')entry.numberingRevision=variant==='changed revision'?4:3;
+  e.behavior(action=>action==='wordWorkspaceStatus'?{
+   connected:variant!=='disconnected',active:{identity,name:source.documentName},documents:variant==='missing catalog'?[]:[entry]
+  }:undefined);
+  assert.equal(await e.workspace.resume(),true,variant);
+  assert.equal(e.workspace.pending,true,variant);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
+  assert.equal(e.calls.find(call=>call.action==='wordDocumentOpen').payload.target,undefined,variant);
+ }
+});
+
+test('Dock discards a retired cache even after a confirmed content-only save',async()=>{
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ const change={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,previousNativeSha256:digest,nativeSha256:'e'.repeat(64),numberingChanged:false};
+ e.workspace.rememberAfterSave(source,0,change,'new formula',false);
+ e.behavior(action=>action==='wordWorkspaceStatus'?{
+  connected:true,active:{identity:source.documentIdentity,name:source.documentName},retiredIdentities:[source.documentIdentity],
+  documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:3}]
+ }:undefined);
+ assert.equal(await e.workspace.resume(),false);
+ assert.equal(e.workspace.hasDocument,false);
+ assert.equal(e.workspace.wordDocumentUnavailable,true);
+ assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+});
+
+async function cachedSaveReopen({index=0,warm=true}={}){
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ const changedRow={...source.objects[0],latex:'x^{4}',nativeSha256:'e'.repeat(64)};
+ const change={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,previousNativeSha256:digest,nativeSha256:changedRow.nativeSha256,numberingChanged:false};
+ const retryId='f'.repeat(64),firstResult=deferred(),retryResult=deferred();
+ e.workspace.rememberAfterSave(source,0,change,changedRow.latex,false);
+ e.behavior((action,payload)=>{
+  if(action==='wordWorkspaceStatus')return {connected:true,active:{identity:source.documentIdentity,name:source.documentName},documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:3}]};
+  if(action==='wordDocumentOpen'&&payload.documentIdentity)return {requestId:retryId,state:'queued'};
+  if(action==='wordDocumentStatus')return payload.requestId===requestId?firstResult.promise:retryResult.promise;
+ });
+ if(warm)assert.equal(await e.workspace.resume(),true);
+ assert.equal(await e.workspace.select(index),true);
+ return {e,source,changedRow,retryId,retryResult,
+  async finishFirst(result={state:'failed'}){firstResult.resolve({requestId,identity:source.documentIdentity,index,...result});await new Promise(resolve=>setImmediate(resolve));}
+ };
+}
+
+test('An unavailable retained Word range can retry once by document identity while keeping the changed row bound',async()=>{
+ const {e,source,changedRow,retryId,finishFirst}=await cachedSaveReopen();
+ await finishFirst();
+ const opens=e.calls.filter(call=>call.action==='wordDocumentOpen');
+ assert.equal(opens.length,2);
+ assert.equal(opens[0].payload.target.nativeSha256,changedRow.nativeSha256);
+ assert.equal(JSON.stringify(opens[1].payload),JSON.stringify({documentIdentity:source.documentIdentity}));
+ assert.equal(e.workspace.pending,true);
+ assert.equal(e.messages.some(message=>message.error),false);
+ const incoming={...source,documentSnapshot:18,activeIndex:0,objects:[changedRow,source.objects[1]]};
+ assert.equal(await e.workspace.prepareIncoming(incoming,retryId),false);
+ assert.equal(e.workspace.pending,false);
+});
+
+test('A document-scoped recovery cannot open a different formula and never retries twice',async()=>{
+ for(const mismatch of ['identity','index','digest','second failure']){
+  const {e,source,changedRow,retryId,retryResult,finishFirst}=await cachedSaveReopen();
+  await finishFirst();
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,2,mismatch);
+  if(mismatch==='second failure'){
+   retryResult.resolve({requestId:retryId,state:'failed'});
+   await new Promise(resolve=>setImmediate(resolve));
+  }else{
+   const incoming={...source,documentSnapshot:18,activeIndex:mismatch==='index'?1:0,
+    documentIdentity:mismatch==='identity'?'same-named-other-document':source.documentIdentity,
+    objects:[mismatch==='digest'?source.objects[0]:changedRow,source.objects[1]]};
+   await assert.rejects(e.workspace.prepareIncoming(incoming,retryId),/当前文档已变化|内容或位置已经变化/);
+  }
+  assert.equal(e.workspace.pending,false,mismatch);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,2,mismatch);
+ }
+});
+
+test('A targeted read cannot retry after a newer state, a foreign result, or a different sidebar action',async()=>{
+ for(const variant of ['draft','busy','new Word session','generation','cancelled','superseded','expired','foreign','specific failure','other row','unverified cache']){
+  const {e,finishFirst}=await cachedSaveReopen({index:variant==='other row'?1:0,warm:variant!=='unverified cache'});
+  if(variant==='draft')e.state.draftChanged=true;
+  if(variant==='busy')e.state.busy=true;
+  if(variant==='new Word session')e.state.wordTicket=ticket;
+  if(variant==='generation')await e.workspace.cancelPending();
+  const result={state:['cancelled','superseded','expired'].includes(variant)?variant:'failed'};
+  if(variant==='foreign')result.identity='different-document';
+  if(variant==='specific failure')result.reason='document-process-mismatch';
+  await finishFirst(result);
+  assert.equal(e.workspace.pending,false,variant);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
+ }
+});
+
+test('Cancelling while a recovery delivery is being verified leaves it superseded',async()=>{
+ const {e,source,changedRow,retryId,finishFirst}=await cachedSaveReopen();
+ await finishFirst();
+ const incoming={...source,documentSnapshot:18,activeIndex:0,objects:[changedRow,source.objects[1]]};
+ const rejected=assert.rejects(e.workspace.prepareIncoming(incoming,retryId),/请求已经结束/);
+ await e.workspace.cancelPending();
+ await rejected;
+ assert.equal(e.workspace.pending,false);
+});
+
+test('Unbound results retire only the changed cached target, and a number update cannot clear freshness on an old status',async()=>{
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ const change={documentIdentity:source.documentIdentity,documentSnapshot:4,index:0,previousNativeSha256:digest,nativeSha256:'e'.repeat(64),numberingChanged:true};
+ e.workspace.rememberAfterSave(source,0,change,'unexpected',true);
+ e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,documents:[{identity:source.documentIdentity,name:source.documentName,numberingRevision:3}]}:undefined);
+ await e.workspace.refreshList();
+ const cached=e.workspace.visibleSource(null);
+ assert.equal(cached.objects[0].nativeSha256,null);
+ assert.equal(cached.objects[1].nativeSha256,source.objects[1].nativeSha256);
+ assert.equal(cached.numberingRefreshNeeded,true);
+ assert.equal(await e.workspace.select(0),false);
+ assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
 });
 
 test('App insert binds the selected document and carries a standalone draft without clearing it',async()=>{
@@ -101,6 +300,24 @@ test('Ended insertion keeps display metadata, then Dock refresh accepts a new N+
  assert.equal(await e.workspace.prepareIncoming(after,requestId),false);e.workspace.accepted(after);assert.equal(e.workspace.pending,false);assert.equal(e.workspace.visibleSource(null).objects.length,3);assert.equal(e.workspace.visibleSource(null).documentSnapshot,18);
 });
 
+test('A default number format does not stale cached rows, but a new numbering revision does',async()=>{
+ const e=setup(),before={...document(),documentNumberingRevision:3};
+ e.workspace.remember(before);
+ const displayed=e.workspace.visibleSource(null);
+ const status=(revision,numberFormat,numberingRevision)=>({connected:true,revision,active:{identity:before.documentIdentity,name:'A.docx'},documents:[{identity:before.documentIdentity,name:'A.docx',readOnly:false,numberFormat,numberingRevision}]});
+ let current=status(1,'(#C1-#E1)',3);
+ e.behavior(async action=>action==='wordWorkspaceStatus'?current:undefined);
+ assert.equal(await e.workspace.refreshList(),true);
+ assert.equal(displayed.numberingRefreshNeeded,false);
+ current=status(2,'(#E1)',4);
+ assert.equal(await e.workspace.refreshList(),true);
+ assert.equal(e.workspace.visibleSource(null),displayed);
+ assert.equal(displayed.numberingRefreshNeeded,true);
+ e.workspace.remember({...before,documentNumberingRevision:4,documentSnapshot:18});
+ assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,false);
+ assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+});
+
 test('Blank insertion can request an exact existing formula without inserting a placeholder',async()=>{
  const e=setup();e.state.source=document();e.state.wordTicket=ticket;
  assert.equal(await e.workspace.select(1),true);assert.equal(e.calls.filter(c=>c.action==='detach').length,1);
@@ -114,6 +331,27 @@ test('A nonempty insertion draft is preserved when switching is declined',async(
  const e=setup();e.state.source=document();e.state.wordTicket=ticket;e.state.draftChanged=true;
  assert.equal(await e.workspace.select(0),false);assert.equal(e.state.wordTicket,ticket);assert.equal(e.state.source.insertion,true);assert.equal(e.workspace.pending,false);
  assert.equal(e.calls.some(c=>['detach','wordDocumentOpen'].includes(c.action)),false);
+});
+
+test('A late sidebar switch approval cannot detach a newer Word session',async()=>{
+ const e=setup(),confirmation=deferred(),confirmationStarted=deferred();
+ const original=document(),replacement={...document(),documentIdentity:'word:1:3',wordTicket:'e'.repeat(64)};
+ e.api.state=()=>({...e.state});
+ Object.assign(e.state,{source:original,wordTicket:ticket,draftChanged:true});
+ e.workspace.accepted(original);
+ e.behavior(async action=>{
+  if(action==='confirmWordSessionSwitch'){confirmationStarted.resolve();return confirmation.promise;}
+ });
+ const switching=e.workspace.select(0);
+ await confirmationStarted.promise;
+ Object.assign(e.state,{source:replacement,wordTicket:replacement.wordTicket,draftChanged:true});
+ e.workspace.accepted(replacement);
+ confirmation.resolve({discard:true});
+ assert.equal(await switching,false);
+ assert.equal(e.state.source,replacement);
+ assert.equal(e.state.wordTicket,replacement.wordTicket);
+ assert.equal(e.state.draftChanged,true);
+ assert.equal(e.calls.some(call=>['detach','wordDocumentOpen'].includes(call.action)),false);
 });
 
 test('New detaches a clean Word session and preserves a draft unless the user confirms',async()=>{
@@ -359,6 +597,10 @@ test('Manual same-identity refresh detaches a clean ticket and binds the fresh c
  assert.equal(e.calls.filter(c=>c.action==='detach').length,1);
  assert.equal(e.calls.filter(c=>c.action==='wordDocumentOpen').length,1);
  assert.equal(e.state.wordTicket,null);
+ const display=e.workspace.visibleSource(null);
+ assert.deepEqual(Array.from(display.objects,object=>object.index),[0,1]);
+ assert.equal(display.documentLoading,true);
+ assert.equal(display.numberingRefreshNeeded,true);
  await assert.rejects(e.workspace.prepareIncoming({...old,documentIdentity:'B'},freshRequest),/Word 当前文档已变化/);
  assert.equal(e.workspace.pending,false);
 });
@@ -505,7 +747,26 @@ test('An identity-bound empty document keeps its name and does not repeatedly re
  const e=setup();e.behavior(async action=>action==='wordWorkspaceStatus'?catalogStatus('word:B'):action==='wordDocumentStatus'?{state:'empty',documentIdentity:'word:B'}:undefined);
  assert.equal(await e.workspace.chooseDocument('word:B'),true);await new Promise(resolve=>setImmediate(resolve));
  assert.equal(e.workspace.pending,false);assert.equal(e.workspace.documentIdentity,'word:B');assert.equal(e.workspace.documentName,'Same.docx');
+ assert.equal(e.workspace.documentReadState,'empty');
  assert.equal(await e.workspace.syncCurrent(),false);assert.equal(e.calls.filter(x=>x.action==='wordDocumentOpen').length,1);
+});
+test('A failed document read retries the selected document even when a different Word window is active',async()=>{
+ const e=setup(),first=deferred(),second=deferred();let reads=0;
+ e.behavior(async action=>{
+  if(action==='wordWorkspaceStatus')return catalogStatus();
+  if(action==='wordDocumentStatus')return reads++===0?first.promise:second.promise;
+ });
+ assert.equal(await e.workspace.chooseDocument('word:B'),true);
+ assert.equal(e.workspace.documentReadState,'loading');
+ first.resolve({state:'failed'});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(e.workspace.documentReadState,'failed');
+ assert.equal(e.workspace.documentIdentity,'word:B');
+ assert.equal(e.workspace.documentName,'Same.docx');
+ assert.equal(await e.workspace.retryRead(),true);
+ assert.equal(e.workspace.documentReadState,'loading');
+ assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').at(-1).payload.documentIdentity,'word:B');
+ second.resolve({state:'empty',documentIdentity:'word:B'});await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(e.workspace.documentReadState,'empty');
 });
 test('Stable catalog polling does not detach or reload a current equation',async()=>{
  const e=setup(),old={...document(),documentIdentity:'word:A',insertion:false};e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);e.behavior(async action=>action==='wordWorkspaceStatus'?catalogStatus():undefined);

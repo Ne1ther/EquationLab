@@ -17,7 +17,7 @@ const output = path.resolve(root, outputArgument ?? 'dist/source-review');
 const hash = bytes => createHash('sha256').update(bytes).digest('hex');
 const roots = [
   '.gitignore', '.github', 'AGENTS.md', 'LICENSE', 'THIRD_PARTY_NOTICES.md', 'Package.swift', 'package.json', 'package-lock.json',
-  'macos', 'updater', 'desktop', 'src', 'word-ribbon', 'assets/fonts', 'assets/licenses', 'font-metrics', 'tests',
+  'macos', 'updater', 'desktop', 'src', 'skills/equation-lab', 'word-ribbon', 'assets/fonts', 'assets/licenses', 'font-metrics', 'tests',
   'scripts/build_and_run.sh', 'scripts/package_release.sh',
   'scripts/benchmark-document.mjs', 'scripts/benchmark-snapshot-cache.mjs',
   'packaging', 'native-word-probe/src', 'native-word-probe/include', 'native-word-probe/Info.plist',

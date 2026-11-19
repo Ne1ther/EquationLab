@@ -112,6 +112,42 @@ async function openDocument(document,index,{identity='word-process-a:document-1'
 }
 const targetOf=(session,index)=>({index,expectedNativeSha256:session.objects[index].nativeSha256,documentIdentity:session.document.identity});
 
+test('Live Word rows and editor details exclude header formulas while copy validation can still see their hashes',async()=>{
+ const bytes=await createDocx([{latex:'x'},{latex:'y'}]),zip=await JSZip.loadAsync(bytes);
+ const ole=makeOle('z');
+ zip.file('word/header7.xml','<w:hdr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><w:p><w:r><w:object><o:OLEObject ProgID="Equation.DSMT4" r:id="rEquation"/></w:object></w:r></w:p></w:hdr>');
+ zip.file('word/_rels/header7.xml.rels','<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rEquation" Target="embeddings/header-equation.bin" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/oleObject"/></Relationships>');
+ zip.file('word/embeddings/header-equation.bin',ole);
+ const types=await zip.file('[Content_Types].xml').async('string');
+ zip.file('[Content_Types].xml',types.replace('</Types>','<Override PartName="/word/header7.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"/></Types>'));
+ const rels=await zip.file('word/_rels/document.xml.rels').async('string');
+ zip.file('word/_rels/document.xml.rels',rels.replace('</Relationships>','<Relationship Id="rHeader" Target="header7.xml" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/header"/></Relationships>'));
+ const source=await openDocument(await zip.generateAsync({type:'nodebuffer'}),0);
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:source.ticket}});
+ assert.equal(source.objects.length,3);
+ assert.deepEqual(read.objects.map(object=>object.index),[0,1]);
+ assert.deepEqual(read.documentToolObjects,source.objects.map(({index,nativeSha256})=>({index,nativeSha256})));
+ const payload={ticket:source.ticket,index:2,documentIdentity:read.documentIdentity,documentSnapshot:read.documentSnapshot,nativeSha256:source.objects[2].nativeSha256};
+ await assert.rejects(desktopRequest({action:'wordSessionObject',payload}),/公式与文档快照不一致/);
+ await assert.rejects(desktopRequest({action:'wordSessionThumbnails',payload:{ticket:source.ticket,indices:[2]}}),/Invalid thumbnail indices/);
+});
+
+test('A confirmed Word write returns the exact updated Native identity for its cached row',async()=>{
+ const bytes=await createDocx([{latex:'x^3'},{latex:'y'}]),original=(await inspectDocx(bytes)).objects[0];
+ const session=String(next++),identity='receipt-document',snapshot=47;
+ const opened=await sessionOperation('native-open',{session,native:inspectOle(original.ole).native.toString('base64'),acknowledgement:true,document:{ooxml:await flatOpc(bytes),index:0,name:'receipt.docx',identity,snapshot}});
+ live.add(opened.ticket);
+ const staged=await sessionOperation('native-read',{ticket:opened.ticket});
+ const offset=characters(inspectOle(original.ole).parsed).find(item=>item.char==='3').offset;
+ await save(staged,{replacements:{[offset]:'4'}});
+ const status=()=>desktopRequest({action:'wordSessionStatus',payload:{ticket:opened.ticket}});
+ assert.deepEqual(await status(),{state:'queued'});
+ const final=await sessionOperation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
+ assert.deepEqual(await status(),{state:'delivered'});
+ await sessionOperation('native-ack',{ticket:opened.ticket,session,ok:true});
+ assert.deepEqual(await status(),{state:'committed',change:{documentIdentity:identity,documentSnapshot:snapshot,index:0,previousNativeSha256:original.nativeSha256,nativeSha256:hash(Buffer.from(final.native,'base64')),numberingChanged:false}});
+});
+
 async function alternateMainPart(document){
  const zip=await JSZip.loadAsync(document),xml=await zip.file('word/document.xml').async('string'),relationships=await zip.file('word/_rels/document.xml.rels').async('string');
  const rootRelationships=await zip.file('_rels/.rels').async('string'),contentTypes=await zip.file('[Content_Types].xml').async('string');
@@ -142,6 +178,24 @@ test('A sidebar target saves directly from its bound snapshot with one completio
  assert.equal(calls.some(c=>c.operation==='native-navigate'||c.operation==='native-open'),false);
  const result=await sessionOperation('native-poll',{ticket:source.ticket});live.delete(source.ticket);
  assert.deepEqual(result.target,target);assert.equal(result.native,expected.toString('base64'));assert.notEqual(result.native,source.native);
+});
+
+test('Word lists defer unused edit details and hydrate one row from the same verified snapshot',async()=>{
+ const buffer=await createDocx([{latex:'x^3'},{latex:'y^9'},{latex:'z^2'}]);
+ const source=await openDocument(buffer,0),{ticket}=source;
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket}});
+ assert.ok(read.objects[0].characters.length);
+ assert.equal(read.objects[1].latex,'y^{9}');
+ assert.equal(read.objects[1].editorDetailsLoaded,false);
+ for(const key of ['characters','typography','ruler'])assert.equal(Object.hasOwn(read.objects[1],key),false);
+ const row=read.objects[1],payload={ticket,index:row.index,documentIdentity:read.documentIdentity,documentSnapshot:read.documentSnapshot,nativeSha256:row.nativeSha256};
+ const exact=await desktopRequest({action:'wordSessionObject',payload});
+ const {characters,typography,ruler}=(await inspectDocx(buffer)).objects[1];
+ assert.deepEqual(exact,{characters,typography,ruler});
+ for(const patch of [{documentIdentity:'foreign'},{documentSnapshot:2},{index:2},{nativeSha256:'f'.repeat(64)}]){
+  await assert.rejects(desktopRequest({action:'wordSessionObject',payload:{...payload,...patch}}),/快照/);
+ }
+ await assertEditing(source);
 });
 
 test('Number format changes require a capable Word host and an exact live document target',async()=>{

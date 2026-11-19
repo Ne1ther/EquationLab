@@ -3,11 +3,41 @@ import path from 'node:path';
 import {DOMParser,XMLSerializer} from '@xmldom/xmldom';
 import {NS,MAX_FLAT_OPC_BYTES} from './document.mjs';
 const typesNS='http://schemas.openxmlformats.org/package/2006/content-types';
+const settingsPart={
+ name:'word/settings.xml',relationships:'word/_rels/settings.xml.rels',
+ type:'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',
+ relation:NS.r+'/settings',root:'settings',namespace:NS.w
+};
+const customPropertiesPart={
+ name:'docProps/custom.xml',relationships:'docProps/_rels/custom.xml.rels',
+ type:'application/vnd.openxmlformats-officedocument.custom-properties+xml',
+ relation:NS.r+'/custom-properties',root:'Properties',
+ namespace:'http://schemas.openxmlformats.org/officeDocument/2006/custom-properties'
+};
 const serialize=node=>new XMLSerializer().serializeToString(node);
 function xml(text){if(typeof text!=='string'||/<!DOCTYPE|<!ENTITY/i.test(text))throw Error('Invalid Word snapshot XML');return new DOMParser({onError(level,message){throw Error('Invalid Word snapshot XML: '+message);}}).parseFromString(text,'application/xml');}
 function safeName(name){return typeof name==='string'&&name.length>0&&name.length<1024&&!name.startsWith('/')&&!/[\\\x00:]/.test(name)&&!name.split('/').some(s=>s==='.'||s==='..'||!s);}
 function ownerOfRels(name){if(name==='_rels/.rels')return '';const dir=path.posix.dirname(name);if(path.posix.basename(dir)!=='_rels'||!name.endsWith('.rels'))throw Error('Invalid Word relationship part');return path.posix.join(path.posix.dirname(dir),path.posix.basename(name).slice(0,-5));}
 function targetPart(owner,target){const name=target.startsWith('/')?target.slice(1):path.posix.normalize(path.posix.join(path.posix.dirname(owner),target));if(!safeName(name))throw Error('Invalid Word relationship target');return name;}
+function metadataPart(entries,relations,owner,spec){
+ const entry=entries.get(spec.name);
+ if(!entry?.data||entry.type!==spec.type||entries.has(spec.relationships))return null;
+ const links=Array.from(relations?.getElementsByTagNameNS(NS.rels,'Relationship')??[]).filter(node=>node.getAttribute('Type')===spec.relation);
+ if(links.length!==1||links[0].getAttribute('TargetMode')==='External'||targetPart(owner,links[0].getAttribute('Target'))!==spec.name)return null;
+ const roots=Array.from(entry.data.childNodes).filter(node=>node.nodeType===1);
+ if(roots.length!==1||roots[0].namespaceURI!==spec.namespace||roots[0].localName!==spec.root)return null;
+ return Array.from(entry.data.childNodes).map(serialize).join('');
+}
+function commonMetadata(values){
+ const first=values[0];
+ return first!==null&&values.every(value=>value===first)?first:null;
+}
+function serializedPayload(data){
+ const nodes=Array.from(data.childNodes);
+ const roots=nodes.filter(node=>node.nodeType===1);
+ if(roots.length!==1||nodes.some(node=>node.nodeType===4||node.nodeType===3&&/[^ \t\r\n]/.test(node.nodeValue)))throw Error('Invalid Word snapshot XML payload');
+ return nodes.map(serialize).join('');
+}
 /** Private read/edit snapshot, assembled from consecutive main-story ranges.
  * Each range owns its relationship namespace. No merged package is written back
  * to Word: save-back still replaces one checked OLE owner at its live Range.
@@ -15,6 +45,7 @@ function targetPart(owner,target){const name=target.startsWith('/')?target.slice
 export async function combineWordSnapshotParts(parts){
  if(!Array.isArray(parts)||!parts.length||parts.length>256)throw Error('Invalid Word snapshot parts');
  let total=0;const zip=new JSZip(),types=xml(`<Types xmlns="${typesNS}"/>`),relationships=xml(`<Relationships xmlns="${NS.rels}"/>`);let main=null,body=null,lastSection=null;
+ const settings=[],customProperties=[];
  const addType=(name,type)=>{const node=types.createElementNS(typesNS,'Override');node.setAttribute('PartName','/'+name);node.setAttribute('ContentType',type);types.documentElement.appendChild(node);};
  for(let index=0;index<parts.length;index++){
   const text=parts[index];if(typeof text!=='string'||(total+=Buffer.byteLength(text))>MAX_FLAT_OPC_BYTES)throw Error('Oversized Word snapshot parts');
@@ -27,9 +58,8 @@ export async function combineWordSnapshotParts(parts){
   const mainName=targetPart('',office[0].getAttribute('Target')),entry=entries.get(mainName);
   if(!entry?.data)throw Error('Missing Word snapshot main document');
   const document=xml(Array.from(entry.data.childNodes).map(serialize).join('')),sourceBody=document.getElementsByTagNameNS(NS.w,'body')[0];if(!sourceBody||document.documentElement.localName!=='document')throw Error('Invalid Word main document');
-  if(!main){main=document;body=sourceBody;while(body.firstChild)body.removeChild(body.firstChild);addType('word/document.xml','application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml');}
-  // Import from a separate tree even for the first range, whose body we clear.
-  const source=xml(Array.from(entry.data.childNodes).map(serialize).join('')).getElementsByTagNameNS(NS.w,'body')[0];
+  let source=sourceBody;
+  if(!main){main=document;body=sourceBody;source=sourceBody.cloneNode(true);while(body.firstChild)body.removeChild(body.firstChild);addType('word/document.xml','application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml');}
   const prefix=`ranges/${index}/`,renamed=name=>name===mainName?'word/document.xml':prefix+name;
   for(const element of Array.from(source.getElementsByTagName('*'))){
    for(const attribute of Array.from(element.attributes))if(attribute.namespaceURI===NS.r)attribute.value=`p${index}_${attribute.value}`;
@@ -40,14 +70,19 @@ export async function combineWordSnapshotParts(parts){
   }
   for(const node of Array.from(source.childNodes))if(node.nodeType===1&&node.namespaceURI===NS.w&&node.localName==='sectPr')lastSection=node;else body.appendChild(main.importNode(node,true));
   const mainRels=path.posix.join(path.posix.dirname(mainName),'_rels',path.posix.basename(mainName)+'.rels');
+  settings.push(metadataPart(entries,entries.get(mainRels)?.data,mainName,settingsPart));
+  customProperties.push(metadataPart(entries,rootXML,'',customPropertiesPart));
   for(const item of entries.values()){
    if(item.name==='_rels/.rels'||item.name===mainName)continue;
    const name=renamed(item.name);let content;
    if(item.data){
-    content=xml(Array.from(item.data.childNodes).map(serialize).join(''));
+    // The Flat OPC parser has already parsed unchanged package XML. Only
+    // relationship parts need a separate mutable document for renaming.
+    content=serializedPayload(item.data);
     if(item.name.endsWith('.rels')){
+     const rels=xml(content);
      const owner=ownerOfRels(item.name),newOwner=renamed(owner);
-     for(const relation of Array.from(content.getElementsByTagNameNS(NS.rels,'Relationship'))){
+     for(const relation of Array.from(rels.getElementsByTagNameNS(NS.rels,'Relationship'))){
       if(item.name===mainRels)relation.setAttribute('Id',`p${index}_${relation.getAttribute('Id')}`);
       if(relation.getAttribute('TargetMode')!=='External'){
        const target=renamed(targetPart(owner,relation.getAttribute('Target')));
@@ -56,14 +91,26 @@ export async function combineWordSnapshotParts(parts){
       if(item.name===mainRels)relationships.documentElement.appendChild(relationships.importNode(relation,true));
      }
      if(item.name===mainRels)continue;
+     content=serialize(rels);
     }
-    content=serialize(content);
    }else{const base64=item.binary.textContent.replace(/\s/g,'');if(!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(base64))throw Error('Invalid Word binary part');content=Buffer.from(base64,'base64');}
    zip.file(name,content);addType(name,item.type);
   }
  }
  if(lastSection)body.appendChild(main.importNode(lastSection,true));
+ const settingsXML=commonMetadata(settings),propertiesXML=commonMetadata(customProperties);
+ if(settingsXML!==null){
+  // Replace the segment-local links only when the shared part is equivalent.
+  for(const link of Array.from(relationships.documentElement.childNodes)){
+   if(link.nodeType===1&&link.getAttribute('Type')===settingsPart.relation)relationships.documentElement.removeChild(link);
+  }
+  zip.file(settingsPart.name,settingsXML);addType(settingsPart.name,settingsPart.type);
+  const settingsRelation=relationships.createElementNS(NS.rels,'Relationship');
+  settingsRelation.setAttribute('Id','rSettings');settingsRelation.setAttribute('Type',settingsPart.relation);settingsRelation.setAttribute('Target','settings.xml');
+  relationships.documentElement.appendChild(settingsRelation);
+ }
+ if(propertiesXML!==null){zip.file(customPropertiesPart.name,propertiesXML);addType(customPropertiesPart.name,customPropertiesPart.type);}
  zip.file('word/document.xml',serialize(main));zip.file('word/_rels/document.xml.rels',serialize(relationships));addType('word/_rels/document.xml.rels','application/vnd.openxmlformats-package.relationships+xml');
- zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDocument" Type="${NS.r}/officeDocument" Target="word/document.xml"/></Relationships>`);addType('_rels/.rels','application/vnd.openxmlformats-package.relationships+xml');
- zip.file('[Content_Types].xml',serialize(types));return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
+ zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDocument" Type="${NS.r}/officeDocument" Target="word/document.xml"/>${propertiesXML===null?'':`<Relationship Id="rCustom" Type="${customPropertiesPart.relation}" Target="${customPropertiesPart.name}"/>`}</Relationships>`);addType('_rels/.rels','application/vnd.openxmlformats-package.relationships+xml');
+ zip.file('[Content_Types].xml',serialize(types));return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE',compressionOptions:{level:1}});
 }

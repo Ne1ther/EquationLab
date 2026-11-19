@@ -220,7 +220,8 @@ static void testTerminalWhileWaiting(NSString* terminal){
 
 static void testRetiredDocumentMetadata(){
     ELWordDocumentRequestMockBackend* backend=installScenario(requestId('e'));
-    bridge_probe::publishWordWorkspace(@{@"identity":@"process:A",@"name":@"A.docx"},@[@{@"identity":@"process:A",@"name":@"A.docx",@"readOnly":@NO},@{@"identity":@"process:B",@"name":@"A.docx",@"readOnly":@YES}]);
+    bridge_probe::publishWordWorkspace(@{@"identity":@"process:A",@"name":@"A.docx"},@[@{@"identity":@"process:A",@"name":@"A.docx",@"readOnly":@NO,@"numberingRevision":@12},@{@"identity":@"process:B",@"name":@"A.docx",@"readOnly":@YES,@"numberingRevision":@42}]);
+    check([bridge_probe::wordWorkspaceNumberingRevision(@"process:A") isEqual:@12]&&[bridge_probe::wordWorkspaceNumberingRevision(@"process:B") isEqual:@42]&&!bridge_probe::wordWorkspaceNumberingRevision(@"process:C"),"same-name workspace documents shared one snapshot numbering revision");
     waitUntil(^{@synchronized(backend){return [backend.lastWorkspace[@"active"] isKindOfClass:NSDictionary.class]&&[backend.lastWorkspace[@"active"][@"identity"] isEqual:@"process:A"];}},"active document was not published");
     bridge_probe::closeWordWorkspaceIdentity(@"process:B");
     waitUntil(^{@synchronized(backend){return [backend.lastWorkspace[@"retiredIdentities"] containsObject:@"process:B"];}},"background document retirement was not published");

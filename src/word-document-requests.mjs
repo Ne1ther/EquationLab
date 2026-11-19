@@ -1,4 +1,4 @@
-import {randomBytes} from 'node:crypto';
+import {createHmac,randomBytes,timingSafeEqual} from 'node:crypto';
 import {previewNumberFormat} from './layout.mjs';
 
 const terminalStates=new Set(['opened','empty','no-document','failed','cancelled','superseded','expired']);
@@ -7,6 +7,12 @@ const idPattern=/^[0-9a-f]{64}$/;
 const retiredHostLimit=64;
 const retiredHostLifetimeMs=10*60_000;
 const workspaceHeartbeatMs=45_000;
+const catalogKey=randomBytes(32);
+
+export function wordCatalogProof(identity,snapshot,count,expires){
+ const digest=createHmac('sha256',catalogKey).update(JSON.stringify([identity,snapshot,count,expires])).digest('hex');
+ return expires+'.'+digest;
+}
 
 function protocolError(message,status=400){
  const error=new Error(message);error.statusCode=status;return error;
@@ -57,18 +63,33 @@ function copyWorkspace(body){
 
 function requireHostId(value){if(typeof value!=='string'||!idPattern.test(value))throw protocolError('Invalid host id');return value;}
 
-function copyRequest(body){
+function copyRequest(body,now){
  if(!isRecord(body))throw protocolError('JSON object required');
  if(Object.hasOwn(body,'insertionMode')){
   const {insertionMode,...destination}=body;
   if(!['inline','display','numbered-left','numbered-right'].includes(insertionMode))throw protocolError('Invalid insertion mode');
-  const request=copyRequest(destination);
+  if(Object.hasOwn(destination,'catalogTarget'))throw protocolError('A Word directory row cannot authorize insertion');
+  const request=copyRequest(destination,now);
   if(!request.target&&!request.documentIdentity)throw protocolError('Insertion requires an explicit Word destination');
   return {...request,insertionMode};
  }
  const keys=Object.keys(body);
  if(keys.length===0)return {target:null,documentIdentity:null};
  if(keys.length===1&&keys[0]==='documentIdentity')return {target:null,documentIdentity:validDocumentIdentity(body.documentIdentity,'document identity')};
+ if(keys.length===1&&keys[0]==='catalogTarget'){
+  const item=body.catalogTarget;
+  if(!isRecord(item)||Object.keys(item).length!==5)throw protocolError('Invalid Word directory target');
+  const {identity,snapshot,index,count,proof}=item;
+  validDocumentIdentity(identity,'target identity');
+  if(!Number.isSafeInteger(snapshot)||snapshot<1||snapshot>0x7fffffff||!Number.isSafeInteger(count)||count<1||count>10000||!Number.isSafeInteger(index)||index<0||index>=count)throw protocolError('Invalid Word directory target');
+  if(typeof proof!=='string'||!/^\d{13}\.[0-9a-f]{64}$/.test(proof))throw protocolError('Invalid Word directory proof');
+  const [expires,tag]=proof.split('.');
+  if(Number(expires)<=now||!timingSafeEqual(Buffer.from(proof),Buffer.from(wordCatalogProof(identity,snapshot,count,Number(expires)))))throw protocolError('Word directory has expired or changed',409);
+  // The existing Word wire accepts a hex binding for browsing. VBA resolves
+  // the retained Doc+Range and reopens the owner; the tag is not an OLE hash
+  // and can never authorize insertion or be reused as a save target.
+  return {target:Object.freeze({identity,snapshot,index,nativeSha256:tag}),documentIdentity:null,catalogBrowse:true};
+ }
  if(keys.length!==1||keys[0]!=='target'||!isRecord(body.target))throw protocolError('Expected {}, {documentIdentity}, or {target}');
  const target=body.target;
  if(Object.keys(target).length!==4||!Object.hasOwn(target,'identity')||!Object.hasOwn(target,'snapshot')||!Object.hasOwn(target,'index')||!Object.hasOwn(target,'nativeSha256'))throw protocolError('Invalid document target');
@@ -157,13 +178,13 @@ export function createWordDocumentRequests({now=Date.now,makeId=()=>randomBytes(
  }
 
  function request(body){
-  expire();const requestData=copyRequest(body);
-  if(requestData.documentIdentity||requestData.insertionMode){
+  expire();const requestData=copyRequest(body,now());
+  if(requestData.documentIdentity||requestData.insertionMode||requestData.catalogBrowse){
    const workspace=workspaceStatus();
    const identity=requestData.documentIdentity||requestData.target.identity,document=workspaceDocuments.find(document=>document.identity===identity);
    if(!workspace.connected||retiredIdentities.includes(identity)||!document)throw protocolError('Requested Word document is not open in the current host',409);
    if(requestData.insertionMode&&!insertionRequestSupport)throw protocolError('Update the Word add-in to insert from the App',409);
-   if(requestData.insertionMode&&document.readOnly)throw protocolError('Requested Word document is read only',409);
+   if((requestData.insertionMode||requestData.catalogBrowse)&&document.readOnly)throw protocolError('Requested Word document is read only',409);
   }
   const {target,documentIdentity,insertionMode}=requestData;
   if(records.size>=recordLimit&&!Array.from(records.values()).some(record=>terminalStates.has(record.state)))trim();

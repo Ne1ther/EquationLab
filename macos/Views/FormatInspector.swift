@@ -125,7 +125,7 @@ struct FormatInspector: View {
                 }
                 Text(bridge.language.usesEnglish ? "Checks use the loaded snapshot. Batch changes are previewed and saved to a new copy." : "检查已载入的文档快照；批量修改先预检，再另存副本。")
                     .font(.caption2).foregroundStyle(.secondary)
-            }.controlSize(.small).disabled(bridge.state.busy || bridge.state.wordDocumentLoading || bridge.state.wordDocumentUnavailable || bridge.state.documentPath.isEmpty || bridge.state.wordOutcomeUnknown)
+            }.controlSize(.small).disabled(bridge.state.busy || bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed || bridge.state.wordDocumentUnavailable || bridge.state.documentPath.isEmpty || bridge.state.wordOutcomeUnknown)
             Divider()
             InspectorSection("复制与导出") {
                 Button { bridge.action("click", ["id": "copy-latex"]) } label: { Label(bridge.t("复制 LaTeX"), systemImage: "doc.on.doc") }

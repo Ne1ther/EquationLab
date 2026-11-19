@@ -5,7 +5,9 @@
 
 [English](README.en.md)
 
-**[下载 0.6.15 安装包（build103）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.15/Equation-Lab-0.6.15.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.7.0 安装包（build104）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+
+**在 Codex 里处理 Word 公式**。打开工具栏的 **AI → 安装或导出 Skill… → 安装到 Codex**，然后在 Codex 试一句：`请用 $equation-lab 检查这份 Word 的公式、编号和交叉引用。` 批量修改可以另存为新副本。
 
 适用 M 系列 Mac、macOS 14 及以上。安装包自带 App、Word 插件和运行时，不用另装 Node、Python 或 MathType。Word 功能需要桌面版 Word for Mac。
 
@@ -27,7 +29,7 @@
 
 在左侧顶部选好文档，点底部“插入到 Word”，就能选择行内、居中或左右编号。如果正在编辑已有公式，新公式会插在它所在的段落后面。独立草稿使用所选文档在 Word 中的空光标位置，内容和排版设置一起带入。点“完成并插入”后，App 会显示 Word 返回的保存结果。
 
-左侧菜单列出 Word 当前打开的文档，同名文件也能区分。列表显示正文里的实际编号，可以一起搜索编号和 LaTeX。长文档先打开当前公式，其余列表在后台分批载入；字号或编号预检期间仍可输入并更新预览。打开靠后的公式时，所选行会滚动到可见位置，缩略图载入后也保持位置。
+左侧菜单列出 Word 当前打开的文档，同名文件也能区分。列表显示正文里的实际编号，可以一起搜索编号和 LaTeX。支持的长文档可先显示可点选的公式目录，再补齐编号和内容。缩略图按需载入。
 
 没来得及保存的公式会留在本机，重开 App 后点“恢复草稿”就能继续独立编辑。[草稿恢复说明](docs/draft-recovery.md)
 

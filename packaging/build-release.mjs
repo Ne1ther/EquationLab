@@ -119,6 +119,7 @@ try {
   const npmEnvironment=Object.fromEntries(Object.entries(process.env).filter(([key])=>!/^npm_config_/i.test(key)&&!['NODE_PATH','NODE_OPTIONS'].includes(key)));
   run(bundledNode,[npmCli,'ci','--omit=dev','--ignore-scripts','--no-audit','--no-fund','--update-notifier=false','--userconfig',join(temp,'user.npmrc'),'--globalconfig',join(temp,'global.npmrc'),'--cache',join(temp,'npm-cache'),'--registry','https://registry.npmjs.org'],{cwd:engine,stdio:'inherit',env:{...npmEnvironment,PATH:`${join(runtimeSource,'bin')}:/usr/bin:/bin:/usr/sbin:/sbin`}});
   await cp(join(root,'src'),join(engine,'src'),{recursive:true,dereference:false});
+  await cp(join(root,'skills/equation-lab'),join(resources,'skills/equation-lab'),{recursive:true,dereference:false});
   await mkdir(join(resources,'licenses'),{recursive:true});
   for(const file of ['LICENSE','THIRD_PARTY_NOTICES.md'])await copyFile(join(root,file),join(resources,'licenses',file));
   await cp(join(root,'assets','licenses'),join(resources,'licenses'),{recursive:true,dereference:false});
@@ -237,6 +238,9 @@ try {
   const result=JSON.parse(probe);
   if(!result.ok||!result.data?.svg?.includes('<svg')||!result.data?.nativeBytes)throw Error(`Bundled equation engine failed: ${JSON.stringify(result)}`);
   report.checks.relocatedEngine={passed:true,nativeBytes:result.data.nativeBytes,characters:result.data.characters,latex:result.data.latex};
+  const skill=JSON.parse(run('/bin/sh',[join(resources,'skills/equation-lab/scripts/run'),'inspect',join(root,'docs/examples/equation-lab-30-formulas.docx')],{cwd:temp,env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin',TMPDIR:tmpdir()},timeout:30000}));
+  if(skill.equationCount!==30||!skill.equations?.every(row=>row.nativeSha256))throw Error('Bundled Equation Lab Skill failed its standalone check.');
+  report.checks.relocatedSkill={passed:true,equationCount:skill.equationCount};
   const boundVersion=run(bundledNode,['--input-type=module','-e','const{pathToFileURL}=await import("node:url");const{APP_VERSION}=await import(pathToFileURL(process.argv[1]));process.stdout.write(APP_VERSION);',join(engine,'src','version.mjs')],{cwd:temp,env:{PATH:'/usr/bin:/bin:/usr/sbin:/sbin'}});
   if(boundVersion!==version)throw Error('Bundled engine/app version mismatch.');
   report.checks.engineVersionBound={passed:true,version:boundVersion};

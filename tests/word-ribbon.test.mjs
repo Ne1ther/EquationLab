@@ -32,8 +32,14 @@ test('Word and editor numbering changes retain a document-bound default for subs
  const procedure=(source,name)=>{const start=source.indexOf(name);assert.notEqual(start,-1);return source.slice(start,source.indexOf(name.includes('Function')?'End Function':'End Sub',start));};
  const insert=procedure(ribbon,'Public Sub ELStartEquationInsertion');
  assert.match(insert,/ELDocumentNumberFormat\(Doc, selectedRange\.Start\)/);
- const number=procedure(ribbon,'Private Sub NumberSelectedEquationCore');
- assert.match(number,/UpdateNumbersForDocument Doc\s+If patternOverride <> "" Then SavePreferenceForDocument Doc, "EquationLabNumberFormat", patternOverride/,'only a successful, exact-target save adopts the editor format');
+ const number=procedure(ribbon,'Public Sub NumberSelectedEquation');
+ const numberCore=procedure(ribbon,'Private Sub NumberSelectedEquationCore');
+ assert.match(number,/If Not refreshedDisplayOnly Then\s+UpgradeLegacyNumbering Doc, changed\s+UpdateNumbersForDocument Doc\s+End If\s+SaveSharedNumberFormat Doc, futureFormat\s+NumberingChanged Doc/,'only a successful, exact-target save adopts the editor format');
+ assert.equal((number.match(/UpdateNumbersForDocument Doc/g)||[]).length,1);
+ assert.doesNotMatch(numberCore,/UpdateNumbersForDocument|NumberingChanged|ELInvalidateDocumentSnapshot/);
+ const defaultNumber=procedure(ribbon,'Private Sub SetNumberFormat');
+ assert.match(defaultNumber,/SaveSharedNumberFormat Doc, value[\s\S]*ELCommitNumberingTransaction[\s\S]*ELQueueWorkspaceRefresh/);
+ assert.doesNotMatch(defaultNumber,/UpdateNumbersForDocument|NumberingChanged|ELInvalidateDocumentSnapshot/);
  const adopt=procedure(ribbon,'Public Sub ELRememberInsertedNumberFormat');
  assert.match(adopt,/inserted\.Document Is Doc/);assert.match(adopt,/bookmark\.Range\.Start >= inserted\.Start And bookmark\.Range\.End <= inserted\.End/);
  assert.match(adopt,/If count = 1 Then SaveSharedNumberFormat Doc/,'never infer an insertion preference from an unrelated bookmark');
@@ -301,7 +307,8 @@ test('workspace numbering metadata reads only declared settings while numbering 
  const shared=get(ribbon,'Private Function SharedDefaultFormat','End Function');
  const legacy=get(ribbon,'Private Function HasLegacyNumbering','End Function');
  assert.match(actual,/SharedDefaultFormat\(Doc\)/);assert.match(shared,/HasLegacyNumbering\(Doc\)/);
- assert.match(legacy,/CollectEquationFields Doc\.Content/);
+ assert.match(legacy,/If fields Is Nothing Then Set fields = SequenceFieldsForDocument\(Doc\)/);
+ assert.match(ribbon,/Private Function SequenceFieldsForDocument[\s\S]*?CollectEquationFields Doc\.Content/);
 });
 
 test('workspace sidecar carries bounded metadata only and explicit selector is identity bound',async()=>{
@@ -471,7 +478,7 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(rightLeft,/Set chosen = ELSelectedEquation\(Selection\)/);
  assert.match(rightLeft,/If kind = "Right" Or kind = "Left" Then[\s\S]*?NumberSelectedEquation Doc, chosen, \(kind = "Right"\)/);
  assert.match(rightLeft,/If selectedRange\.Start <> selectedRange\.End Then[\s\S]*?ELStartEquationInsertion kind, selectedRange/,'collapsed cursor retains the shared insertion route');
- assert.match(procedure('Public Sub ELStartEquationInsertion'),/Set Doc = selectedRange.Document[\s\S]*?selectedRange.Select[\s\S]*?NextNumber\(\)[\s\S]*?ELBeginEquationInsertion kind, leadingParagraph/);
+ assert.match(procedure('Public Sub ELStartEquationInsertion'),/Set Doc = selectedRange.Document[\s\S]*?selectedRange.Select[\s\S]*?SequenceFieldsForDocument\(Doc\)[\s\S]*?NextNumber\(fields\)[\s\S]*?ELBeginEquationInsertion kind, leadingParagraph/);
  assert.doesNotMatch(rightLeft,/InlineShapes\(\d+\)|Selection\.Move|Set chosen = .*InlineShapes/,'selection routing has no arbitrary adjacent-object fallback');
  const number=procedure('Private Sub InsertNumber');
  assert.match(number,/Set chosen = ELSelectedEquation\(Selection\)/);
@@ -517,6 +524,9 @@ test('Word insertion preview reads sequence resets before the insertion position
  assert.match(sequence,/parts\(i\) = "\\C"/);
  assert.match(sequence,/If resetFound Then[\s\S]*value = resetValue[\s\S]*ElseIf Not repeatCurrent Then[\s\S]*value = value \+ 1/);
  assert.match(source,/CurrentCounter\("ELChapter", Preference\("EquationLabChapter", "1"\)\)/);
+ const insertion=source.slice(source.indexOf('Public Sub ELStartEquationInsertion'),source.indexOf('Private Function IsEquation'));
+ assert.equal((insertion.match(/SequenceFieldsForDocument\(Doc\)/g)||[]).length,1);
+ assert.match(insertion,/SequenceBeforePosition\(Doc, selectedRange.Start, "ELChapter", hasChapter, fields\)[\s\S]*SequenceBeforePosition\(Doc, selectedRange.Start, "ELSection", hasSection, fields\)/);
 });
 
 test('Legacy MathType numbering visits nested code fields and preserves macrobuttons and hidden reference names',async()=>{
@@ -589,6 +599,11 @@ test('shared number replacement resolves the real end delimiter and preserves th
  assert.match(replace,/inserted\.Start = paragraph\.Start And inserted\.End = paragraph\.End - 1 And paragraph\.InlineShapes\.Count = 0/);
  assert.match(replace,/Doc\.Range\(paragraph\.End - 1, paragraph\.End\)\.Text = vbCr/);
  assert.match(replace,/paragraph\.Style = style: paragraph\.ParagraphFormat = formatting/);
+ assert.match(replace,/If Not displayOnlyFields Is Nothing Then[\s\S]*?If field.Type = wdFieldRef Then[\s\S]*?ReferenceNamesNumber\(field, Doc, name, aliases, enclosingNames\) Then references.Add field/);
+ assert.match(replace,/NumberIncrementReset\(Doc, Doc.Bookmarks\(name\)\) <> equationReset[\s\S]*?For Each field In Doc.Bookmarks\(name\).Range.Fields[\s\S]*?For Each field In references[\s\S]*?If Not field.Locked Then field.Update/);
+ assert.match(replace,/StrComp\(referenceName, CStr\(aliasName\), vbTextCompare\)/);
+ assert.match(replace,/StrComp\(referenceName, CStr\(enclosingName\), vbTextCompare\)[\s\S]*?ReferenceNamesNumber = IsEquationReference\(field, Doc\)/);
+ assert.doesNotMatch(replace,/CollectEquationFields|UpdateNumbersForDocument/,'format-only replacement reuses the collected fields and refreshes exact references only');
  assert.equal((replace.match(/Options\.SmartCutPaste = oldSmartCutPaste/g)||[]).length,2);
 });
 
@@ -600,8 +615,12 @@ test('unreferenced MathType numbers receive only a bounded display anchor inside
  assert.match(ensure,/bookmark\.Range\.Start < span\.End And bookmark\.Range\.End > span\.Start/);
  assert.match(ensure,/changed = True\s+Doc\.Bookmarks\.Add Name:=name, Range:=span/);
  assert.doesNotMatch(ensure,/\.Delete|InsertXML|InsertFile|\.Select|ActiveDocument|Selection/);
- const unwrap=vba.slice(vba.indexOf('Private Sub UnwrapSelectedSharedNumber'),vba.indexOf('Private Sub EnsureSharedNumberBookmark'));
+ const unwrap=vba.slice(vba.indexOf('Private Function UpdateOrUnwrapSelectedSharedNumber'),vba.indexOf('Private Function PendingSharedNumberSpan'));
  assert.match(unwrap,/EnsureSharedNumberBookmark Doc, equation, changed/);
+ assert.match(unwrap,/patternOverride <> "" And Not contextChanged[\s\S]*SharedNumberOnRequestedSide[\s\S]*ReplaceNumberXML Doc, envelope, pattern, target.Name, chapter, section, equationNumber, replaceInPlace, changed, equationReset/);
+ assert.match(unwrap,/If Not HasLegacyNumbering\(Doc, fields\) Then Set displayOnlyFields = fields[\s\S]*?refreshedDisplayOnly = Not displayOnlyFields Is Nothing/);
+ assert.match(unwrap,/ValidateEquationParagraphRemainder Doc, paragraph, oleRange, envelope/);
+ assert.doesNotMatch(unwrap,/\.InsertXML|NormalizeNumberParagraph|\bSelection\b/);
  const upgrade=vba.slice(vba.indexOf('Public Sub ELUpgradeNumberingForInterop'),vba.indexOf('Private Function ValidDisplaySequence'));
  assert.ok(upgrade.indexOf('ELBeginNumberingTransaction')<upgrade.indexOf('EnsureSharedNumberBookmark'));
  assert.match(upgrade,/ELTransactionRecoveryMessage/);

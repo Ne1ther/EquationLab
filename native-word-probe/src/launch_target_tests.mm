@@ -101,6 +101,17 @@ HResult setSessionPreview(std::uint64_t,const std::uint8_t*,std::size_t,SizeL){r
 - (BOOL)canEditRetainedOwner:(ProbeEditState*)state {return retainedOwnerEditingAllowed(true,state.ownerIdentity,bridge_probe::editObjectIdentity(state.sessionId),state.documentRequestId);}
 @end
 
+@interface SavedCaptureRetryTestTransport : RetainedOwnerTestTransport
+@property(nonatomic) NSUInteger nativeOpenRequests;
+@end
+@implementation SavedCaptureRetryTestTransport
+- (ProbeJsonRequest*)request:(NSString*)path body:(NSDictionary*)body reply:(ProbeReply)reply {
+    if([path isEqual:@"/api/native-open"]&&++self.nativeOpenRequests==1)
+        dispatch_async(dispatch_get_main_queue(),^{reply(nil,[NSError errorWithDomain:@"NativeEquationHTTP" code:400 userInfo:nil]);});
+    return [super request:path body:body reply:reply];
+}
+@end
+
 @interface NumberingReceiptTestTransport : ProbeEditorTransport
 @property(nonatomic,strong) NSDictionary* receipt;
 @end
@@ -442,6 +453,26 @@ void runPreCapturedActivationCases(){
     check(MathTypeBridgeCaptureWatch()==0,"finished sidebar save kept the callback alive");
     transport=savedTransport;
 }
+void runSavedCaptureRetryCases(){
+    ProbeEditorTransport* saved=transport;SavedCaptureRetryTestTransport* client=[SavedCaptureRetryTestTransport new];transport=client;
+    std::uint8_t bytes[29]={28};bytes[8]=1;
+    NSData* native=[NSData dataWithBytes:bytes length:sizeof(bytes)];
+    client.numberingSupportRegistered=YES;client.numberingContextSupportRegistered=YES;fixtureLiveOwner=42;
+    fixturePreCapturedActivation=@{@"identity":@"process:77",@"snapshot":@770,@"index":@12,@"captureToken":@700,@"name":@"small.docx",@"ooxml":@"stale-zip",@"encoding":@"docx-base64",@"_preCapturedActivation":@YES};
+    [client begin:9912 native:native];
+    [[NSRunLoop currentRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:.05]];
+    check(client.nativeOpenRequests==1&&client.captureRequest,"saved snapshot validation did not request live XML");
+    auto token=MathTypeBridgeTakeDocumentCaptureRequest();
+    check(token>0&&MathTypeBridgeDocumentCaptureRequiresLiveXML()==1&&MathTypeBridgeDocumentCaptureSnapshot()==770&&MathTypeBridgeDocumentCaptureIdentity()==77&&MathTypeBridgeDocumentCaptureIndex()==13,"live XML retry lost the exact Word Range binding");
+    client.testDocumentContext=@{@"identity":@"process:78",@"snapshot":@771,@"index":@12,@"captureToken":@(token),@"name":@"small.docx",@"ooxml":@"<foreign-document/>"};
+    EquationLabDocumentContextDidCapture();
+    check(MathTypeBridgeFinishDocumentCaptureRequest()==-3&&client.nativeOpenRequests==1,"live retry accepted another document");
+    token=MathTypeBridgeTakeDocumentCaptureRequest();
+    client.testDocumentContext=@{@"identity":@"process:77",@"snapshot":@772,@"index":@12,@"captureToken":@(token),@"name":@"small.docx",@"ooxml":@"<fresh-live-document/>"};
+    EquationLabDocumentContextDidCapture();
+    check(token>0&&MathTypeBridgeFinishDocumentCaptureRequest()==0&&client.nativeOpenRequests==2&&[client.submittedBody[@"document"][@"snapshot"] isEqual:@772]&&[client.submittedBody[@"numberingContextSupport"] boolValue],"matching live XML did not retain document metadata and numbering capability");
+    [client cleanup:9912];fixtureLiveOwner=0;transport=saved;
+}
 void runRetainedOwnerCases(){
     check(retainedOwnerEditingAllowed(true,42,42,nil),"direct live Word owner was not eligible");
     check(!retainedOwnerEditingAllowed(false,42,42,nil)&&!retainedOwnerEditingAllowed(true,0,0,nil)&&!retainedOwnerEditingAllowed(true,42,43,nil)&&!retainedOwnerEditingAllowed(true,42,42,@"request"),"foreign/closed/targeted owner acquired direct editing");
@@ -561,6 +592,7 @@ int main(){@autoreleasepool{
         runDocumentCacheCases();
         runCaptureRequestCases();
         runPreCapturedActivationCases();
+        runSavedCaptureRetryCases();
         runRetainedOwnerCases();
         runSelectionSnapshotCases();
         EnrichmentTestTransport* enrichment=[EnrichmentTestTransport new];ProbeEditState* partial=[ProbeEditState new];

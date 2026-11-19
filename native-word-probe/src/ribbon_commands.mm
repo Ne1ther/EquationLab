@@ -349,12 +349,19 @@ NSDictionary* decodeDocumentContext(NSString* text,BOOL* selectionBound=nullptr,
     if(selectionBound)*selectionBound=selected||requested;
     return context;
 }
+NSDictionary* attachSnapshotNumberingRevision(NSDictionary* context){
+    // A Range package need not have a canonical settings.xml. Attach the
+    // owning Word document's published revision at capture time.
+    NSNumber* revision=bridge_probe::wordWorkspaceNumberingRevision(context[@"identity"]);
+    if(!revision)return context;
+    NSMutableDictionary* updated=[context mutableCopy];updated[@"numberingRevision"]=revision;return updated;
+}
 std::int32_t prepareInsertion(NSString* layout){
     if(!validHost())return -1;NSURL* startup=startupDirectory();if(!startup)return -2;
     NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
     NSString* text=documentCaptureText(inputFile(directory,@"ribbon-insertion-context.txt"));
     NSDictionary* context=decodeDocumentContext(text);if(!context[@"identity"]||!context[@"snapshot"])return -3;
-    NSMutableDictionary* document=[context mutableCopy];document[@"index"]=@(-1);
+    NSMutableDictionary* document=[attachSnapshotNumberingRevision(context) mutableCopy];document[@"index"]=@(-1);
     NSDictionary* opening=bridge_probe::wordDocumentRequestEnvelope(bridge_probe::currentWordDocumentRequestToken());
     NSDictionary* target=opening[@"target"];
     if(opening[@"insertionMode"]&&target){
@@ -422,8 +429,15 @@ std::int32_t captureDocument(){
     unlink([directory URLByAppendingPathComponent:@"document-context.txt"].fileSystemRepresentation);
     NSString* text=documentCaptureText(data);
     const BOOL insertionPart=[text hasPrefix:@"ELIPART1\n"];
-    if(insertionPart){NSArray* lines=[text componentsSeparatedByString:@"\n"];if(lines.count<2||[lines[1] intValue]!=EquationLabInsertionDocumentRequestToken()){clearDocumentParts();return -3;}}
-    if([text hasPrefix:@"ELPART1\n"]){NSArray* lines=[text componentsSeparatedByString:@"\n"];if(lines.count<2||[lines[1] intValue]!=MathTypeBridgeDocumentCaptureRequestToken()){clearDocumentParts();return -3;}}
+    if(insertionPart||[text hasPrefix:@"ELPART1\n"]){
+        // Read only the request token. Splitting the whole Flat OPC payload
+        // creates thousands of strings in Word's main thread for every range.
+        const NSUInteger start=insertionPart?9:8;
+        const NSRange tokenRange=NSMakeRange(start,MIN(11,text.length-start));
+        const NSRange newline=[text rangeOfString:@"\n" options:NSLiteralSearch range:tokenRange];
+        const auto expected=insertionPart?EquationLabInsertionDocumentRequestToken():MathTypeBridgeDocumentCaptureRequestToken();
+        if(newline.location==NSNotFound||expected<=0||![[text substringWithRange:NSMakeRange(start,newline.location-start)] isEqualToString:[NSString stringWithFormat:@"%d",expected]]){clearDocumentParts();return -3;}
+    }
     BOOL selectionBound=NO;NSString* savedPath=nil;struct stat savedIdentity{};
     NSDictionary* context=decodeDocumentContext(text,&selectionBound,&savedPath,&savedIdentity);
     if([context[@"partPending"] boolValue]){
@@ -433,6 +447,7 @@ std::int32_t captureDocument(){
     }
     const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();
     if(!context)return -3;
+    context=attachSnapshotNumberingRevision(context);
     if(insertionPart){captureTiming={};return EquationLabFinishInsertionDocumentCapture(context);}
     if([context[@"scope"] isEqual:@"insertion"])return -3;
     std::int32_t preCaptured=EquationLabCapturePreCapturedDocumentContext(context);
@@ -733,6 +748,27 @@ RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestNoDocument,finishCurrentWor
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestFailed,finishCurrentWordDocumentRequest(@"failed"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestBookmarkConflict,finishCurrentWordDocumentRequest(@"failed",@"Another reference bookmark overlaps the number."))
 
-RIBBON_EXPORT(MathTypeBridgeQueueDocumentChunk,([&](){if(!validHost())return -1;const auto token=MathTypeBridgeDocumentCaptureRequestToken();if(token<=0){clearDocumentParts();return -2;}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(MathTypeBridgeDocumentCaptureRequestToken()==token)EquationLabWakeWordHost();});return 0;})())
-RIBBON_EXPORT(MathTypeBridgeQueueInsertionDocumentChunk,([&](){if(!validHost())return -1;const auto token=EquationLabInsertionDocumentRequestToken();if(token<=0){clearDocumentParts();return -2;}dispatch_after(dispatch_time(DISPATCH_TIME_NOW,100*NSEC_PER_MSEC),dispatch_get_main_queue(),^{if(EquationLabInsertionDocumentRequestToken()==token)EquationLabWakeWordHost();});return 0;})())
-RIBBON_EXPORT(MathTypeBridgeCanReadDocumentChunk,([&](){if(!validHost())return 0;const double idle=CGEventSourceSecondsSinceLastEventType(kCGEventSourceStateCombinedSessionState,kCGAnyInputEventType);return NSRunningApplication.currentApplication.isActive&&idle>=0&&idle<0.6?0:1;})())
+static std::int32_t queueSnapshotChunk(std::int32_t (*currentToken)()){
+    if(!validHost())return -1;
+    const auto token=currentToken();
+    if(token<=0){clearDocumentParts();return -2;}
+    // Yield back to Word between segments, even while Equation Lab is active.
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
+        if(currentToken()==token)EquationLabWakeWordHost();
+    });
+    return 0;
+}
+RIBBON_EXPORT(MathTypeBridgeQueueDocumentChunk,queueSnapshotChunk(MathTypeBridgeDocumentCaptureRequestToken))
+RIBBON_EXPORT(MathTypeBridgeQueueInsertionDocumentChunk,queueSnapshotChunk(EquationLabInsertionDocumentRequestToken))
+// Enrichment is optional. WordOpenXML occupies the host thread to completion,
+// so starting it during an input lull still delays the user's very next key.
+RIBBON_EXPORT(MathTypeBridgeCanReadDocumentChunk,([&](){
+    if(!validHost())return 0;
+    static bool paused=false;
+    const bool foreground=NSRunningApplication.currentApplication.isActive;
+    if(paused!=foreground){
+        os_log_info(OS_LOG_DEFAULT,"WordHostChunk foreground_pause=%d",foreground);
+        paused=foreground;
+    }
+    return foreground?0:1;
+})())

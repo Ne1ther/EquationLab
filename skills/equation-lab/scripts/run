@@ -1,0 +1,43 @@
+#!/bin/sh
+# Start Equation Lab with the runtime and engine shipped together in its App.
+set -eu
+skill_dir=$(CDPATH= cd -P -- "$(dirname "$0")/.." && pwd)
+app_resources=
+if [ -f "$skill_dir/.equation-lab-resources" ]; then
+    IFS= read -r app_resources < "$skill_dir/.equation-lab-resources" || true
+fi
+
+run() {
+    node_binary=$1
+    engine=$2
+    shift 2
+    if [ "${1:-}" = cli ]; then
+        shift
+        exec "$node_binary" "$engine/src/cli.mjs" "$@"
+    fi
+    exec "$node_binary" "$skill_dir/scripts/equation-lab.mjs" --repo "$engine" "$@"
+}
+
+try_resources() {
+    resources=$1
+    shift
+    case "$resources" in
+        /*)
+            if [ -x "$resources/runtime/bin/node" ] && [ -f "$resources/engine/src/cli.mjs" ]; then
+                run "$resources/runtime/bin/node" "$resources/engine" "$@"
+            fi
+            ;;
+    esac
+}
+
+checkout="$(dirname "$(dirname "$skill_dir")")"
+try_resources "$checkout" "$@"
+try_resources "$app_resources" "$@"
+if [ -f "$checkout/src/document.mjs" ] && [ -d "$checkout/node_modules" ] && command -v node >/dev/null 2>&1; then
+    run "$(command -v node)" "$checkout" "$@"
+fi
+try_resources "/Applications/Equation Lab.app/Contents/Resources" "$@"
+try_resources "${HOME:-}/Applications/Equation Lab.app/Contents/Resources" "$@"
+
+printf '%s\n' 'Equation Lab App was not found. Install or export the Skill again from the App to attach its runtime.' >&2
+exit 2

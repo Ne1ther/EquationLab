@@ -5,13 +5,34 @@ struct FormulaSidebar: View {
     @Environment(\.colorScheme) private var colorScheme
     @State private var showingFavorites = false
     @State private var query = ""
+
+    private var english: Bool { bridge.language.usesEnglish }
+    private func label(_ zh: String, _ en: String) -> String { english ? en : zh }
     private var allItems: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
     private var items: [SidebarFormula] {
         let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return search.isEmpty ? allItems : allItems.filter { $0.matchesSearch(search) }
     }
+    private var totalCount: Int { max(allItems.count, bridge.state.wordDocumentTotal) }
+    private var isPartiallyLoaded: Bool {
+        !showingFavorites && bridge.state.wordDocumentLoading && !allItems.isEmpty && allItems.count < totalCount
+    }
+    private var staleCount: Int { allItems.filter { $0.numberStatus == "stale" }.count }
+    private var pendingCount: Int { allItems.filter { $0.numberStatus == "pending" }.count }
+    private var hasStaleNumbers: Bool { !showingFavorites && staleCount > 0 }
+    private var hasPendingNumbers: Bool { !showingFavorites && pendingCount > 0 }
+    private var canRefreshWorkspace: Bool {
+        !bridge.state.busy && !bridge.state.wordDocumentLoading && !bridge.state.wordOutcomeUnknown && !bridge.state.wordDocumentUnavailable
+    }
+    private var countLabel: String {
+        if !query.isEmpty { return "\(items.count) / \(allItems.count)" }
+        if isPartiallyLoaded { return "\(allItems.count) / \(totalCount)" }
+        return "\(showingFavorites ? allItems.count : totalCount)"
+    }
     private var selectionUnavailable: Bool {
-        bridge.state.busy || showingFavorites && bridge.wordSessionActive || !showingFavorites && bridge.state.wordDocumentUnavailable
+        bridge.state.busy || showingFavorites && bridge.wordSessionActive && (bridge.state.readOnly || bridge.state.wordOutcomeUnknown || bridge.state.wordDocumentUnavailable) ||
+            !showingFavorites && (bridge.state.wordDocumentUnavailable || bridge.state.wordOutcomeUnknown ||
+                !bridge.state.wordCatalogAvailable && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed))
     }
     private var documentSwitchUnavailable: Bool { bridge.state.busy || bridge.state.wordOutcomeUnknown }
     private var documentOrdinals: [String: Int] {
@@ -59,29 +80,29 @@ struct FormulaSidebar: View {
                                 bridge.invoke("nativeRefreshWordDocumentList")
                             }
                         } label: {
-                            HStack(alignment: .center, spacing: 10) {
+                            HStack(alignment: .center, spacing: 8) {
                                 OfficeProductLabel(bridge: bridge, wordOnly: true, showsTitle: false)
                                     .frame(width: 24, height: 24)
+                                    .fixedSize()
                                 Text(bridge.state.documentName)
                                     .font(.headline.weight(.semibold))
                                     .lineLimit(2)
                                     .truncationMode(.middle)
+                                    .multilineTextAlignment(.leading)
                                     .frame(maxWidth: .infinity, alignment: .leading)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .foregroundStyle(.secondary)
+                                    .frame(width: 12)
+                                    .fixedSize()
+                                    .accessibilityHidden(true)
                             }
-                            .padding(.trailing, 20)
                             .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
                             .contentShape(Rectangle())
                         }
-                        .menuStyle(.borderlessButton)
+                        .menuStyle(.button)
+                        .buttonStyle(.plain)
                         .menuIndicator(.hidden)
-                        .overlay(alignment: .trailing) {
-                            Image(systemName: "chevron.down")
-                                .font(.system(size: 11, weight: .semibold))
-                                .foregroundStyle(.secondary)
-                                .padding(.trailing, 4)
-                                .allowsHitTesting(false)
-                                .accessibilityHidden(true)
-                        }
                         .help(bridge.state.documentName)
                         .accessibilityLabel(bridge.t("切换 Word 文档"))
                         .accessibilityValue(bridge.state.documentName)
@@ -90,43 +111,51 @@ struct FormulaSidebar: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .labelStyle(.titleAndIcon)
+                                .fixedSize(horizontal: false, vertical: true)
                                 .accessibilityLabel(bridge.t("文档连接已结束，草稿已保留。"))
                         }
                 }
                 .padding(.horizontal, 12)
                 .padding(.vertical, 10)
                 .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 10))
+                .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                 .overlay {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(.primary.opacity(0.05), lineWidth: 1)
                         .allowsHitTesting(false)
                 }
                 .padding(.horizontal, 14)
                 .padding(.bottom, 5)
             }
-            HStack(spacing: 8) {
+            HStack(spacing: 6) {
                 Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式"))
                     .font(showingFavorites ? .headline : .subheadline.weight(.medium))
-                Spacer()
-                Text(query.isEmpty ? "\(showingFavorites ? allItems.count : max(allItems.count, bridge.state.wordDocumentTotal))" : "\(items.count) / \(allItems.count)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.85)
+                Spacer(minLength: 4)
+                Text(countLabel)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .monospacedDigit()
+                    .fixedSize()
                 if !showingFavorites {
-                    Button { bridge.invoke("nativeRefreshWordWorkspace") } label: { Image(systemName: "arrow.clockwise") }
-                        .buttonStyle(.plain).disabled(bridge.state.busy)
-                        .accessibilityLabel(bridge.t("刷新当前 Word 文档")).help(bridge.t("刷新当前 Word 文档"))
+                    Button { bridge.invoke("nativeRefreshWordWorkspace") } label: {
+                        Image(systemName: "arrow.clockwise")
+                            .foregroundStyle(hasStaleNumbers && !bridge.state.wordDocumentLoading ? .orange : .secondary)
+                            .frame(width: 20, height: 20)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .fixedSize()
+                    .disabled(!canRefreshWorkspace)
+                    .accessibilityLabel(bridge.t("刷新当前 Word 文档"))
+                    .help(hasStaleNumbers
+                        ? label("Word 中的编号已更新；点击重新读取文档快照。", "Numbers changed in Word. Click to reload the document snapshot.")
+                        : bridge.t(allItems.isEmpty ? "刷新当前 Word 文档" : "编号来自文档快照；在 Word 更新后请刷新。"))
                 }
-            }.padding(.horizontal, 18).padding(.vertical, 8)
-            if !showingFavorites && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed) {
-                HStack(spacing: 7) {
-                    if bridge.state.wordDocumentLoading { ProgressView().controlSize(.small) }
-                    Text(bridge.t(bridge.state.wordDocumentLoading ? "当前公式可编辑，正在加载其余公式…" : "列表未能载入，当前公式仍可编辑。"))
-                        .font(.caption).foregroundStyle(.secondary)
-                }.frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 8)
-            }
+            }.padding(.horizontal, 14).padding(.vertical, 8)
             if !showingFavorites && !allItems.isEmpty {
-                Text(bridge.t("编号来自文档快照；在 Word 更新后请刷新。"))
-                    .font(.caption2).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 14).padding(.bottom, 6)
+                freshnessBanner
             }
             if !allItems.isEmpty || !query.isEmpty {
                 HStack(spacing: 6) {
@@ -137,64 +166,125 @@ struct FormulaSidebar: View {
                             .buttonStyle(.plain).accessibilityLabel(bridge.t("清除搜索"))
                     }
                 }.font(.callout).padding(8)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7))
+                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
                     .padding(.horizontal, 14).padding(.bottom, 8)
             }
             if items.isEmpty {
-                ContentUnavailableView {
-                    Label(bridge.t(!query.isEmpty ? "没有匹配的公式" : showingFavorites ? "暂无收藏" : "打开 Word 文档"), systemImage: !query.isEmpty ? "magnifyingglass" : showingFavorites ? "star" : "doc.text")
-                } description: {
-                    Text(bridge.t(!query.isEmpty ? "试试正文编号、LaTeX 或位置序号；空格可组合搜索。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
+                if !showingFavorites && allItems.isEmpty && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentReadState == .loading) {
+                    VStack(spacing: 10) {
+                        ProgressView().controlSize(.regular)
+                        Text(label("正在载入文档中的公式…", "Loading equations from Word…"))
+                            .font(.callout.weight(.medium))
+                        if totalCount > 0 {
+                            Text(label("共 \(totalCount) 个公式，当前可继续编辑。", "\(totalCount) equations in this document. You can keep editing."))
+                                .font(.caption).foregroundStyle(.secondary)
+                                .multilineTextAlignment(.center)
+                        }
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .padding(.horizontal, 18)
+                } else if !showingFavorites && allItems.isEmpty && !bridge.state.wordDocumentUnavailable &&
+                            (bridge.state.wordDocumentReadState == .failed || bridge.state.wordDocumentLoadFailed) {
+                    ContentUnavailableView {
+                        Label(label("未能读取当前文档", "Couldn't Read This Document"), systemImage: "exclamationmark.triangle")
+                    } actions: {
+                        Button(label("重试载入", "Retry")) {
+                            bridge.invoke("nativeRetryWordDocumentRead")
+                        }
+                        .disabled(!canRefreshWorkspace)
+                    }
+                    .font(.callout)
+                } else if !showingFavorites && allItems.isEmpty && bridge.state.wordDocumentReadState == .empty {
+                    ContentUnavailableView(label("当前文档暂无公式", "No Equations in This Document"), systemImage: "function")
+                        .font(.callout)
+                } else {
+                    ContentUnavailableView {
+                        Label(!query.isEmpty && !showingFavorites && bridge.state.wordCatalogAvailable
+                            ? label("已读取内容中没有匹配", "No matches in loaded content")
+                            : bridge.t(!query.isEmpty ? "没有匹配的公式" : showingFavorites ? "暂无收藏" : "打开 Word 文档"),
+                            systemImage: !query.isEmpty ? "magnifyingglass" : showingFavorites ? "star" : "doc.text")
+                    } description: {
+                        Text(bridge.t(!query.isEmpty ? "试试正文编号、LaTeX 或位置序号；空格可组合搜索。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
+                    }
+                    .font(.callout)
+                    Spacer(minLength: 0)
                 }
-                .font(.callout)
-                Spacer(minLength: 0)
             } else {
                 ScrollViewReader { scroll in
                 List {
                     ForEach(items) { item in
+                        let catalogPlaceholder = !showingFavorites && bridge.state.wordCatalogAvailable &&
+                            item.latex.isEmpty && item.image == nil && item.numberStatus == "pending" && !item.readOnly
                         Button {
                             bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
                         } label: {
                             HStack(spacing: 12) {
                                 Text("\(item.position ?? item.id + 1)")
                                     .font(.system(size: 11, weight: .medium, design: .rounded))
+                                    .monospacedDigit()
                                     .foregroundStyle(.secondary).frame(minWidth: 17)
+                                    .fixedSize()
                                     .help(bridge.t("文档位置序号"))
-                                VStack(alignment: .leading, spacing: 4) {
-                                if !showingFavorites {
-                                    HStack(spacing: 5) {
-                                        Text(item.numberText ?? bridge.t(item.numberStatus == "pending" ? "编号待载入" : "无已读编号"))
-                                            .font(.caption.weight(item.numberText == nil ? .regular : .semibold))
-                                            .foregroundStyle(item.numberText == nil ? .secondary : .primary)
-                                        if item.numberStatus == "stale" { Text(bridge.t("待刷新")).font(.caption2).foregroundStyle(.secondary) }
-                                    }
-                                }
-                                if let thumbnail = item.thumbnail {
-                                    let cardFill = colorScheme == .dark ? Color(red: 0.925, green: 0.922, blue: 0.906) : Color.white
-                                    Image(nsImage: thumbnail).resizable().interpolation(.high)
-                                        .scaledToFit().frame(maxWidth: .infinity).frame(height: 52)
-                                        .padding(.horizontal, 8).padding(.vertical, 5)
-                                        .background(cardFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                        .overlay {
-                                            RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                                .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.07), lineWidth: 0.5)
-                                        }
-                                        .accessibilityLabel(item.latex)
+                                if catalogPlaceholder {
+                                    Text(label("打开公式", "Open equation"))
+                                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
+                                    Spacer(minLength: 4)
+                                    Image(systemName: "chevron.right")
+                                        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
                                 } else {
                                     VStack(alignment: .leading, spacing: 4) {
-                                        Image(systemName: "function").font(.title2)
-                                        Text(bridge.t(item.readOnly ? "未能预览" : "正在生成预览")).font(.caption2)
-                                    }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 62).foregroundStyle(.secondary)
+                                        if !showingFavorites {
+                                            HStack(spacing: 5) {
+                                                let isStale = item.numberStatus == "stale"
+                                                let isPending = item.numberStatus == "pending"
+                                                Text(item.numberText ?? bridge.t(isPending ? "编号待载入" : "无已读编号"))
+                                                    .font(.caption.weight(item.numberText == nil ? .regular : isStale ? .medium : .semibold))
+                                                    .monospacedDigit()
+                                                    .foregroundStyle(item.numberText == nil || isStale ? .secondary : .primary)
+                                                    .lineLimit(1)
+                                                if isStale {
+                                                    Text(bridge.t("待刷新"))
+                                                        .font(.system(size: 9.5, weight: .medium))
+                                                        .foregroundStyle(.orange)
+                                                        .padding(.horizontal, 5).padding(.vertical, 1)
+                                                        .background(Color.orange.opacity(0.14), in: Capsule())
+                                                        .fixedSize()
+                                                }
+                                            }
+                                        }
+                                        if let thumbnail = item.thumbnail {
+                                            let cardFill = colorScheme == .dark ? Color(red: 0.925, green: 0.922, blue: 0.906) : Color.white
+                                            Image(nsImage: thumbnail).resizable().interpolation(.high)
+                                                .scaledToFit().frame(maxWidth: .infinity).frame(height: 41)
+                                                .padding(.horizontal, 8).padding(.vertical, 3)
+                                                .background(cardFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+                                                .overlay {
+                                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
+                                                        .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.07), lineWidth: 0.5)
+                                                }
+                                                .accessibilityLabel(item.latex)
+                                        } else {
+                                            VStack(alignment: .leading, spacing: 4) {
+                                                Image(systemName: "function").font(.title2)
+                                                if item.latex.isEmpty {
+                                                    Text(bridge.state.wordCatalogAvailable && !showingFavorites
+                                                        ? label("打开公式", "Open equation")
+                                                        : bridge.t(item.readOnly || !bridge.wordSessionActive ? "未能预览" : "正在生成预览")).font(.caption2)
+                                                } else {
+                                                    Text(item.latex).font(.system(.caption2, design: .monospaced)).lineLimit(2)
+                                                }
+                                            }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 47).foregroundStyle(.secondary)
+                                        }
+                                    }
+                                    if item.readOnly { Image(systemName: "lock").font(.caption2).foregroundStyle(.secondary) }
                                 }
-                                }
-                                if item.readOnly { Image(systemName: "lock").font(.caption2).foregroundStyle(.secondary) }
-                            }.frame(minHeight: 62).contentShape(Rectangle())
+                            }.frame(height: 66).contentShape(Rectangle())
                         }
                         .buttonStyle(.plain)
                         .disabled(selectionUnavailable)
                         .background {
                             let thumbnailDocument = bridge.state.documentPath
-                            FormulaThumbnailVisibility(key: "\(bridge.state.documentPath):\(item.id)", enabled: !showingFavorites && bridge.wordSessionActive && item.image == nil && !item.readOnly) {
+                            FormulaThumbnailVisibility(key: "\(bridge.state.documentPath):\(item.id)", enabled: !showingFavorites && !bridge.state.wordCatalogAvailable && bridge.wordSessionActive && item.image == nil && !item.readOnly) {
                                 thumbnailVisibility(item.id, document: thumbnailDocument, visible: true)
                             } onHidden: {
                                 thumbnailVisibility(item.id, document: thumbnailDocument, visible: false)
@@ -250,6 +340,96 @@ struct FormulaSidebar: View {
             .modifier(WorkbenchFooter())
         }
     }
+
+    @ViewBuilder
+    private var freshnessBanner: some View {
+        if bridge.state.wordDocumentLoading {
+            HStack(alignment: .top, spacing: 7) {
+                ProgressView().controlSize(.small).padding(.top, 1)
+                Text(
+                    bridge.state.wordCatalogAvailable
+                        ? label("目录可点选，编号和公式内容正在加载。", "Open any row while equation text and numbers load.")
+                        : isPartiallyLoaded
+                        ? label("当前公式可编辑，后台载入其余公式（\(allItems.count)/\(totalCount)）…", "Current equation ready; loading others (\(allItems.count)/\(totalCount))…")
+                        : !allItems.isEmpty
+                            ? label("正在后台同步列表快照，已有公式仍可查看与编辑…", "Syncing list snapshot in background; loaded equations stay visible…")
+                            : bridge.t("当前公式可编辑，正在加载其余公式…")
+                )
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .padding(.horizontal, 14).padding(.bottom, 8)
+        } else if bridge.state.wordDocumentLoadFailed {
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .top, spacing: 6) {
+                    Image(systemName: "exclamationmark.triangle.fill")
+                        .font(.caption).foregroundStyle(.orange).padding(.top, 1)
+                    Text(bridge.state.wordCatalogAvailable
+                        ? label("全文数据未能载入，仍可按位置打开公式。", "Full document data could not load. Open equations by position.")
+                        : bridge.t("列表未能载入，当前公式仍可编辑。"))
+                        .font(.caption).foregroundStyle(.primary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                HStack {
+                    Spacer()
+                    Button(label("重试载入", "Retry")) {
+                        bridge.invoke("nativeRefreshWordWorkspace")
+                    }
+                    .controlSize(.mini)
+                    .disabled(!canRefreshWorkspace)
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.22), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+            .padding(.horizontal, 14).padding(.bottom, 8)
+        } else if hasStaleNumbers {
+            VStack(alignment: .leading, spacing: 5) {
+                HStack(alignment: .center, spacing: 6) {
+                    Image(systemName: "arrow.triangle.2.circlepath")
+                        .font(.caption.weight(.semibold)).foregroundStyle(.orange)
+                    Text(label("编号快照待刷新", "Number snapshot outdated"))
+                        .font(.caption.weight(.semibold))
+                    Spacer(minLength: 4)
+                    Button(label("刷新", "Refresh")) {
+                        bridge.invoke("nativeRefreshWordWorkspace")
+                    }
+                    .controlSize(.mini)
+                    .disabled(!canRefreshWorkspace)
+                }
+                Text(
+                    bridge.wordSessionActive
+                        ? label("Word 中已有编号更新；列表暂留旧快照。保存或取消当前编辑后会自动同步，草稿无改动时可直接刷新。", "Numbers changed in Word; previous rows stay visible. Syncs after this edit, or refresh when clean.")
+                        : label("Word 中已有编号更新；列表暂留旧快照，点击刷新可重新同步。", "Numbers changed in Word; previous rows stay visible until refreshed.")
+                )
+                .font(.caption2).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, 10).padding(.vertical, 7)
+            .background(Color.orange.opacity(0.10), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
+            .overlay {
+                RoundedRectangle(cornerRadius: 7, style: .continuous)
+                    .strokeBorder(Color.orange.opacity(0.22), lineWidth: 0.5)
+                    .allowsHitTesting(false)
+            }
+            .padding(.horizontal, 14).padding(.bottom, 8)
+        } else if hasPendingNumbers {
+            Text(label("部分编号待载入（\(pendingCount) 项）；当前可继续编辑。", "\(pendingCount) equation numbers pending; editing stays available."))
+                .font(.caption2).foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 14).padding(.bottom, 6)
+        }
+    }
+
     private func revealSelection(using scroll: ScrollViewProxy) {
         guard !showingFavorites, let selected = bridge.state.selected, items.contains(where: { $0.id == selected }) else { return }
         let path = bridge.state.documentPath, identity = bridge.state.wordDocumentIdentity

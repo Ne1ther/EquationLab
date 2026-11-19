@@ -60,6 +60,7 @@ Private mChunkStart As Long
 Private mChunkEnd As Long
 Private mChunkShapeCount As Long
 Private mChunkGeneration As Long
+Private mChunkNumberingRevision As Long
 Private mChunkIdentity As Long
 Private mChunkSnapshot As Long
 Private mChunkSelected As Long
@@ -700,7 +701,7 @@ Missing:
     If Len(path) > 0 Then Kill path
 End Function
 
-Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False, Optional ByVal selectionBound As Boolean = False, Optional ByVal captureRequestToken As Long = 0, Optional ByVal prepareActivation As Boolean = False)
+Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSnapshot As Boolean = False, Optional ByVal selectionBound As Boolean = False, Optional ByVal captureRequestToken As Long = 0, Optional ByVal prepareActivation As Boolean = False, Optional ByVal requireLiveXML As Boolean = False)
     On Error GoTo Failed
     If mCapturing Then Exit Sub
     If Not Supported(target) Then Exit Sub
@@ -802,7 +803,7 @@ BuildSnapshot:
     ' save, rename, or alter the user's document to obtain this snapshot.
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingStart"
     mSnapshotToken = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
-    contextHeader = SavedDocumentCaptureHeader(mDocument, mDocumentIdentity, mSnapshotToken, selected, mEquations.Count, captureRequestToken)
+    If Not requireLiveXML Then contextHeader = SavedDocumentCaptureHeader(mDocument, mDocumentIdentity, mSnapshotToken, selected, mEquations.Count, captureRequestToken)
     If Len(contextHeader) > 0 Then
         ELWriteUtf8 directory & "/.EquationLab/document-context.txt", contextHeader
         ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
@@ -823,6 +824,7 @@ BuildSnapshot:
             mChunkEnd = contentEnd
             mChunkShapeCount = shapeCount
             mChunkGeneration = generation
+            mChunkNumberingRevision = EquationLabRibbon.ELNumberingRevision(mDocument)
             mChunkIdentity = mDocumentIdentity
             mChunkSnapshot = mSnapshotToken
             mChunkSelected = selected
@@ -1694,6 +1696,7 @@ Private Sub ELBeginInsertionDocumentChunks(ByVal token As Long)
     mChunkEnd = mInsertionEnd
     mChunkShapeCount = mInsertionDocument.InlineShapes.Count
     mChunkGeneration = EquationLabNativeCommand("MathTypeBridgeEditGeneration")
+    mChunkNumberingRevision = EquationLabRibbon.ELNumberingRevision(mInsertionDocument)
     mChunkIdentity = mInsertionIdentity
     mChunkSnapshot = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
     mChunkSelected = 0
@@ -1723,6 +1726,7 @@ Private Sub ELContinueDocumentChunks()
     If KnownDocumentIdentity(mChunkDocument) <> mChunkIdentity Then GoTo Failed
     If mChunkDocument.Content.End <> mChunkEnd Or mChunkDocument.InlineShapes.Count <> mChunkShapeCount Then GoTo Failed
     If EquationLabNativeCommand("MathTypeBridgeEditGeneration") <> mChunkGeneration Then GoTo Failed
+    If EquationLabRibbon.ELNumberingRevision(mChunkDocument) <> mChunkNumberingRevision Then GoTo Failed
     ' Never serialize a range while the user is actively working in Word.
     ' The next host tick resumes the same bound request, without selecting it.
     If EquationLabNativeCommand("MathTypeBridgeCanReadDocumentChunk") = 0 Then SchedulePoll: Exit Sub
@@ -1828,7 +1832,7 @@ Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
     ' Bound requests use the retained Document+Range and its unchanged index.
     ' Unbound requests use only the exact current OLE selection in ActiveDocument.
     ' Both paths carry a one-shot token into the fresh full-document capture.
-    ELCaptureEquation shape, True, True, requestToken
+    ELCaptureEquation shape, True, True, requestToken, False, (EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequiresLiveXML") > 0)
     If mChunkToken = requestToken Then Exit Sub
     If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> requestToken Then Exit Sub
     result = EquationLabNativeCommand("MathTypeBridgeFinishDocumentCaptureRequest")

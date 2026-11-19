@@ -6,6 +6,10 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var id: String { rawValue }
 }
 
+enum WordDocumentReadState: String, Decodable {
+    case loading, failed, empty
+}
+
 struct DraftRecoveryState: Decodable {
     var available = false
     var restored: Bool? = nil
@@ -34,12 +38,25 @@ struct SidebarFormula: Identifiable, Decodable {
     }
 }
 
+private enum SidebarNumberFreshness: String, Decodable {
+    case snapshot, loading, stale
+
+    func numberStatus(for row: SidebarFormula) -> String {
+        switch self {
+        case .snapshot: "snapshot"
+        case .loading: row.numberText == nil ? "pending" : "snapshot"
+        case .stale: "stale"
+        }
+    }
+}
+
 private struct SidebarDelta: Decodable {
     let generation: String
     let baseRevision: Int
     let revision: Int
     let reset: [SidebarFormula]?
     let upserts: [SidebarFormula]?
+    let numberFreshness: SidebarNumberFreshness?
 }
 
 private final class FormulaImageCache {
@@ -154,6 +171,8 @@ struct WorkbenchState: Decodable {
     var wordDocumentUnavailable = false
     var wordDocumentLoading = false
     var wordDocumentLoadFailed = false
+    var wordDocumentReadState: WordDocumentReadState? = nil
+    var wordCatalogAvailable = false
     var wordDocumentTotal = 0
     var busy = false
     var mode = "rebuild"
@@ -197,11 +216,22 @@ struct WorkbenchState: Decodable {
                     guard let index = objects.firstIndex(where: { $0.id == row.id }) else { throw CocoaError(.coderInvalidValue) }
                     objects[index] = row
                 }
+                if let freshness = change.numberFreshness {
+                    for index in objects.indices {
+                        let status = freshness.numberStatus(for: objects[index])
+                        if objects[index].numberStatus != status {
+                            objects[index].numberStatus = status
+                        }
+                    }
+                }
                 sidebarRevision = change.revision
             }
         }
         if let v = try value("wordDocumentLoading", Bool.self) { wordDocumentLoading = v }
         if let v = try value("wordDocumentLoadFailed", Bool.self) { wordDocumentLoadFailed = v }
+        if payload["wordDocumentReadState"] is NSNull { wordDocumentReadState = nil }
+        else if let v = try value("wordDocumentReadState", WordDocumentReadState.self) { wordDocumentReadState = v }
+        if let v = try value("wordCatalogAvailable", Bool.self) { wordCatalogAvailable = v }
         if let v = try value("wordDocumentTotal", Int.self) { wordDocumentTotal = v }
         if let v = try value("favorites", [SidebarFormula].self) { favorites = v }
         if let v = try value("categories", [String].self) { categories = v }

@@ -106,6 +106,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic,strong) NSMutableData* response;
 @property(nonatomic,copy) ProbeReply completion;
 @property(nonatomic) BOOL statusValid;
+@property(nonatomic) NSInteger statusCode;
 @property(nonatomic) BOOL cancelled;
 @property(nonatomic) BOOL measureOpen;
 @property(nonatomic,strong) NSDate* requestStartedAt;
@@ -169,7 +170,8 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 }
 - (void)URLSession:(NSURLSession*)session dataTask:(NSURLSessionDataTask*)task didReceiveResponse:(NSURLResponse*)response completionHandler:(void(^)(NSURLSessionResponseDisposition))completionHandler {
     (void)session;(void)task;
-    self.statusValid=[response isKindOfClass:NSHTTPURLResponse.class]&&((NSHTTPURLResponse*)response).statusCode==200;
+    self.statusCode=[response isKindOfClass:NSHTTPURLResponse.class]?((NSHTTPURLResponse*)response).statusCode:0;
+    self.statusValid=self.statusCode==200;
     if(response.expectedContentLength>static_cast<long long>(MaxResponse))self.statusValid=NO;
     completionHandler(self.statusValid?NSURLSessionResponseAllow:NSURLSessionResponseCancel);
 }
@@ -186,6 +188,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
     }
     NSDictionary* json=nil;
     if(!error&&self.statusValid){id parsed=[NSJSONSerialization JSONObjectWithData:self.response options:0 error:&error];if([parsed isKindOfClass:NSDictionary.class])json=parsed;}
+    if(self.statusCode>=400)error=[NSError errorWithDomain:@"NativeEquationHTTP" code:self.statusCode userInfo:nil];
     if(!json&&!error)error=[NSError errorWithDomain:@"NativeEquationTransport" code:InvalidReply userInfo:nil];
     self.response=nil;self.task=nil;self.session=nil;
     if(callback&&!self.cancelled)callback(json,error);
@@ -233,6 +236,7 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) BOOL captureRequested;
 @property(nonatomic) BOOL requiresDocumentCapture;
 @property(nonatomic) BOOL preCapturedActivation;
+@property(nonatomic) BOOL retryingLiveCapture;
 @property(nonatomic) BOOL retainedOwnerOnly;
 @property(nonatomic,strong) NSDictionary* activationBinding;
 @property(nonatomic) NSUInteger captureAttempts;
@@ -310,6 +314,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 - (void)openState:(ProbeEditState*)state;
 - (BOOL)canEditRetainedOwner:(ProbeEditState*)state;
 - (BOOL)openRetainedOwner:(ProbeEditState*)state;
+- (BOOL)retryRejectedSavedCapture:(ProbeEditState*)state error:(NSError*)error;
 - (void)applyDeferredReopenTool:(ProbeEditState*)state;
 - (bridge_probe::HResult)completeCancelledState:(ProbeEditState*)state;
 - (void)launchTicket:(ProbeEditState*)state;
@@ -429,6 +434,7 @@ static ProbeEditorTransport* transport=nil;
     BOOL commonMatch=success&&self.captureSerial>request.serial&&documentCapturedAt&&documentCapturedAt.timeIntervalSinceNow>=-.5&&[context[@"captureToken"] isKindOfClass:NSNumber.class]&&[context[@"captureToken"] intValue]==request.token&&[context[@"identity"] isKindOfClass:NSString.class]&&[context[@"snapshot"] isKindOfClass:NSNumber.class]&&[context[@"snapshot"] intValue]>0&&[context[@"index"] isKindOfClass:NSNumber.class]&&[context[@"index"] intValue]>=0;
     BOOL matches=commonMatch&&(!binding||(hasBinding&&[context[@"identity"] isEqual:binding[@"identity"]]&&[context[@"snapshot"] intValue]!=[binding[@"snapshot"] intValue]&&[context[@"index"] isEqual:binding[@"index"]]));
     self.captureRequest=nil;EquationLabDiscardDocumentParts();
+    if(state.retryingLiveCapture&&[context[@"encoding"] isEqual:@"docx-base64"]){[self captureFailed:state];return -3;}
     if(!matches){
         state.captureRequested=NO;
         if(state.activation==self.activation&&state.captureAttempts<3){[self requestCapture:state];return -3;}
@@ -451,6 +457,19 @@ static ProbeEditorTransport* transport=nil;
     state.retainedOwnerOnly=YES;state.documentContext=nil;state.bindingContext=nil;state.activationBinding=nil;state.deferredReopenTool=nil;
     state.preCapturedActivation=NO;state.awaitingDocument=NO;state.captureRequested=NO;state.requiresDocumentCapture=NO;state.enrichingDocument=NO;
     lastCaptureState=CaptureReady;logOpenPhase("retained-owner-ready",state.started);[self openState:state];return YES;
+}
+- (BOOL)retryRejectedSavedCapture:(ProbeEditState*)state error:(NSError*)error {
+    NSDictionary* context=state.documentContext;
+    if(![error.domain isEqual:@"NativeEquationHTTP"]||error.code!=400||!state.preCapturedActivation||state.retryingLiveCapture||![context[@"encoding"] isEqual:@"docx-base64"]||!context[@"identity"]||!context[@"snapshot"]||!context[@"index"]||![self canEditRetainedOwner:state])return NO;
+    // The on-disk package can disagree with the live OLE owner at DoVerb.
+    // Retain only the exact pre-activation Range binding. The fresh Word
+    // XML must still match its identity, new token, index and opening digest.
+    state.activationBinding=@{@"identity":context[@"identity"],@"snapshot":context[@"snapshot"],@"index":context[@"index"]};
+    state.documentContext=nil;state.retryingLiveCapture=YES;state.awaitingDocument=YES;
+    state.captureRequested=NO;state.captureAttempts=0;
+    state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:3];
+    os_log_info(OS_LOG_DEFAULT,"WordHostCapture retry anchored live XML after saved snapshot rejection");
+    [self requestCapture:state];[self scheduleCaptureDeadline:state];return YES;
 }
 - (BOOL)captureFailed:(ProbeEditState*)state {
     if(!state.enrichingDocument){if([self openRetainedOwner:state])return YES;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return NO;}
@@ -598,7 +617,9 @@ static ProbeEditorTransport* transport=nil;
     }
     // ELACT1 is a legacy anchor only: it requests a fresh post-DoVerb ELCTX4.
     state.requiresDocumentCapture=activationHint!=nil||self.ownerCaptureBindings[@(state.ownerIdentity)]!=nil||inWord();
-    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture&&![self canEditRetainedOwner:state]?10:1];lastCaptureState=CapturePending;
+    // The host pump's third attempt happens after 1.25 seconds when Word
+    // defers the previous two callbacks. Keep that attempt eligible.
+    state.awaitingDocument=YES;state.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:state.requiresDocumentCapture?([self canEditRetainedOwner:state]?3:10):1];lastCaptureState=CapturePending;
     __weak ProbeEditState* weak=state;
     dispatch_after(dispatch_time(DISPATCH_TIME_NOW,25*NSEC_PER_MSEC),dispatch_get_main_queue(),^{
         ProbeEditState* current=weak;if(!current||![self active:current]||!current.awaitingDocument)return;
@@ -741,7 +762,7 @@ static ProbeEditorTransport* transport=nil;
                 // The service checks the opening Native SHA against this exact
                 // pre-DoVerb document. Never replace a rejected fast-path
                 // candidate with an unrelated post-DoVerb capture.
-                if(![self openRetainedOwner:current])[self fail:current code:InvalidReply];
+                if(![self retryRejectedSavedCapture:current error:error]&&![self openRetainedOwner:current])[self fail:current code:InvalidReply];
             }
             else if(current.documentContext&&current.documentDeadline.timeIntervalSinceNow>0){
                 // A previous selection can still be in the capture slot when
@@ -965,6 +986,8 @@ extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeTakeDocumentCaptureRequest(){return NSThread.isMainThread?[transport takeCaptureRequest]:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureIsEnrichment(){return NSThread.isMainThread&&transport.captureRequest.claimed&&transport.captureRequest.state.enrichingDocument?1:0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeDocumentCaptureRequiresLiveXML(){return NSThread.isMainThread&&transport.captureRequest.claimed&&transport.captureRequest.state.retryingLiveCapture?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return NSThread.isMainThread&&transport.captureRequest.claimed?transport.captureRequest.token:0;}
 extern "C" __attribute__((visibility("default")))

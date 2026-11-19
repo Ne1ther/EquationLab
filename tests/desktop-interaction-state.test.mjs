@@ -24,15 +24,31 @@ test('preflight editing allows insertion commands without allowing file or navig
 });
 
 test('A busy New action is blocked; Word completion waits for the native window to hide before clearing the editor',async()=>{
- const names=['function resetNewFormula()','window.nativeNew=','async function finishWordSave()'];
- const code=names.map(name=>source.split('\n').find(line=>line.startsWith(name))).join('\n');
+ const names=['function resetNewFormula()','window.nativeNew='];
+ const finish=source.slice(source.indexOf('async function finishWordSave('),source.indexOf('function releaseWordSaveLock()'));
+ const code=[...names.map(name=>source.split('\n').find(line=>line.startsWith(name))),finish].join('\n');
  assert.ok(names.every(name=>code.includes(name)));
  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
  let hide;const hidden=new Promise(resolve=>{hide=resolve;});
- const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},mf,$:element,
+ const metrics=[];let now=5;
+ const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:value=>metrics.push(value)}}}},performance:{now:()=>now},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},mf,$:element,
   renderObjects(){},changed(){},loadObjectLayout(){},syncSidebar(){return hidden;},message(){}});
  vm.runInContext(code,context);assert.equal(context.window.nativeNew(),false);assert.equal(mf.value,'edited formula');
- const completion=vm.runInContext('finishWordSave()',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(element('word-session-actions').hidden,true);
+ const completion=vm.runInContext('finishWordSave({started: 1, kind: "save"})',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');now=9;hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(element('word-session-actions').hidden,true);
+ assert.deepEqual(JSON.parse(JSON.stringify(metrics)),[{action:'wordSaveTiming',payload:{kind:'save',confirmedMs:4,totalMs:8}}]);
+});
+
+test('Using a favorite inserts into an editable Word draft and defers all Word writes',()=>{
+ const start=source.indexOf('window.nativeFavorite='),end=source.indexOf('\nsyncSidebar();',start);
+ const events=[],workspace={pending:false,wordDocumentUnavailable:false};
+ const field={value:'x+',readOnly:false,focus(){events.push('focus');},insert(latex,options){assert.equal(options.selectionMode,'after');this.value+=latex;}};
+ const window={wordDocumentWorkspace:workspace,nativeNew:()=>assert.fail('a Word insertion must not discard the current draft')};
+ const context=vm.createContext({window,mf:field,favorites:['\\frac{a}{b}'],busy:false,wordNavigating:false,wordTicket:'current-ticket',wordOutcomeUnknown:false,wordSourceUnavailable:()=>workspace.wordDocumentUnavailable,changed:()=>events.push('changed'),message(){}});
+ vm.runInContext(source.slice(start,end),context);
+ assert.equal(window.nativeFavorite(0),true);assert.equal(field.value,'x+\\frac{a}{b}');assert.equal(context.wordTicket,'current-ticket');assert.deepEqual(events,['focus','changed']);
+ workspace.pending=true;assert.equal(window.nativeFavorite(0),false);workspace.pending=false;
+ field.readOnly=true;assert.equal(window.nativeFavorite(0),false);field.readOnly=false;
+ assert.equal(window.nativeFavorite(999),false);assert.equal(field.value,'x+\\frac{a}{b}');
 });
 
 test('Rapid sidebar browsing changes only the local selection and retains the Word save owner',async()=>{

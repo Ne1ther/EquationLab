@@ -1,0 +1,4 @@
+interface:
+  display_name: "Equation Lab"
+  short_description: "Create and edit editable Word MathType equations"
+  default_prompt: "Use $equation-lab to inspect the Word formulas and apply the requested changes to a verified copy."

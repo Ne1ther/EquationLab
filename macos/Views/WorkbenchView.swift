@@ -4,6 +4,7 @@ struct WorkbenchView: View {
     @ObservedObject var bridge: DesktopBridge
     @ObservedObject var updater: AppUpdater
     @State private var columns: NavigationSplitViewVisibility = .all
+    @State private var showsSkillFirst = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     var body: some View {
@@ -47,14 +48,20 @@ struct WorkbenchView: View {
                     }
                     .padding(.horizontal, 3)
                     .frame(height: 26)
+                    .fixedSize()
                 }
                 .buttonStyle(WorkbenchButtonStyle(tint: .purple, horizontalPadding: 4))
+                .fixedSize()
                 .help(bridge.t("搜索现有命令、符号与模板 (⌘K)"))
                 .accessibilityLabel(bridge.t("搜索命令"))
                 Button { bridge.showOfficePlugins = true } label: { OfficeProductLabel(bridge: bridge, showsTitle: false).frame(width: 28, height: 26) }
                     .buttonStyle(WorkbenchButtonStyle(horizontalPadding: 2))
-                    .help(bridge.t("安装或管理 Microsoft Word 插件"))
-                    .accessibilityLabel(bridge.t(bridge.wordSessionActive ? "Word 插件" : "Office 插件"))
+                    .help(pluginSetupLabel)
+                    .accessibilityLabel(pluginSetupLabel)
+                AICoordinationControl(english: bridge.language.usesEnglish) {
+                    showsSkillFirst = true
+                    bridge.showOfficePlugins = true
+                }
                 InterfaceLanguageMenu(bridge: bridge)
                 if !bridge.wordSessionActive {
                     Button {
@@ -63,7 +70,8 @@ struct WorkbenchView: View {
                     } label: {
                         Label(bridge.t(bridge.state.canSaveEdit ? "另存副本" : "导出 Word"), systemImage: "square.and.arrow.up")
                     }.labelStyle(.titleAndIcon)
-                        .buttonStyle(.borderedProminent).tint(.blue).disabled(!bridge.state.canExport || bridge.state.busy)
+                        .buttonStyle(.borderedProminent).tint(.blue).fixedSize()
+                        .disabled(!bridge.state.canExport || bridge.state.busy)
                 }
                 Button { bridge.showInspector.toggle() } label: {
                     Image(systemName: "sidebar.right")
@@ -83,12 +91,18 @@ struct WorkbenchView: View {
         }) { CommandSearch(bridge: bridge) }
         .sheet(isPresented: $bridge.showCompatibility) { CompatibilitySheet(bridge: bridge) }
         .sheet(isPresented: $updater.showPanel) { AppUpdateSheet(updater: updater, bridge: bridge) }
-        .sheet(isPresented: $bridge.showOfficePlugins) { OfficePluginSheet(bridge: bridge) }
+        .sheet(isPresented: $bridge.showOfficePlugins, onDismiss: { showsSkillFirst = false }) {
+            OfficePluginSheet(bridge: bridge, showsSkillFirst: showsSkillFirst)
+        }
         .sheet(isPresented: $bridge.showDocumentTools) { DocumentToolsSheet(bridge: bridge) }
         .sheet(isPresented: $bridge.showMatrixBuilder) { MatrixBuilder(bridge: bridge) }
         .alert(bridge.t("Word 插件安装"), isPresented: Binding(get: { !bridge.showOfficePlugins && !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {
             Button(bridge.t("好"), role: .cancel) { bridge.installationMessage = "" }
         } message: { Text(bridge.t(bridge.installationMessage)) }
+    }
+
+    private var pluginSetupLabel: String {
+        bridge.language.usesEnglish ? "Manage Word Add-in and Skill" : "管理 Word 插件与 Skill"
     }
 
     private var editorPane: some View {
@@ -97,9 +111,12 @@ struct WorkbenchView: View {
                 if bridge.state.draftRecovery.available && bridge.state.draftRecovery.restored != true {
                     HStack(spacing: 10) {
                         Label(bridge.language.usesEnglish ? "A previous draft is available" : "有上次编辑的恢复草稿", systemImage: "clock.arrow.circlepath")
-                        Spacer()
+                            .lineLimit(2)
+                        Spacer(minLength: 8)
                         Button(bridge.language.usesEnglish ? "Restore draft" : "恢复草稿") { bridge.invoke("nativeRestoreDraft") }
+                            .fixedSize()
                         Button(bridge.language.usesEnglish ? "Discard" : "丢弃") { bridge.invoke("nativeDiscardRecovery") }
+                            .fixedSize()
                     }
                     .font(.callout).padding(.horizontal, 18).padding(.vertical, 8)
                     .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown)
@@ -132,7 +149,7 @@ struct WorkbenchStatusBar: View {
             Button { bridge.action("click", ["id": "copy-latex"]) } label: {
                 Label("LaTeX", systemImage: "doc.on.doc").font(.system(size: 11))
             }
-            .buttonStyle(WorkbenchButtonStyle()).disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
+            .buttonStyle(WorkbenchButtonStyle()).fixedSize().disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
             .help(bridge.t("复制 LaTeX")).accessibilityLabel(bridge.t("复制 LaTeX"))
             Button { bridge.action("click", ["id": "copy-png"]) } label: { Image(systemName: "photo").frame(width: 18) }
                 .buttonStyle(WorkbenchButtonStyle()).disabled(bridge.state.busy || !bridge.state.canExport)

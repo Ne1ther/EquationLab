@@ -1,6 +1,6 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.6.15（build103）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.15/Equation-Lab-0.6.15.pkg)**
+**[下载 Equation Lab 0.7.0（build104）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
@@ -10,6 +10,12 @@
 2. 双击安装包，按 macOS 安装器提示完成安装。
 3. 打开 Equation Lab；如果提示访问 Office 文件夹，按提示授权，再点击“安装 / 更新 Word 插件”。
 4. 重新打开 Word，新建或打开文档，点击顶部的 **Equation Lab**。
+
+## 在 Codex 里使用 Skill
+
+**在 Codex 里处理 Word 公式**。打开工具栏的 **AI → 安装或导出 Skill… → 安装到 Codex**，然后在 Codex 试一句：`请用 $equation-lab 检查这份 Word 的公式、编号和交叉引用。` 批量修改可以另存为新副本。
+
+也可以导出 Skill 文件夹，供同一台 Mac 上其他支持 Skill 的客户端使用。
 
 ## 开始编辑
 
@@ -21,7 +27,7 @@
 
 重开 App 后，可在编辑区上方恢复上次留在本机的草稿。[草稿恢复说明](draft-recovery.md)
 
-左侧文件名菜单列出 Word 打开的文档，并区分同名文件。切换前会提示处理未保存的草稿。菜单刷新更新文档列表；公式区刷新重新读取当前文档公式。长文档先打开当前公式，再分批补齐列表和缩略图，加载期间可继续输入和调整字号。
+左侧文件名菜单列出 Word 打开的文档，并区分同名文件。切换前会提示处理未保存的草稿。菜单刷新更新文档列表；公式区刷新重新读取当前文档公式。支持的长文档可先显示可点选的公式目录，编号、内容和缩略图随后载入。
 
 ## 编号和引用
 
@@ -69,7 +75,7 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.6.15 (build103)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.15/Equation-Lab-0.6.15.pkg)**
+**[Download Equation Lab 0.7.0 (build104)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
@@ -79,6 +85,12 @@ The app uses ad-hoc signing and has not been notarized by Apple, so macOS may re
 2. Open the package and follow the macOS Installer.
 3. Open Equation Lab. If prompted for Office folder access, grant it and choose **Install / Update Word plugin**.
 4. Reopen Word, create or open a document, and choose the **Equation Lab** ribbon.
+
+## Use the Skill in Codex
+
+**Work with Word equations in Codex.** Choose **AI → Install or Export Skill… → Install for Codex** in the toolbar. Then try `Use $equation-lab to check this Word file’s equations, numbers, and cross-references.` Save batch edits to a new copy.
+
+You can also export the Skill folder for another client on the same Mac.
 
 ## Start editing
 
@@ -90,7 +102,7 @@ While editing an existing equation, insertion goes after its paragraph. A standa
 
 After reopening the app, use Restore draft above the editor to continue an unfinished local draft. [Draft recovery](draft-recovery.md)
 
-The filename menu lists open Word documents and distinguishes matching names. Switching prompts you to handle unsaved drafts. The menu refresh updates the document list; the formula-area refresh reloads the current document’s equations. Long documents open the current equation first and load the list and thumbnails in batches, so you can keep typing and adjusting sizes.
+The filename menu lists open Word documents and distinguishes matching names. Switching prompts you to handle unsaved drafts. The menu refresh updates the document list; the formula-area refresh reloads the current document’s equations. Supported long documents can show a selectable equation directory first, then fill in numbers and formula text. Thumbnails load as you browse.
 
 ## Numbering and references
 

@@ -60,6 +60,14 @@ test('Actual MathLive edits nested structure and integral limits with Native rou
   field.value='\\frac{\\sum_{k=1}^{p}x_k}{r}';place(at('k'));
   picker.value='above-below';picker.dispatchEvent(new Event('change',{bubbles:true}));check(field.value.includes('\\sum\\limits'),'a sum inside the numerator can force stacked limits');snapshots.fractionStacked=field.value;
   picker.value='adjacent';picker.dispatchEvent(new Event('change',{bubbles:true}));check(field.value.includes('\\sum\\nolimits'),'a sum inside the numerator can force right-side limits');snapshots.fractionAdjacent=field.value;
+  for(const [placement,input] of Object.entries(window.nativeReopenedSums)){
+   field.value=input;place(at('k'));await settle();
+   const operator=field.shadowRoot.querySelector('.ML__op-symbol')?.getBoundingClientRect();
+   const limit=field.getElementInfo(field._mathfield.model.offsetOf(at('p')))?.bounds;
+   check(!!operator&&!!limit,'reopened numerator has a painted summation and limit');
+   if(placement==='stacked')check((limit.top+limit.bottom)/2<operator.top+operator.height/4&&Math.abs((limit.left+limit.right)/2-(operator.left+operator.right)/2)<operator.width/2,'reopened sum in a numerator keeps its upper limit above the symbol');
+   else check(limit.left>=operator.right-2,'reopened sum in a numerator keeps its upper limit at the right');
+  }
   field.readOnly=true;controls.refresh();check(picker.disabled&&exit.disabled,'read-only formulas cannot change structure');
   check(setEquationOperatorLimits(field,'adjacent')===false,'the programmatic command also respects read-only mode');
   field.readOnly=false;window.workbenchEnglish=true;controls.refresh();check(picker.options[2].textContent==='Right side','control labels follow the workbench language');
@@ -103,7 +111,8 @@ test('Actual MathLive edits nested structure and integral limits with Native rou
  })().catch(error=>{snapshots.error=error.message;snapshots.stack=error.stack;});
  globalThis.readout=()=>snapshots;`;
  const reopened=['int','iint','iiint','oint','oiint','oiiint','varointclockwise','ointctrclockwise'].flatMap(command=>['limits','nolimits'].map(placement=>oleLatex(makeOle('\\'+command+'\\'+placement+'_{a}^{b}x'))));
- const html=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="native.css"><script>window.requestAnimationFrame=cb=>setTimeout(()=>cb(performance.now()),16);window.cancelAnimationFrame=clearTimeout;window.nativeReopenedIntegrals=${JSON.stringify(reopened)};</script><script src="editor.js"></script><script>MathfieldElement.fontsDirectory='fonts';MathfieldElement.soundsDirectory=null;</script><script src="catalog-macros.js"></script><script src="editable-macros.js"></script><body class="native-layout"><main><section class="editor-card"><div class="math-viewport"><div class="math-wrap"><math-field id="formula"></math-field></div></div>${panel}</section></main><script src="editor-structure.js"></script><script>${script}</script>`;
+ const sums=Object.fromEntries([['stacked','limits'],['adjacent','nolimits']].map(([placement,command])=>[placement,oleLatex(makeOle(`\\frac{\\sum\\${command}_{k=1}^{p}x_k}{r}`))]));
+ const html=`<!doctype html><meta charset="utf-8"><link rel="stylesheet" href="style.css"><link rel="stylesheet" href="native.css"><script>window.requestAnimationFrame=cb=>setTimeout(()=>cb(performance.now()),16);window.cancelAnimationFrame=clearTimeout;window.nativeReopenedIntegrals=${JSON.stringify(reopened)};window.nativeReopenedSums=${JSON.stringify(sums)};</script><script src="editor.js"></script><script>MathfieldElement.fontsDirectory='fonts';MathfieldElement.soundsDirectory=null;</script><script src="catalog-macros.js"></script><script src="editable-macros.js"></script><body class="native-layout"><main><section class="editor-card"><div class="math-viewport"><div class="math-wrap"><math-field id="formula"></math-field></div></div>${panel}</section></main><script src="editor-structure.js"></script><script>${script}</script>`;
  await writeFile(join(directory,'fixture.html'),html);
  const binary=join(directory,'webkit');await execute('/usr/bin/swiftc',[join(root,'tests/fixtures/radical-webkit.swift'),'-o',binary],{timeout:25000});
  await execute(binary,[join(directory,'fixture.html'),join(directory,'rendered')],{timeout:30000});

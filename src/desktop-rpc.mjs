@@ -67,18 +67,21 @@ async function wordSession(path,payload){
 function checkedWordSource(session,ticket){
  if(session.ticket!==ticket||typeof session.path!=='string'||typeof session.native!=='string'||typeof session.session!=='string')throw Error('Word 会话源数据无效');
 }
-async function checkedDocumentToolsInput(payload){
+async function checkedDocumentToolsSource(payload){
  if(typeof payload.input!=='string'||!payload.input)throw Error('请选择文档');
  const input=await realpath(payload.input);
  if(payload.ticket!==undefined){
   const session=await wordSession('native-read',{ticket:payload.ticket});checkedWordSource(session,payload.ticket);
   if(!session.document||session.document.scope||session.document.identity!==payload.documentIdentity||session.document.snapshot!==payload.documentSnapshot||await realpath(session.document.path)!==input)throw Error('Word 文档快照已变化或尚未载入完整，请重新读取');
+  return {input,mainStoryOnly:session.document.mainStoryOnly===true};
  }
- return input;
+ return {input};
 }
 async function readWordSession(ticket,execution={}){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
- const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}},execution),insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
+ const insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
+ const useOptions={...execution,wordMainStoryOnly:true,...session.document?.identity&&session.document.snapshot!=null?{wordActiveIndex:activeIndex}:{}};
+ const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}},useOptions);
  if(insertion){
   if(session.document?.index!==-1||!session.layout)throw Error('Word 插入会话源数据无效');
  }else{
@@ -86,7 +89,7 @@ async function readWordSession(ticket,execution={}){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,documentNumberingRevision:session.document?.numberingRevision??result.documentNumberingRevision,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},...session.document?.scope==='selection'&&typeof session.catalogProof==='string'?{catalogProof:session.catalogProof}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -170,13 +173,16 @@ export async function desktopRequest(request,execution={}) {
   }
   return {draft:record.draft,updatedAt:record.updatedAt,...source?{source}:{}};
  }
- if(action==='documentAudit')return auditDocx(await checkedDocumentToolsInput(payload));
- if(action==='documentReferenceTargets')return getReferenceTargets(await auditDocx(await checkedDocumentToolsInput(payload)),{query:payload.query});
- if(action==='documentTypographyPreset')return {preset:await readTypographyPreset(await checkedDocumentToolsInput(payload))};
- if(action==='documentTypographyPreflight')return preflightTypography(await checkedDocumentToolsInput(payload),payload.options,{checkpoint:execution.checkpoint});
- if(action==='documentNumberingPreflight')return preflightNumbering(await checkedDocumentToolsInput(payload),payload.options,{checkpoint:execution.checkpoint});
+ if(action==='documentAudit'||action==='documentReferenceTargets'){
+  const {input,mainStoryOnly}=await checkedDocumentToolsSource(payload);
+  const report=await auditDocx(input,{mainStoryOnly});
+  return action==='documentAudit'?report:getReferenceTargets(report,{query:payload.query});
+ }
+ if(action==='documentTypographyPreset')return {preset:await readTypographyPreset((await checkedDocumentToolsSource(payload)).input)};
+ if(action==='documentTypographyPreflight')return preflightTypography((await checkedDocumentToolsSource(payload)).input,payload.options,{checkpoint:execution.checkpoint});
+ if(action==='documentNumberingPreflight')return preflightNumbering((await checkedDocumentToolsSource(payload)).input,payload.options,{checkpoint:execution.checkpoint});
  if(action==='documentTypographyApply'||action==='documentNumberingApply'){
-  const input=await checkedDocumentToolsInput(payload);
+  const {input}=await checkedDocumentToolsSource(payload);
   if(typeof payload.output!=='string'||!payload.output)throw Error('请选择新的副本文件');
   const result=await (action==='documentTypographyApply'?applyTypography:applyNumbering)(input,payload.plan,{output:payload.output});
   return result.report;
@@ -211,13 +217,23 @@ export async function desktopRequest(request,execution={}) {
   const status=await wordSession('native-enrich-request',{ticket:payload.ticket});
   return status.state==='available'?{state:'available',document:await readWordSession(payload.ticket,execution)}:status;
  }
+ if(action==='wordSessionObject'){
+  const {ticket,index,documentIdentity,documentSnapshot,nativeSha256}=payload;
+  if(!Number.isSafeInteger(index)||index<0||typeof documentIdentity!=='string'||!(Number.isSafeInteger(documentSnapshot)||typeof documentSnapshot==='string')||typeof nativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(nativeSha256))throw Error('Word 公式目标无效');
+  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
+  const document=session.document;
+  if(!document||document.scope||document.identity!==documentIdentity||document.snapshot!==documentSnapshot)throw Error('Word 文档快照已变化，请重新打开文档');
+  const object=(await readDocument(document.path)).objects[index];
+  if(!object?.mainDocument||object.nativeSha256!==nativeSha256)throw Error('Word 公式与文档快照不一致，请重新打开文档');
+  return {characters:object.characters,typography:object.typography,ruler:object.ruler??[]};
+ }
  if(action==='wordSessionInsert')return insertWordEquation(payload);
  if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
  if(action==='wordSessionThumbnails'){
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
   const session=await wordSession('native-read',{ticket:payload.ticket});
   if(payload.documentIdentity!==undefined&&payload.documentIdentity!==session.document?.identity||payload.documentSnapshot!==undefined&&payload.documentSnapshot!==session.document?.snapshot)throw Error('Word thumbnail snapshot is no longer current');
-  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices,onlyIndices:payload.indices}});
+  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices,onlyIndices:payload.indices}},{wordMainStoryOnly:true});
   return {images:result.objects.map(o=>({index:o.index,image:o.image}))};
  }
  if(action==='wordSessionCancel')return wordSession('native-cancel',{ticket:payload.ticket});
@@ -275,9 +291,10 @@ export async function desktopRequest(request,execution={}) {
    });
    thumbnailQueue=pending.catch(()=>{});thumbnails.set(o.nativeSha256,pending);return pending;
   };
-  let chosen=objects;
+  const mainStoryOnly=execution.wordMainStoryOnly===true;
+  let chosen=mainStoryOnly?objects.filter(object=>object.mainDocument):objects;
   if(payload.onlyIndices!==undefined){
-   if(!Array.isArray(payload.onlyIndices)||payload.onlyIndices.length>4||payload.onlyIndices.some(i=>!Number.isInteger(i)||i<0||!objects[i]))throw Error('Invalid thumbnail indices');
+   if(!Array.isArray(payload.onlyIndices)||payload.onlyIndices.length>4||payload.onlyIndices.some(i=>!Number.isInteger(i)||i<0||!objects[i]||mainStoryOnly&&!objects[i].mainDocument))throw Error('Invalid thumbnail indices');
    chosen=[...new Set(payload.onlyIndices)].map(index=>objects[index]);
   }
   const storedPaths=new Map();
@@ -290,13 +307,15 @@ export async function desktopRequest(request,execution={}) {
     else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);preserveStored=false;}catch{/* Lazily preserve the stored preview when rendering fails. */}}
    }
    if(preserveStored&&o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath))storedPaths.set(o.index,o.imagePath);
-   return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,characters:o.characters,typography:o.typography,layout:o.layout,ruler:o.nativeSha256?readRuler(o.ole):[],image};
+   const detailsLoaded=execution.wordActiveIndex===undefined||o.index===execution.wordActiveIndex;
+   return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,layout:o.layout,image,...detailsLoaded?{characters:o.characters,typography:o.typography,ruler:o.ruler??[]}:{editorDetailsLoaded:false}};
   }));
   if(storedPaths.size){
    const paths=[...new Set(storedPaths.values())].sort(),images=await documentCache.getStoredPreviews(payload.path,contentHash,paths);
    for(const entry of entries)if(storedPaths.has(entry.index))entry.image=images[storedPaths.get(entry.index)]??null;
   }
-  return {path:payload.path,objects:entries,documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
+  const documentToolObjects=mainStoryOnly&&payload.onlyIndices===undefined&&objects.length!==entries.length?objects.map(({index,nativeSha256})=>({index,nativeSha256})):null;
+  return {path:payload.path,objects:entries,...documentToolObjects?{documentToolObjects}:{},documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
  }
  if(action==='export') {
   if(!Array.isArray(payload.equations)||payload.equations.length<1||payload.equations.length>500)throw Error('需要 1–500 条公式');
@@ -346,7 +365,7 @@ export async function desktopRequest(request,execution={}) {
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
   const rendering=createRenderScheduler(warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n')));
-  const control=new Set(['wordSessionRead','wordSessionDocument','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
+  const control=new Set(['wordSessionRead','wordSessionDocument','wordSessionObject','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.

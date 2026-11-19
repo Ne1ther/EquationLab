@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { DOMParser, XMLSerializer } from '@xmldom/xmldom';
 import { createHash } from 'node:crypto';
+import { posix } from 'node:path';
 import { mathjax } from 'mathjax-full/js/mathjax.js';
 import { TeX } from 'mathjax-full/js/input/tex.js';
 import { SVG } from 'mathjax-full/js/output/svg.js';
@@ -230,6 +231,8 @@ function mathTypeNumberLayout(scan,element){
 
 export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) {
   const zip = await JSZip.loadAsync(buffer);
+  // A pending editor preview can run before parsing the main document XML.
+  if(checkpoint)await checkpoint();
   const rootRelationships=zip.file('_rels/.rels');
   if(!rootRelationships)throw Error('Word document is missing its package relationships');
   const root=parseXml(await rootRelationships.async('string'));
@@ -249,6 +252,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
   const numberingScan=nativeIndexOnly?null:scanWordNumberingPart(partDoc,part);
+  if(checkpoint)await checkpoint();
   const references=new Map();if(!nativeIndexOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
   for(const e of Array.from(partDoc.getElementsByTagNameNS(NS.o,'OLEObject'))) {
@@ -320,6 +324,29 @@ export async function editDocx(buffer,index,replacements,options={}) {
 
 export async function replaceDocxEquation(buffer,index,latex,options={}) {
   return updateDocx(buffer,index,ole=>replaceOleLatex(ole,latex),options);
+}
+
+/** Apply exact, independently bound equation edits in one package pass. */
+export async function editDocxBatch(buffer,edits) {
+  if(!Array.isArray(edits)||edits.length===0)throw Error('Expected a nonempty equation edit list');
+  const document=await inspectDocx(buffer);
+  const seen=new Set();
+  const allowed=new Set(['index','expectedNativeSha256','latex','replacements','typography','ruler']);
+  const updates=edits.map(edit=>{
+    if(!edit||typeof edit!=='object'||Array.isArray(edit)||Object.keys(edit).some(key=>!allowed.has(key)))throw Error('Invalid equation edit');
+    const {index,expectedNativeSha256,latex,replacements,typography,ruler}=edit;
+    if(!Number.isSafeInteger(index)||index<0||seen.has(index))throw Error('Equation indices must be distinct nonnegative integers');
+    seen.add(index);
+    const object=document.objects[index];
+    if(!/^[a-f0-9]{64}$/.test(expectedNativeSha256??'')||object?.nativeSha256!==expectedNativeSha256)throw Error(`Equation ${index} does not match its expected Native hash`);
+    if(latex!==undefined&&(typeof latex!=='string'||!latex.trim()||replacements!==undefined))throw Error('Choose either nonempty LaTeX or character replacements');
+    if(replacements!==undefined&&(!replacements||typeof replacements!=='object'||Array.isArray(replacements)||Object.keys(replacements).length===0))throw Error('Expected nonempty character replacements');
+    if(latex===undefined&&replacements===undefined&&typography===undefined&&ruler===undefined)throw Error('Equation edit has no operation');
+    if(typography!==undefined&&(!typography||typeof typography!=='object'||Array.isArray(typography)))throw Error('Invalid typography patch');
+    const transform=latex!==undefined?ole=>replaceOleLatex(ole,latex):replacements!==undefined?ole=>editCharacters(ole,replacements):ole=>ole;
+    return {object,transform,typography,ruler};
+  });
+  return updateDocxObjects(buffer,document.zip,updates,{skipUnchanged:true});
 }
 
 export function sharedNumberRangeNodes(object,paragraph,scan){
@@ -420,28 +447,70 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 
-async function updateDocx(buffer,index,transform,{fontSize=12,typography,ruler}={}) {
+async function updateDocx(buffer,index,transform,{typography,ruler}={}) {
   const {zip,objects}=await inspectDocx(buffer), obj=objects[index]; if(!obj) throw Error('Equation index not found');
-  if(obj.parseError) throw Error(obj.parseError);
-  if(!obj.shape || !obj.image) throw Error('This object preview layout is not supported; source unchanged');
-  const changed=transform(obj.ole),styled=typography?patchTypography(changed,typography):changed,ole=ruler===undefined?styled:patchRuler(styled,ruler), latex=oleLatex(ole), p=await renderNative(ole);
-  // Give this object its own preview and binary part: existing parts can be shared.
-  let k=1;while(zip.file(`word/media/nativeBridge${k}.png`)||zip.file(`word/embeddings/nativeBridge${k}.bin`))k++;
-  const newImage=`word/media/nativeBridge${k}.png`,newOle=`word/embeddings/nativeBridge${k}.bin`;
-  zip.file(newOle,ole); zip.file(newImage,p.png);
-  const ids=new Set(Array.from(obj.rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>n.getAttribute('Id')));
-  function relation(type,target){let n=1;while(ids.has(`rNativeBridge${n}`))n++;const id=`rNativeBridge${n}`;ids.add(id);const e=obj.rels.createElementNS(NS.rels,'Relationship');e.setAttribute('Id',id);e.setAttribute('Type',NS.r+'/'+type);e.setAttribute('Target',target);obj.rels.documentElement.appendChild(e);return id;}
-  obj.image.setAttributeNS(NS.r,'r:id',relation('image',newImage.replace('word/','')));
-  obj.element.setAttributeNS(NS.r,'r:id',relation('oleObject',newOle.replace('word/','')));
+  return (await updateDocxObjects(buffer,zip,[{object:obj,transform,typography,ruler}])).bytes;
+}
+
+async function updateDocxObjects(original,zip,updates,{skipUnchanged=false}={}) {
   const contentTypes=parseXml(await zip.file('[Content_Types].xml').async('string'));
-  for(const [name,type]of [[newImage,'image/png'],[newOle,'application/vnd.openxmlformats-officedocument.oleObject']]){const d=contentTypes.createElementNS(contentTypes.documentElement.namespaceURI,'Override');d.setAttribute('PartName','/'+name);d.setAttribute('ContentType',type);contentTypes.documentElement.appendChild(d);}
-  zip.file('[Content_Types].xml',new XMLSerializer().serializeToString(contentTypes));
-  obj.shape.setAttribute('style',`width:${p.width.toFixed(3)}pt;height:${p.height.toFixed(3)}pt`);
-  const container=obj.element.parentNode; container.setAttributeNS(NS.w,'w:dxaOrig',String(Math.round(p.width*20)));container.setAttributeNS(NS.w,'w:dyaOrig',String(Math.round(p.height*20)));
-  const run=container.parentNode, props=run.getElementsByTagNameNS(NS.w,'rPr')[0], position=props?.getElementsByTagNameNS(NS.w,'position')[0]; if(position) position.setAttributeNS(NS.w,'w:val',String(-Math.round(p.depth*2)));
-  zip.file(obj.part,new XMLSerializer().serializeToString(obj.partDoc));
-  zip.file(obj.relPart,new XMLSerializer().serializeToString(obj.rels));
-  return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
+  const serializer=new XMLSerializer(),changedParts=new Map(),relStates=new Map(),results=[];
+  let slot=1;
+  for(const {object:obj,transform,typography,ruler} of updates){
+    if(obj.parseError)throw Error(obj.parseError);
+    if(!obj.shape||!obj.image)throw Error('This object preview layout is not supported; source unchanged');
+    const changed=transform(obj.ole),styled=typography?patchTypography(changed,typography):changed;
+    const ole=ruler===undefined?styled:patchRuler(styled,ruler);
+    const beforeNativeSha256=obj.nativeSha256;
+    if(skipUnchanged&&ole.equals(obj.ole)){
+      results.push({index:obj.index,status:'unchanged',beforeNativeSha256,afterNativeSha256:beforeNativeSha256});
+      continue;
+    }
+    oleLatex(ole);
+    const preview=await renderNative(ole);
+    // Existing OLE and preview parts can be shared by untouched rows.
+    while(zip.file(`word/media/nativeBridge${slot}.png`)||zip.file(`word/embeddings/nativeBridge${slot}.bin`))slot++;
+    const imagePath=`word/media/nativeBridge${slot}.png`,olePath=`word/embeddings/nativeBridge${slot}.bin`;
+    slot++;
+    zip.file(olePath,ole);
+    zip.file(imagePath,preview.png);
+    let relState=relStates.get(obj.relPart);
+    if(!relState){
+      relState={next:1,ids:new Set(Array.from(obj.rels.documentElement.childNodes).filter(node=>node.nodeType===1).map(node=>node.getAttribute('Id')))};
+      relStates.set(obj.relPart,relState);
+    }
+    for(const [node,type,path,contentType] of [
+      [obj.image,'image',imagePath,'image/png'],
+      [obj.element,'oleObject',olePath,'application/vnd.openxmlformats-officedocument.oleObject']
+    ]){
+      while(relState.ids.has(`rNativeBridge${relState.next}`))relState.next++;
+      const id=`rNativeBridge${relState.next++}`;
+      const relationship=obj.rels.createElementNS(NS.rels,'Relationship');
+      relationship.setAttribute('Id',id);
+      relationship.setAttribute('Type',NS.r+'/'+type);
+      relationship.setAttribute('Target',posix.relative(posix.dirname(obj.part),path));
+      obj.rels.documentElement.appendChild(relationship);
+      node.setAttributeNS(NS.r,'r:id',id);
+      const entry=contentTypes.createElementNS(contentTypes.documentElement.namespaceURI,'Override');
+      entry.setAttribute('PartName','/'+path);
+      entry.setAttribute('ContentType',contentType);
+      contentTypes.documentElement.appendChild(entry);
+    }
+    obj.shape.setAttribute('style',`width:${preview.width.toFixed(3)}pt;height:${preview.height.toFixed(3)}pt`);
+    const container=obj.element.parentNode;
+    container.setAttributeNS(NS.w,'w:dxaOrig',String(Math.round(preview.width*20)));
+    container.setAttributeNS(NS.w,'w:dyaOrig',String(Math.round(preview.height*20)));
+    const run=container.parentNode,properties=run.getElementsByTagNameNS(NS.w,'rPr')[0];
+    const position=properties?.getElementsByTagNameNS(NS.w,'position')[0];
+    if(position)position.setAttributeNS(NS.w,'w:val',String(-Math.round(preview.depth*2)));
+    changedParts.set(obj.part,obj.partDoc);
+    changedParts.set(obj.relPart,obj.rels);
+    results.push({index:obj.index,status:'updated',beforeNativeSha256,afterNativeSha256:hash(inspectOle(ole).native)});
+  }
+  if(!changedParts.size)return {bytes:Buffer.from(original),results};
+  for(const [path,doc] of changedParts)zip.file(path,serializer.serializeToString(doc));
+  zip.file('[Content_Types].xml',serializer.serializeToString(contentTypes));
+  return {bytes:await zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'}),results};
 }
 
 export async function flatOpc(buffer) {

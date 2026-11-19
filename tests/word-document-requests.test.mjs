@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {createWordDocumentRequests} from '../src/word-document-requests.mjs';
+import {createWordDocumentRequests,wordCatalogProof} from '../src/word-document-requests.mjs';
 import {operation} from '../src/server.mjs';
 
 const hex=value=>value.toString(16).padStart(64,'0');
@@ -10,6 +10,33 @@ function fixture(options={}){
  let next=1;
  return createWordDocumentRequests({makeId:()=>hex(next++),...options});
 }
+
+test('A directory receipt can browse retained Word positions without endorsing a write',async()=>{
+ let time=1_797_900_000_000;
+ const queue=fixture({now:()=>time}),hostId=hex(149);
+ const {identity,snapshot}=target,count=112,expires=time+5_000;
+ const proof=wordCatalogProof(identity,snapshot,count,expires);
+ const catalogTarget={identity,snapshot,count,index:79,proof};
+ await queue.take({hostId,waitMs:0});
+ const active={identity,name:'Thesis.docx'};
+ const publish=(readOnly,retiredIdentities=[])=>queue.handle('native-document-workspace',{hostId,active,documents:[{...active,readOnly}],retiredIdentities});
+ publish(false);
+ for(const change of [{count:113},{identity:'word-process:74'},{snapshot:992},{index:112},{proof:proof.replace(/\.[a-f0-9]+$/,'.'+'0'.repeat(64))}]){
+  assert.throws(()=>queue.request({catalogTarget:{...catalogTarget,...change}}),/directory/i);
+ }
+ assert.throws(()=>queue.request({catalogTarget,insertionMode:'inline'}),/cannot authorize insertion/);
+ publish(true);
+ assert.throws(()=>queue.request({catalogTarget}),/read only/);
+ publish(false);
+ const created=queue.request({catalogTarget});
+ const claim=await queue.take({hostId,waitMs:0});
+ assert.deepEqual(claim,{state:'delivered',requestId:created.requestId,target:{identity,snapshot,index:79,nativeSha256:proof.split('.')[1]}});
+ queue.cancel({requestId:created.requestId});
+ queue.handle('native-document-workspace',{hostId,active:null,documents:[],retiredIdentities:[identity]});
+ assert.throws(()=>queue.request({catalogTarget}),/not open/);
+ time=expires;
+ assert.throws(()=>queue.request({catalogTarget}),/expired/);
+});
 
 test('App insert requests require an open editable destination and retain intent through both delivery paths',async()=>{
  for(const mode of ['inline','display','numbered-left','numbered-right'])for(const waiting of [false,true]){

@@ -253,17 +253,21 @@ End Function
 
 ' Compute preview counters from fields before the insertion point. A chapter
 ' reset is a hidden SEQ field, not a visible equation to count.
-Private Function SequenceBeforeSelection(ByVal sequenceName As String, ByRef found As Boolean) As Long
-    SequenceBeforeSelection = SequenceBeforePosition(ActiveDocument, Selection.Start, sequenceName, found)
+Private Function SequenceBeforeSelection(ByVal sequenceName As String, ByRef found As Boolean, Optional ByVal fields As Collection = Nothing) As Long
+    SequenceBeforeSelection = SequenceBeforePosition(ActiveDocument, Selection.Start, sequenceName, found, fields)
 End Function
 
-Private Function SequenceBeforePosition(ByVal Doc As Document, ByVal beforePosition As Long, ByVal sequenceName As String, ByRef found As Boolean) As Long
+Private Function SequenceFieldsForDocument(ByVal Doc As Document) As Collection
+    Dim fields As New Collection, seen As New Collection
+    CollectEquationFields Doc.Content, fields, seen, 0
+    Set SequenceFieldsForDocument = fields
+End Function
+
+Private Function SequenceBeforePosition(ByVal Doc As Document, ByVal beforePosition As Long, ByVal sequenceName As String, ByRef found As Boolean, Optional ByVal fields As Collection = Nothing) As Long
     Dim field As Field, code As String, parts() As String, i As Long, value As Long
-    Dim fields As Collection, seen As Collection
     Dim repeatCurrent As Boolean, resetFound As Boolean, resetValue As Long
     found = False
-    Set fields = New Collection: Set seen = New Collection
-    CollectEquationFields Doc.Content, fields, seen, 0
+    If fields Is Nothing Then Set fields = SequenceFieldsForDocument(Doc)
     For Each field In fields
         If field.Code.Start < beforePosition Then
             code = UCase$(Trim$(Replace(field.Code.Text, vbTab, " ")))
@@ -307,9 +311,9 @@ Private Function SharedSequenceName(ByVal name As String) As String
     End Select
 End Function
 
-Private Function NextNumber() As Long
+Private Function NextNumber(Optional ByVal fields As Collection = Nothing) As Long
     Dim found As Boolean, value As Long
-    value = SequenceBeforeSelection("EquationLab", found)
+    value = SequenceBeforeSelection("EquationLab", found, fields)
     If value >= 32767 Then Err.Raise vbObjectError + 7347, "Equation Lab", "The equation sequence exceeds the supported range."
     NextNumber = value + 1
 End Function
@@ -375,16 +379,18 @@ End Sub
 ' equations which may be changed to numbered mode inside the editor.
 Public Sub ELStartEquationInsertion(ByVal kind As String, ByVal selectedRange As Range, Optional ByVal leadingParagraph As Boolean = False)
     Dim Doc As Document, chapter As String, section As String, equationNumber As Long
-    Dim hasChapter As Boolean, hasSection As Boolean, ignoredCounter As Long
+    Dim fields As Collection
+    Dim hasChapter As Boolean, hasSection As Boolean, chapterCounter As Long, sectionCounter As Long
     Set Doc = selectedRange.Document
     If Not (Doc Is ActiveDocument) Then Err.Raise vbObjectError + 7346, "Equation Lab", "The insertion document changed."
     If selectedRange.Start <> selectedRange.End Or selectedRange.StoryType <> wdMainTextStory Then Err.Raise vbObjectError + 7346, "Equation Lab", "Place an empty cursor in the document body."
     selectedRange.Select
-    chapter = CurrentCounter("ELChapter", Preference("EquationLabChapter", "1"))
-    section = CurrentCounter("ELSection", Preference("EquationLabSection", "1"))
-    equationNumber = NextNumber()
-    ignoredCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELChapter", hasChapter)
-    ignoredCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELSection", hasSection)
+    Set fields = SequenceFieldsForDocument(Doc)
+    chapterCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELChapter", hasChapter, fields)
+    sectionCounter = SequenceBeforePosition(Doc, selectedRange.Start, "ELSection", hasSection, fields)
+    If hasChapter And chapterCounter > 0 Then chapter = CStr(chapterCounter) Else chapter = Preference("EquationLabChapter", "1")
+    If hasSection And sectionCounter > 0 Then section = CStr(sectionCounter) Else section = Preference("EquationLabSection", "1")
+    equationNumber = NextNumber(fields)
     ELWriteUtf8 WorkDirectory() & "ribbon-settings.txt", ELDocumentNumberFormat(Doc, selectedRange.Start) & vbLf & chapter & vbLf & section & vbLf & CStr(equationNumber) & vbLf & IIf(hasChapter And hasSection, "1", "0") & vbLf
     EquationLabDocumentContext.ELBeginEquationInsertion kind, leadingParagraph
 End Sub
@@ -513,35 +519,44 @@ End Sub
 Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1)
     Dim transaction As Collection, changed As Boolean
     Dim failureNumber As Long, failureDescription As String, futureFormat As String, recovery As String
+    Dim restoreScreenUpdating As Boolean, refreshedDisplayOnly As Boolean
     On Error GoTo Failed
     If Doc Is Nothing Or equation Is Nothing Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected equation is unavailable."
     If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Or Doc.TrackRevisions Then Err.Raise vbObjectError + 7360, "Equation Lab", "The document is not available for numbering."
     If Not (equation.Range.Document Is Doc) Then Err.Raise vbObjectError + 7360, "Equation Lab", "The selected equation belongs to a different document."
     If Not verifiedBackgroundTarget And EquationLabNativeCommand("MathTypeBridgeTransportActive") <> 0 Then Err.Raise vbObjectError + 7360, "Equation Lab", "Finish the active Equation Lab edit before changing equation numbering."
-    futureFormat = ELDocumentNumberFormat(Doc, equation.Range.Start)
+    If patternOverride = "" Then futureFormat = ELDocumentNumberFormat(Doc, equation.Range.Start) Else futureFormat = patternOverride
+    If Application.ScreenUpdating Then
+        Application.ScreenUpdating = False
+        restoreScreenUpdating = True
+    End If
     Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab equation numbering")
-    UnwrapSelectedSharedNumber Doc, equation, changed
-    NumberSelectedEquationCore Doc, equation, rightSide, changed, patternOverride, verifiedBackgroundTarget, chapter, section, expectedChapter, expectedSection
-    UpgradeLegacyNumbering Doc, changed
-    UpdateNumbersForDocument Doc
-    If patternOverride <> "" Then futureFormat = patternOverride
+    If Not UpdateOrUnwrapSelectedSharedNumber(Doc, equation, rightSide, patternOverride, chapter <> 0 Or section <> 0, changed, refreshedDisplayOnly) Then
+        NumberSelectedEquationCore Doc, equation, rightSide, changed, patternOverride, verifiedBackgroundTarget, chapter, section, expectedChapter, expectedSection
+    End If
+    If Not refreshedDisplayOnly Then
+        UpgradeLegacyNumbering Doc, changed
+        UpdateNumbersForDocument Doc
+    End If
     SaveSharedNumberFormat Doc, futureFormat
     NumberingChanged Doc: ELInvalidateDocumentSnapshot
     ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    If restoreScreenUpdating Then Application.ScreenUpdating = True
     Exit Sub
 Failed:
     failureNumber = Err.Number: failureDescription = Err.Description
-    If Not transaction Is Nothing Then
-        recovery = ELTransactionRecoveryMessage(Doc, transaction)
-        If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
-    End If
+    If Not transaction Is Nothing Then recovery = ELTransactionRecoveryMessage(Doc, transaction)
+    On Error Resume Next
+    If restoreScreenUpdating Then Application.ScreenUpdating = True
+    On Error GoTo 0
+    If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", failureDescription & " " & recovery
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Sub NumberSelectedEquationCore(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, ByRef changed As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1)
     Dim paragraph As Range, objectRange As Range, oleRange As Range, numberBookmark As Bookmark
     Dim oldNumberRange As Range, insertion As Range, copiedRange As Range, bookmarkRange As Range, equationField As Field
-    Dim contextChanged As Boolean, foundCounter As Boolean, actualCounter As Long, equationReset As Long
+    Dim contextChanged As Boolean, foundCounter As Boolean, actualCounter As Long, equationReset As Long, fields As Collection
     Dim bookmarkName As String, field As Field, code As String, numberCount As Long
     Dim undoRecord As UndoRecord, customUndo As Boolean
     Dim oldSmartCutPaste As Boolean, smartCutPasteChanged As Boolean
@@ -620,9 +635,10 @@ Private Sub NumberSelectedEquationCore(ByVal Doc As Document, ByVal equation As 
     contextChanged = (chapter <> 0 Or section <> 0)
     If contextChanged Then
         If chapter < 1 Or chapter > 32767 Or section < 1 Or section > 32767 Then Err.Raise vbObjectError + 7363, "Equation Lab", "Chapter and section must be between 1 and 32767."
-        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELChapter", foundCounter)
+        Set fields = SequenceFieldsForDocument(Doc)
+        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELChapter", foundCounter, fields)
         If expectedChapter >= 0 And actualCounter <> expectedChapter Then Err.Raise vbObjectError + 7363, "Equation Lab", "Chapter changed in Word. Reopen the equation before saving."
-        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELSection", foundCounter)
+        actualCounter = SequenceBeforePosition(Doc, oleStart, "ELSection", foundCounter, fields)
         If expectedSection >= 0 And actualCounter <> expectedSection Then Err.Raise vbObjectError + 7363, "Equation Lab", "Section changed in Word. Reopen the equation before saving."
     End If
 
@@ -630,12 +646,7 @@ Private Sub NumberSelectedEquationCore(ByVal Doc As Document, ByVal equation As 
     If bookmarkName <> "" Then Set bookmarkRange = Doc.Bookmarks(bookmarkName).Range.Duplicate
     ValidateEquationParagraphRemainder Doc, paragraph, oleRange, bookmarkRange
     If Not bookmarkRange Is Nothing Then
-        If Not contextChanged And patternOverride = "" And ((rightSide And bookmarkRange.Start >= oleEnd) Or ((Not rightSide) And bookmarkRange.End <= oleStart)) Then
-            UpdateNumbersForDocument Doc
-            NumberingChanged Doc
-            ELInvalidateDocumentSnapshot
-            Exit Sub
-        End If
+        If Not contextChanged And patternOverride = "" And ((rightSide And bookmarkRange.Start >= oleEnd) Or ((Not rightSide) And bookmarkRange.End <= oleStart)) Then Exit Sub
     End If
 
     Dim pattern As String
@@ -708,14 +719,10 @@ Private Sub NumberSelectedEquationCore(ByVal Doc As Document, ByVal equation As 
         Set copiedRange = Doc.Bookmarks(bookmarkName).Range.Duplicate
     End If
     NormalizeNumberParagraph Doc, equation, copiedRange, bookmarkName, rightSide, changed
-    UpdateNumbersForDocument Doc
-    If patternOverride <> "" Then SavePreferenceForDocument Doc, "EquationLabNumberFormat", patternOverride
     If contextChanged Then
         SavePreferenceForDocument Doc, "EquationLabChapter", CStr(chapter)
         SavePreferenceForDocument Doc, "EquationLabSection", CStr(section)
     End If
-    NumberingChanged Doc
-    ELInvalidateDocumentSnapshot
     Options.SmartCutPaste = oldSmartCutPaste
     smartCutPasteChanged = False
     Exit Sub
@@ -828,12 +835,15 @@ End Sub
 
 Private Sub RequireCounterContext(ByVal Doc As Document, ByVal pattern As String, ByVal beforePosition As Long)
     Dim found As Boolean, value As Long
+    Dim fields As Collection
+    If InStr(1, pattern, "#C", vbBinaryCompare) = 0 And InStr(1, pattern, "#S", vbBinaryCompare) = 0 Then Exit Sub
+    Set fields = SequenceFieldsForDocument(Doc)
     If InStr(1, pattern, "#C", vbBinaryCompare) > 0 Then
-        value = SequenceBeforePosition(Doc, beforePosition, "MTChap", found)
+        value = SequenceBeforePosition(Doc, beforePosition, "MTChap", found, fields)
         If Not found Or value < 1 Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #C token."
     End If
     If InStr(1, pattern, "#S", vbBinaryCompare) > 0 Then
-        value = SequenceBeforePosition(Doc, beforePosition, "MTSec", found)
+        value = SequenceBeforePosition(Doc, beforePosition, "MTSec", found, fields)
         If Not found Or value < 1 Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #S token."
     End If
 End Sub
@@ -1752,9 +1762,8 @@ Private Sub SetNumberFormat()
     On Error GoTo Failed
     Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab number format")
     SaveSharedNumberFormat Doc, value
-    NumberingChanged Doc
-    ELInvalidateDocumentSnapshot
     ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    EquationLabDocumentContext.ELQueueWorkspaceRefresh
     Exit Sub
 Failed:
     failureNumber = Err.Number: failureDescription = Err.Description
@@ -1916,12 +1925,13 @@ Private Function IsNumberBookmarkName(ByVal name As String) As Boolean
     IsNumberBookmarkName = (UCase$(Left$(name, 3)) = "EL_" Or UCase$(Left$(name, 7)) = "ZEQNNUM")
 End Function
 
-Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal pattern As String, ByVal name As String, ByVal chapter As Long, ByVal section As Long, ByVal equationNumber As Long, ByVal sharedCounters As Boolean, ByRef changed As Boolean, Optional ByVal equationReset As Long = -1)
+Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal pattern As String, ByVal name As String, ByVal chapter As Long, ByVal section As Long, ByVal equationNumber As Long, ByVal sharedCounters As Boolean, ByRef changed As Boolean, Optional ByVal equationReset As Long = -1, Optional ByVal displayOnlyFields As Collection = Nothing)
     Dim paragraph As Range, formatting As ParagraphFormat, font As Font, style As Variant, inserted As Range
     Dim beforeObjects As Long, beforeParagraphs As Long, xml As String
     Dim other As Bookmark, showHidden As Boolean, atParagraphStart As Boolean, oldSmartCutPaste As Boolean
     Dim failureNumber As Long, failureDescription As String
     Dim aliases As Collection, enclosingNames As Collection, enclosingStarts As Collection, enclosingEnds As Collection
+    Dim references As Collection, field As Field
     Dim originalNumber As Range, beforeEnd As Long, delta As Long, i As Long
     If target.StoryType <> wdMainTextStory Or target.Paragraphs.Count <> 1 Or target.Tables.Count <> 0 Or target.Revisions.Count <> 0 Or target.ContentControls.Count <> 0 Or target.InlineShapes.Count <> 0 Then Err.Raise vbObjectError + 7374, "Equation Lab", "The number range contains unsupported content."
     showHidden = Doc.Bookmarks.ShowHidden
@@ -1945,6 +1955,14 @@ Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal
         End If
     Next
     Doc.Bookmarks.ShowHidden = showHidden
+    If Not displayOnlyFields Is Nothing Then
+        Set references = New Collection
+        For Each field In displayOnlyFields
+            If field.Type = wdFieldRef Then
+                If Not field.Locked And ReferenceNamesNumber(field, Doc, name, aliases, enclosingNames) Then references.Add field
+            End If
+        Next
+    End If
     Set paragraph = PhysicalNumberingParagraph(Doc, target)
     atParagraphStart = (target.Start = paragraph.Start)
     Set formatting = paragraph.ParagraphFormat.Duplicate: Set font = Doc.Bookmarks(name).Range.Font.Duplicate
@@ -1978,6 +1996,19 @@ Private Sub ReplaceNumberXML(ByVal Doc As Document, ByVal target As Range, ByVal
     Set paragraph = PhysicalNumberingParagraph(Doc, Doc.Bookmarks(name).Range)
     paragraph.Style = style: paragraph.ParagraphFormat = formatting
     Doc.Bookmarks(name).Range.Font = font
+    If Not references Is Nothing Then
+        ' The replacement retains the hidden increment and reset. Refresh
+        ' the visible repeats and their references without renumbering later equations.
+        Set inserted = NumberEnvelope(Doc, Doc.Bookmarks(name))
+        If inserted.Start >= Doc.Bookmarks(name).Range.Start Or NumberIncrementReset(Doc, Doc.Bookmarks(name)) <> equationReset Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed the equation sequence."
+        For Each field In Doc.Bookmarks(name).Range.Fields
+            If IsEquationSequence(field) And Not field.Locked Then field.Update
+        Next
+        For Each field In references
+            If field.Type <> wdFieldRef Or Not ReferenceNamesNumber(field, Doc, name, aliases, enclosingNames) Then Err.Raise vbObjectError + 7374, "Equation Lab", "Word changed an existing equation reference."
+            If Not field.Locked Then field.Update
+        Next
+    End If
     Options.SmartCutPaste = oldSmartCutPaste
     Exit Sub
 Failed:
@@ -1988,6 +2019,27 @@ Failed:
     On Error GoTo 0
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
+
+Private Function ReferenceNamesNumber(ByVal field As Field, ByVal Doc As Document, ByVal name As String, ByVal aliases As Collection, ByVal enclosingNames As Collection) As Boolean
+    Dim referenceName As String, aliasName As Variant, enclosingName As Variant
+    referenceName = FieldWord(field.Code.Text, 1)
+    If StrComp(referenceName, name, vbTextCompare) = 0 Then
+        ReferenceNamesNumber = True
+        Exit Function
+    End If
+    For Each aliasName In aliases
+        If StrComp(referenceName, CStr(aliasName), vbTextCompare) = 0 Then
+            ReferenceNamesNumber = True
+            Exit Function
+        End If
+    Next
+    For Each enclosingName In enclosingNames
+        If StrComp(referenceName, CStr(enclosingName), vbTextCompare) = 0 Then
+            ReferenceNamesNumber = IsEquationReference(field, Doc)
+            Exit Function
+        End If
+    Next
+End Function
 
 Private Function NumberEnvelope(ByVal Doc As Document, ByVal bookmark As Bookmark) As Range
     Dim field As Field, span As Range, found As Field
@@ -2141,30 +2193,84 @@ Failed:
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
-Private Sub UnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal equation As InlineShape, ByRef changed As Boolean)
-    Dim bookmark As Bookmark, target As Bookmark, paragraph As Range, envelope As Range
-    Dim pattern As String, chapter As Long, section As Long, equationNumber As Long, equationReset As Long, found As Boolean
+Private Function UpdateOrUnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, ByVal patternOverride As String, ByVal contextChanged As Boolean, ByRef changed As Boolean, ByRef refreshedDisplayOnly As Boolean) As Boolean
+    Dim bookmark As Bookmark, target As Bookmark, paragraph As Range, envelope As Range, candidate As Range
+    Dim pattern As String, chapter As Long, section As Long, equationNumber As Long, equationReset As Long
+    Dim hasChapter As Boolean, hasSection As Boolean, found As Boolean, replaceInPlace As Boolean
+    Dim fields As Collection, displayOnlyFields As Collection
     Set paragraph = NumberingEquationParagraph(Doc, equation)
     EnsureSharedNumberBookmark Doc, equation, changed
     For Each bookmark In Doc.Bookmarks
         If IsNumberBookmarkName(bookmark.Name) And bookmark.Range.Start >= paragraph.Start And bookmark.Range.End <= paragraph.End Then
-            Set envelope = NumberEnvelope(Doc, bookmark)
-            If envelope.Start < bookmark.Range.Start Then
+            Set candidate = NumberEnvelope(Doc, bookmark)
+            If candidate.Start < bookmark.Range.Start Then
                 If Not target Is Nothing Then Err.Raise vbObjectError + 7374, "Equation Lab", "Several equation numbers share this paragraph."
                 Set target = bookmark
+                Set envelope = candidate
             End If
         End If
     Next
-    If target Is Nothing Then Exit Sub
+    If target Is Nothing Then Exit Function
     pattern = RibbonNumberFormat(Doc, target)
     If pattern = "" Then Err.Raise vbObjectError + 7374, "Equation Lab", "The MathType number format is unavailable."
-    Set envelope = NumberEnvelope(Doc, target)
+    If patternOverride <> "" And Not contextChanged Then
+        ValidateRibbonNumberFormat patternOverride
+        replaceInPlace = SharedNumberOnRequestedSide(Doc, equation, paragraph, envelope, target.Range, rightSide)
+        If replaceInPlace And patternOverride = pattern Then
+            UpdateOrUnwrapSelectedSharedNumber = True
+            Exit Function
+        End If
+    End If
     equationReset = NumberIncrementReset(Doc, target)
-    equationNumber = SequenceBeforePosition(Doc, envelope.End, "MTEqn", found)
-    chapter = SequenceBeforePosition(Doc, envelope.Start, "MTChap", found): If chapter < 1 Then chapter = 1
-    section = SequenceBeforePosition(Doc, envelope.Start, "MTSec", found): If section < 1 Then section = 1
-    ReplaceNumberXML Doc, envelope, pattern, target.Name, chapter, section, equationNumber, False, changed, equationReset
-End Sub
+    Set fields = SequenceFieldsForDocument(Doc)
+    equationNumber = SequenceBeforePosition(Doc, envelope.End, "MTEqn", found, fields)
+    chapter = SequenceBeforePosition(Doc, envelope.Start, "MTChap", hasChapter, fields)
+    section = SequenceBeforePosition(Doc, envelope.Start, "MTSec", hasSection, fields)
+    If replaceInPlace Then
+        If InStr(1, patternOverride, "#C", vbBinaryCompare) > 0 And (Not hasChapter Or chapter < 1) Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #C token."
+        If InStr(1, patternOverride, "#S", vbBinaryCompare) > 0 And (Not hasSection Or section < 1) Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #S token."
+        pattern = patternOverride
+        If Not HasLegacyNumbering(Doc, fields) Then Set displayOnlyFields = fields
+    End If
+    If chapter < 1 Then chapter = 1
+    If section < 1 Then section = 1
+    ' The number keeps its shared MTEqn increment and the same side. Replace
+    ' its envelope once, leaving the OLE and equation paragraph geometry intact.
+    ReplaceNumberXML Doc, envelope, pattern, target.Name, chapter, section, equationNumber, replaceInPlace, changed, equationReset, displayOnlyFields
+    refreshedDisplayOnly = Not displayOnlyFields Is Nothing
+    UpdateOrUnwrapSelectedSharedNumber = replaceInPlace
+End Function
+
+Private Function SharedNumberOnRequestedSide(ByVal Doc As Document, ByVal equation As InlineShape, ByVal paragraph As Range, ByVal envelope As Range, ByVal display As Range, ByVal rightSide As Boolean) As Boolean
+    Dim field As Field, embedded As Field, oleRange As Range, oleStart As Long
+    Dim code As String, sequence As String
+    If paragraph.Revisions.Count <> 0 Or paragraph.InlineShapes.Count <> 1 Or paragraph.Editors.Count <> 0 Or paragraph.ContentControls.Count <> 0 Then Exit Function
+    If paragraph.Tables.Count > 0 Or paragraph.ListFormat.ListType <> wdListNoNumbering Then Exit Function
+    If paragraph.InlineShapes(1).Range.Start <> equation.Range.Start Or paragraph.InlineShapes(1).Range.End <> equation.Range.End Then Exit Function
+    If envelope.Start < paragraph.Start Or envelope.End >= paragraph.End Then Exit Function
+    For Each field In display.Fields
+        code = field.Code.Text
+        sequence = UCase$(FieldWord(code, 1))
+        If sequence <> "MTEQN" And sequence <> "MTCHAP" And sequence <> "MTSEC" Then Exit Function
+        If InStr(1, code, "\c", vbTextCompare) = 0 Then Exit Function
+    Next
+    For Each field In paragraph.Fields
+        If field.Type = wdFieldEmbed Then
+            If Not embedded Is Nothing Then Exit Function
+            If field.Result.InlineShapes.Count <> 1 Or field.Result.Start > equation.Range.Start Or field.Result.End < equation.Range.End Then Exit Function
+            Set embedded = field
+        ElseIf field.Code.Start <= envelope.Start Or field.Code.End >= envelope.End Then
+            Exit Function
+        End If
+    Next
+    If embedded Is Nothing Then Exit Function
+    oleStart = RibbonEmbeddedEquationFieldStart(embedded, Doc)
+    If oleStart < paragraph.Start Or embedded.Result.End + 1 >= paragraph.End Then Exit Function
+    Set oleRange = Doc.Range(oleStart, embedded.Result.End + 1)
+    If (rightSide And envelope.Start < oleRange.End) Or ((Not rightSide) And envelope.End > oleRange.Start) Then Exit Function
+    ValidateEquationParagraphRemainder Doc, paragraph, oleRange, envelope
+    SharedNumberOnRequestedSide = True
+End Function
 
 ' Find an unanchored MathType number without changing the document. The
 ' picker uses a temporary identity and creates its real bookmark only after
@@ -2404,13 +2510,13 @@ Private Function NumberIncrementReset(ByVal Doc As Document, ByVal bookmark As B
     Next
 End Function
 
-Private Function HasLegacyNumbering(ByVal Doc As Document) As Boolean
-    Dim fields As Collection, seen As Collection, field As Field, sequence As String
-    Set fields = New Collection: Set seen = New Collection
-    CollectEquationFields Doc.Content, fields, seen, 0
+Private Function HasLegacyNumbering(ByVal Doc As Document, Optional ByVal fields As Collection = Nothing) As Boolean
+    Dim field As Field, sequence As String, code As String
+    If fields Is Nothing Then Set fields = SequenceFieldsForDocument(Doc)
     For Each field In fields
-        If UCase$(FieldWord(field.Code.Text, 0)) = "SEQ" Then
-            sequence = UCase$(FieldWord(field.Code.Text, 1))
+        code = field.Code.Text
+        If UCase$(FieldWord(code, 0)) = "SEQ" Then
+            sequence = UCase$(FieldWord(code, 1))
             If sequence = "EQUATIONLAB" Or sequence = "ELCHAPTER" Or sequence = "ELSECTION" Then HasLegacyNumbering = True: Exit Function
         End If
     Next
@@ -2419,9 +2525,13 @@ End Function
 Private Function SharedDefaultFormat(ByVal Doc As Document) As String
     On Error GoTo Missing
     Dim pattern As String
-    If HasLegacyNumbering(Doc) Then Exit Function
     pattern = CStr(Doc.CustomDocumentProperties("MTEquationNumber2").Value)
     ValidateRibbonNumberFormat pattern
+    ' Both sources agree regardless of field family. Only detect legacy
+    ' numbering when it could change which declared format takes precedence.
+    If pattern <> PreferenceForDocument(Doc, "EquationLabNumberFormat", "") Then
+        If HasLegacyNumbering(Doc) Then Exit Function
+    End If
     SharedDefaultFormat = pattern
 Missing:
 End Function

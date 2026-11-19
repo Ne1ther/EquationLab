@@ -291,6 +291,12 @@ void publishWordWorkspace(NSDictionary* active,NSArray<NSDictionary*>* documents
     if(!restored&&((!active&&!manager.workspace)||[manager.workspace isEqual:active])&&((!documents&&!manager.workspaceDocuments)||[manager.workspaceDocuments isEqual:copy]))return;
     manager.workspace=[active copy];if(documents)manager.workspaceDocuments=copy;++manager.workspaceVersion;manager.workspaceRetries=0;[manager publishWorkspace];
 }
+NSNumber* wordWorkspaceNumberingRevision(NSString* identity){
+    if(!NSThread.isMainThread||!manager.installed||!identity.length)return nil;
+    for(NSDictionary* document in manager.workspaceDocuments)
+        if([document[@"identity"] isEqual:identity])return document[@"numberingRevision"];
+    return nil;
+}
 void closeWordWorkspaceIdentity(NSString* identity){
     if(!NSThread.isMainThread||!manager.installed||!identity.length)return;
     if(!manager.retiredIdentities)manager.retiredIdentities=[NSMutableOrderedSet orderedSet];

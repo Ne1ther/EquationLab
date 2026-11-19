@@ -31,17 +31,17 @@
 
 ## 编号的作用范围
 
-先在 **Word 编排** 中选择编号格式，再打开“将编号格式应用到副本…”。
+在右侧 **文档 → Word 编排** 中选好编号格式，再选择“预检重编全部已有编号（副本）…”或“仅设为后续新公式默认（副本）…”。从 Word 连接进入时，先在 Word 保存文档，然后在文件选择器里选这个已保存的 `.docx`。
 
 | 菜单选项 | 用途 |
 | --- | --- |
 | 当前公式 | 修改当前 Equation Lab 公式的编号格式 |
-| 全部已有编号 | 统一整理文档中可处理的 Equation Lab 编号格式 |
+| 全部已有编号 | 统一整理可识别的 Equation Lab 和旧 MathType 编号格式 |
 | 仅后续新增公式 | 保存后续新增编号的默认格式，已有编号沿用原格式 |
 
 “当前公式”和“全部已有编号”用来修改现有编号。如果只想给以后新增的公式设置默认格式，选“仅后续新增公式”。预检会列出修改和跳过的项目；保存后用 Word 打开新副本，点功能区的“更新编号”重算序号和交叉引用。
 
-旧 MathType 公式的编号通过 Word 功能区调整。“更新编号”沿用其原有编号字段与重新起号设置，并更新相关引用。
+对缺少单式书签的旧 MathType 编号，批量预检支持已识别的分隔符和括号替换，例如 `(2.1)` 改为 `(2-1)`。章节或序号字段的结构需要变动时，这类编号会跳过，并在预检里列出原因。
 
 ## 连接诊断
 
@@ -49,12 +49,17 @@
 
 ## 命令行
 
+给 AI 使用时，可从 [Equation Lab Skill](../skills/equation-lab/SKILL.md) 开始。它包含查看公式清单、生成可编辑的 MathType 公式、核对编号和引用、批量编辑的操作步骤。在 Word 正文指定位置插入公式时，使用 Word 功能区的对应命令。
+
+在 App 顶栏点 **AI**，打开 **AI 协作**，即可查看本机 Skill 和命令行任务的进度、完成或失败状态。操作从 AI 会话发起。关闭开关会停止显示状态，已经启动的命令继续执行。
+
 文档检查和副本处理也可直接用于 `.docx` 文件：
 
 ```sh
 node src/cli.mjs audit input.docx
 node src/cli.mjs references input.docx '1.2'
 node src/cli.mjs read-preset input.docx
+node src/cli.mjs edit-batch input.docx edits.json new-equation-copy.docx
 
 node src/cli.mjs plan-typography input.docx typography-options.json typography-plan.json
 node src/cli.mjs apply-typography input.docx typography-plan.json new-style-copy.docx
@@ -81,7 +86,7 @@ node src/cli.mjs apply-numbering input.docx numbering-plan.json new-number-copy.
 | --- | --- |
 | `current` | 用 `index` 指定一条公式 |
 | `selected` | 用 `indices` 指定多条公式 |
-| `all` | 检查全部公式并处理已有 Equation Lab 编号 |
+| `all` | 检查全部公式并处理可识别的 Equation Lab 和旧 MathType 编号 |
 | `future` | 设置文档后续编号默认格式 |
 
 前三种范围可加 `updateFuture:true`，同时更新后续默认。只保存样式预设时使用 `indices:[]`，并提供 `preset`；修改已有公式时在 `indices` 中列出目标。
@@ -123,17 +128,17 @@ When you open a document with a saved preset, newly inserted equations automatic
 
 ## Choose a numbering scope
 
-Set the format under **Word layout**, then open Apply numbering format to a copy.
+Set the format under **Document → Word layout**, then choose “Preview renumbering all existing (copy)…” or “Set default for future formulas only (copy)…”. In a live Word session, save the document in Word and select the saved `.docx` when prompted.
 
 | Menu option | Purpose |
 | --- | --- |
 | Current equation | Change the current Equation Lab equation’s number format |
-| Existing numbered equations | Apply the format to eligible Equation Lab numbers in the document |
+| Existing numbered equations | Apply the format to eligible Equation Lab and legacy MathType numbers |
 | Future equations only | Store the default for later numbered insertions while keeping existing formats |
 
 The first two options work on existing numbers. Choose Future equations only to set the later default separately. Review changed and skipped entries, save the copy, then open it in Word and choose Update Numbers to recalculate sequences and cross-references.
 
-Use the Word ribbon to adjust legacy MathType numbering. Update Numbers follows its existing fields and sequence-restart settings and updates related references.
+For legacy MathType numbers without individual bookmarks, the preflight supports recognized separator and bracket changes, such as `(2.1)` to `(2-1)`. If the change would alter the chapter or sequence fields, the report explains why the number is skipped.
 
 ## Connection diagnostics
 
@@ -141,13 +146,17 @@ Open the **Office plugin** panel to check the connection status. When reporting 
 
 ## Command line
 
+The [Equation Lab Skill](../skills/equation-lab/SKILL.md) gives AI agents the commands for listing, generating, batch editing, and verifying editable MathType equations. Use the Word ribbon to insert an equation at a specific position in existing text.
+
+In the App toolbar, open **AI** and turn on **AI collaboration** to see the status of local skill and command-line tasks. Start the work from your AI session. Turning the switch off stops status reporting while commands already running continue.
+
 The commands and JSON examples above work directly with `.docx` files. Equation indices start at zero. Numbering plans support four scopes:
 
 | `scope` | Selection |
 | --- | --- |
 | `current` | One equation specified by `index` |
 | `selected` | Multiple equations specified by `indices` |
-| `all` | Check all equations and process existing Equation Lab numbers |
+| `all` | Check all equations and process eligible Equation Lab and legacy MathType numbers |
 | `future` | Set the default format for later numbers |
 
 For the first three scopes, add `updateFuture:true` to update the future default too. To store only a style preset, use `indices:[]` with `preset`. List target indices when changing existing equations.

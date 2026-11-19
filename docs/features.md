@@ -4,6 +4,8 @@ Word 的 Equation Lab 功能区可以插入、编辑、编号和引用公式。�
 
 编辑器支持模板与 LaTeX 输入、字体字号、分式、根式、求和、积分、矩阵、收藏，以及 PDF、SVG、PNG 导出。界面可切换中文和英文。
 
+在 Word 公式的可编辑画布中，点收藏会把公式插入光标处。点“更新公式”或“完成并插入”后才写回 Word。
+
 ## 选择文档和插入公式
 
 左侧顶部将当前文档的图标、文件名和下拉箭头居中排列。点开菜单就能选择 Word 当前打开的文档，同名文件也能区分。菜单里的“刷新”更新文档列表和可用状态；公式列表上方的“刷新”重新读取当前文档的公式。
@@ -50,7 +52,9 @@ Word 功能区的“插入引用”打开可搜索的列表。通过编号和附
 
 要把当前设置用于更多公式，打开 **文档检查与批量处理 → 应用当前公式样式…**，选择当前公式或全文公式，预检后另存副本。选择“保存文档预设（另存副本）”可为后续公式保存一套样式；“将文档预设载入当前草稿”可将它用于正在编辑的公式。
 
-独立公式与上下文的留白在 **Word 的“段落”设置 → 段前、段后** 调整。修改“Equation Lab”段落样式可应用到使用该样式的公式段落。行内公式随正文行距排版，正文可用自动或最小值行距。
+独立公式与上下文的留白在 **Word 的“段落”设置 → 段前、段后** 调整。修改“Equation Lab”段落样式可应用到使用该样式的公式段落。
+
+正文中的上下叠放分式可能撑高当前行。行内插入时，可在 **常用结构 → 小分式** 选择较矮的上下叠放样式，或在 LaTeX 中使用 `\tfrac{U}{T}`。公式较复杂时，可以改用居中公式，让它单独占一行。
 
 ## 连接诊断
 
@@ -65,6 +69,8 @@ Word 功能区的“插入引用”打开可搜索的列表。通过编号和附
 Use the Word ribbon to insert, edit, number, and reference equations. Double-click a MathType equation to open its editor, then browse and search the document’s equations in the sidebar.
 
 The editor offers templates and LaTeX input, fonts and sizes, fractions, radicals, sums, integrals, matrices, favorites, and PDF, SVG, and PNG export. The interface is available in Chinese and English.
+
+In an editable Word equation, choose a favorite to insert it at the caret. Use Update Equation or Finish and Insert to write it to Word.
 
 ## Choose a document and insert an equation
 
@@ -112,7 +118,9 @@ Use **Layout → Spacing** in the inspector to adjust distances inside the equat
 
 To reuse the current style, open **Document checks and batch tools → Apply current formula style…**. Choose the current equation or all equations, review the preview, and save a copy. Store document preset in a copy saves a style for future equations; Load document preset into draft applies it to the current draft.
 
-For space around display equations, adjust Before and After in **Word → Paragraph**. Editing the Equation Lab paragraph style applies to paragraphs using that style. Inline equations follow body line spacing; automatic or at-least spacing works well.
+For space around display equations, adjust Before and After in **Word → Paragraph**. Editing the Equation Lab paragraph style applies to paragraphs using that style.
+
+A stacked fraction can make a line of body text taller. For an inline equation, use **Common → Small fraction** or enter `\tfrac{U}{T}` for a shorter stacked fraction. Use a centered equation to give a more complex formula its own line.
 
 ## Connection diagnostics
 

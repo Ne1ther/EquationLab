@@ -39,7 +39,13 @@ export function localServer({port=37952}={}) {
     if(currentPort!==37952)throw Error('原生 Word 服务只在本机 37952 端口提供');
     const limit=nativeRequest?48_000_000:30_000_000;
     let chunks=[],size=0;for await(const c of req){size+=c.length;if(size>limit)throw Error('请求过大');chunks.push(c);}
-    const body=JSON.parse(Buffer.concat(chunks).toString()),result=await operation(req.url.replace(/^\/api\//,''),body);
+    const body=JSON.parse(Buffer.concat(chunks).toString());
+    let result;
+    try{result=await operation(req.url.replace(/^\/api\//,''),body);}
+    catch(error){
+     if(nativeRequest)trace({stage:'native',operation:req.url,state:'rejected',status:error.statusCode||400});
+     throw error;
+    }
     trace({stage:nativeRequest?'native':'ribbon',operation:req.url,state:result.state||'opened'});
     res.writeHead(200,{'Content-Type':'application/json','Cache-Control':'no-store'});return res.end(JSON.stringify(result));
    }

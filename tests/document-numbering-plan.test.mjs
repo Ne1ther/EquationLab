@@ -48,6 +48,28 @@ test('future-only changes the document default while existing formulas and refer
  const same=await preflightNumbering(buffer,{scope:'future',numberFormat:'[#E1]'});assert.equal(same.documentDefaultChanged,false);assert.deepEqual((await applyNumbering(buffer,same)).buffer,buffer);
 });
 
+test('batch reformats unreferenced MathType fields while retaining the hidden sequence and OLE bytes',async()=>{
+ const shared=await createDocx(['x','y'].map(latex=>({latex,layout:{mode:'numbered-right',numberFormat:'(#C1.#E1)',chapter:3}})),{numberingFamily:'mathtype'});
+ const input=await mutate(shared,xml=>xml.replace(/<w:bookmark(?:Start|End)\b[^>]*\/>/g,'').replaceAll('ARABIC','Arabic'));
+ const before=await inspectDocx(input);
+ const plan=await preflightNumbering(input,{scope:'all',numberFormat:'(#C1-#E1)'});
+ assert.equal(plan.summary.ready,2,JSON.stringify(plan.targets));
+ const output=await applyNumbering(input,plan);
+ assert.deepEqual(await numbers(output.buffer),['(3-1)','(3-2)']);
+ const after=await inspectDocx(output.buffer);
+ for(let i=0;i<before.objects.length;i++){
+  assert.deepEqual(after.objects[i].ole,before.objects[i].ole);
+  assert.equal(after.objects[i].layout.bookmarkName,null);
+ }
+ const originalXml=await before.zip.file(before.mainPart).async('string');
+ const outputXml=await after.zip.file(after.mainPart).async('string');
+ const hidden=/SEQ MTEqn \\h[^<"]*/g;
+ assert.deepEqual(outputXml.match(hidden),originalXml.match(hidden));
+ const counterChange=await preflightNumbering(input,{scope:'all',numberFormat:'(#E1)'});
+ assert.equal(counterChange.summary.skipped,2);
+ assert.match(counterChange.targets[0].reason,/counters/);
+});
+
 test('explicit reset and repeat switches survive format changes, including Word complex fields',async()=>{
  let input=await mutate(await fixture(),xml=>xml.replace('SEQ EquationLab \\n \\* ARABIC','SEQ EquationLab \\r 7 \\* ARABIC').replace(/(SEQ EquationLab \\r 7[^>]*>\s*<w:r><w:t[^>]*>)1(<\/w:t>)/,'$17$2'));
  // Set the actual displayed counter explicitly; the formatter changes format,

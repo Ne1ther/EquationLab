@@ -5,6 +5,27 @@ import {readFile} from 'node:fs/promises';
 import {createDocx,inspectDocx} from '../src/document.mjs';
 const source=await readFile(new URL('../desktop/sidebar-state.js',import.meta.url),'utf8');
 function publisher(){const c=vm.createContext({});vm.runInContext(source,c);return c.createSidebarPublisher();}
+test('A progressive 112-row directory preserves position IDs when real metadata arrives',()=>{
+ const owner={index:0,latex:'y^2',application:'MathType'};
+ const partial={catalogProof:'receipt',documentTotal:112,documentPosition:25,activeIndex:0,documentLoading:true,objects:[owner]};
+ const p=publisher(),first=p.snapshot(partial);
+ assert.equal(first.objects.length,112);
+ assert.equal(first.objects[25].latex,'y^2');
+ assert.equal(first.objects[25].label,'公式 26');
+ assert.ok(first.objects.every((row,id)=>row.id===id&&row.position===id+1));
+ assert.ok(first.objects.filter(row=>row.id!==25).every(row=>!row.latex&&!row.image&&!row.numberText));
+ owner.layout={numberText:'(2.3)'};
+ p.invalidate(partial,[0]);
+ const update=p.snapshot(partial).delta;
+ assert.equal(update.upserts.length,1);
+ assert.equal(update.upserts[0].id,25);
+ assert.equal(update.upserts[0].label,'公式 26');
+ assert.equal(update.upserts[0].numberText,'(2.3)');
+ partial.documentLoading=false;partial.documentLoadFailed=true;
+ assert.equal(p.snapshot(partial).objects[111].numberStatus,'pending');
+ const full={objects:Array.from({length:112},(_,index)=>({index,latex:'x_'+index}))};
+ assert.deepEqual(Array.from(p.snapshot(full).objects,row=>row.id),Array.from(first.objects,row=>row.id));
+});
 test('500-row sidebar does no row work while only editor state changes; a thumbnail updates one row',()=>{
  let reads=0;const doc={objects:Array.from({length:500},(_,index)=>({index,get latex(){reads++;return 'x_'+index;},application:'MathType',image:null}))};
  const p=publisher(),first=p.snapshot(doc);assert.equal(first.delta.reset.length,500);assert.equal(reads,500);
@@ -25,6 +46,22 @@ test('retired documents reset to empty and stale thumbnail completions cannot ch
 test('a reloaded web editor resets a retained native sidebar with a new publisher identity',()=>{
  const doc={objects:[{index:0,latex:'x'}]};assert.notEqual(publisher().snapshot(doc).delta.generation,publisher().snapshot(doc).delta.generation);
 });
+test('Number freshness publishes a compact status update without resending document thumbnails',()=>{
+ const image='data:image/png;base64,'+Buffer.alloc(18_000,37).toString('base64');
+ const doc={objects:Array.from({length:112},(_,index)=>({index,layout:{numberText:'('+(index+1)+')'},latex:'x_'+index,application:'MathType',image}))};
+ const p=publisher(),first=p.snapshot(doc).delta;
+ doc.numberingRefreshNeeded=true;
+ const stale=p.snapshot(doc);
+ assert.ok(!Object.hasOwn(stale.delta,'reset'),'a freshness-only revision must not reset document rows');
+ assert.deepEqual(JSON.parse(JSON.stringify(stale.delta)),{generation:first.generation,baseRevision:1,revision:2,numberFreshness:'stale'});
+ assert.ok(stale.objects.every(row=>row.numberStatus==='stale'&&row.image===image));
+ assert.ok(Buffer.byteLength(JSON.stringify(stale.delta))<160);
+ assert.equal(p.snapshot(doc).delta,null);
+ p.reset();
+ const reset=p.snapshot(doc).delta;
+ assert.notEqual(reset.generation,first.generation);
+ assert.equal(reset.reset[0].numberStatus,'stale');
+});
 test('real DOCX number metadata reaches rows, later deltas and snapshot refreshes without replacing ids',async()=>{
  const bytes=await createDocx([{latex:'x',layout:{mode:'numbered-right',chapter:3,equation:28,numberFormat:'(#C1.#E1)'}},{latex:'y',layout:{mode:'inline'}}],{fragment:true});
  const doc=await inspectDocx(bytes),p=publisher(),initial=p.snapshot(doc);
@@ -32,12 +69,13 @@ test('real DOCX number metadata reaches rows, later deltas and snapshot refreshe
  assert.equal(initial.objects[0].numberStatus,'snapshot');
  doc.objects[0].layout.numberText='(4.1)';doc.objects[1].layout.numberText='(4.1)';p.invalidate(doc,[0,1]);
  const update=p.snapshot(doc).delta;assert.deepEqual(Array.from(update.upserts,item=>[item.id,item.numberText]),[[0,'(4.1)'],[1,'(4.1)']]);
- doc.numberingRefreshNeeded=true;assert.equal(p.snapshot(doc).delta.reset[0].numberStatus,'stale');
+ doc.numberingRefreshNeeded=true;assert.equal(p.snapshot(doc).objects[0].numberStatus,'stale');
  doc.numberingRefreshNeeded=false;doc.objects[0].layout.numberText=null;p.invalidate(doc,[0]);
- const refreshed=p.snapshot(doc);assert.equal(refreshed.objects[0].numberText,null);assert.equal(refreshed.objects[0].id,0);assert.equal(refreshed.objects[0].position,1);
+ const refreshed=p.snapshot(doc);assert.equal(refreshed.delta.numberFreshness,'snapshot');assert.equal(refreshed.delta.upserts.length,1);assert.equal(refreshed.delta.upserts[0].numberText,null);
+ assert.equal(refreshed.objects[0].numberText,null);assert.equal(refreshed.objects[0].id,0);assert.equal(refreshed.objects[0].position,1);assert.equal(refreshed.objects[1].numberStatus,'snapshot');
  const partial={documentPosition:27,documentLoading:true,objects:[{index:0,latex:'z'}]};
  const pending=p.snapshot(partial);assert.equal(pending.objects[0].numberText,null);assert.equal(pending.objects[0].position,28);assert.equal(pending.objects[0].numberStatus,'pending');
  partial.objects[0].layout={numberText:'(3.28)'};p.invalidate(partial,[0]);assert.equal(p.snapshot(partial).delta.upserts[0].numberText,'(3.28)');
- partial.documentLoading=false;assert.equal(p.snapshot(partial).delta.reset[0].numberStatus,'snapshot');
+ partial.documentLoading=false;assert.equal(p.snapshot(partial).delta.numberFreshness,'snapshot');
  p.snapshot(doc);p.invalidate(partial,[0]);assert.equal(p.snapshot(doc).delta,null,'late metadata cannot affect a different document');
 });

@@ -1,25 +1,42 @@
 (function(root){
  // Input/selection updates do not walk or serialize document rows. Only list
- // replacement or explicit row changes produce a bridge payload.
+ // replacement, row changes or number freshness updates produce a bridge payload.
  root.createSidebarPublisher=function(){
   const origin=root.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2));
-  let current,metadataState,rows=[],epoch=0,revision=0,reset=true;const dirty=new Set();
-  const row=(object,document)=>{
+  let current,numberFreshness,rows=[],epoch=0,revision=0,reset=true;const dirty=new Set();
+  const numberStatus=(freshness,numberText)=>freshness==='stale'?'stale':freshness==='loading'&&!numberText?'pending':'snapshot';
+  const row=(object,document,freshness,id=object.index)=>{
    const numberText=typeof object.layout?.numberText==='string'?object.layout.numberText.trim():'';
-   return {id:object.index,position:document.documentPosition===undefined?object.index+1:document.documentPosition+1,label:'公式 '+(object.index+1),detail:object.error||'原生 MathType · '+object.application,latex:object.latex||'',image:object.image||null,readOnly:!!object.error,numberText:numberText||null,numberStatus:document.numberingRefreshNeeded?'stale':!numberText&&document.documentLoading?'pending':'snapshot'};
+   return {id,position:document.documentPosition===undefined?object.index+1:document.documentPosition+1,label:'公式 '+(id+1),detail:object.error||'原生 MathType · '+object.application,latex:object.latex||'',image:object.image||null,readOnly:!!object.error,numberText:numberText||null,numberStatus:numberStatus(freshness,numberText)};
   };
+  function rowsFor(document,freshness){
+   if(!document?.catalogProof)return (document?.objects||[]).map(object=>row(object,document,freshness));
+   const position=document.documentPosition,owner=document.objects?.[document.activeIndex];
+   return Array.from({length:document.documentTotal},(_,id)=>{
+    if(id===position&&owner)return row(owner,document,freshness,id);
+    return {id,position:id+1,label:'公式 '+(id+1),detail:'在 Word 中打开此公式',latex:'',image:null,readOnly:false,numberText:null,numberStatus:'pending'};
+   });
+  }
   return {
    reset(){reset=true;},
    invalidate(document,indices){if(document!==current)return;if(indices)for(const index of indices)dirty.add(index);else reset=true;},
    snapshot(document){
-    const nextMetadataState=!!document?.numberingRefreshNeeded+':'+!!document?.documentLoading+':'+!!document?.documentLoadFailed;
-    if(document!==current||nextMetadataState!==metadataState){current=document;metadataState=nextMetadataState;reset=true;}
+    const nextFreshness=document?.numberingRefreshNeeded?'stale':document?.documentLoading||document?.catalogProof?'loading':'snapshot';
+    const freshnessChanged=nextFreshness!==numberFreshness;
+    if(document!==current){current=document;reset=true;}
     let delta=null;
-    if(reset){rows=(document?.objects||[]).map(object=>row(object,document));epoch++;revision=1;delta={generation:origin+':'+epoch,baseRevision:0,revision,reset:rows};reset=false;dirty.clear();}
-    else if(dirty.size){
-     const upserts=[];for(const index of dirty){const object=document?.objects[index];if(!object)continue;const next=row(object,document),position=rows.findIndex(item=>item.id===index);if(position>=0)rows[position]=next;else rows.push(next);upserts.push(next);}
-     dirty.clear();if(upserts.length)delta={generation:origin+':'+epoch,baseRevision:revision,revision:++revision,upserts};
+    if(reset){rows=rowsFor(document,nextFreshness);epoch++;revision=1;delta={generation:origin+':'+epoch,baseRevision:0,revision,reset:rows};reset=false;dirty.clear();}
+    else if(freshnessChanged||dirty.size){
+     if(freshnessChanged)rows=rows.map(item=>{
+      const status=numberStatus(nextFreshness,item.numberText);
+      return item.numberStatus===status?item:{...item,numberStatus:status};
+     });
+     const upserts=[];for(const index of dirty){const object=document?.objects[index];if(!object)continue;const id=document.catalogProof?document.documentPosition:index,next=row(object,document,nextFreshness,id),position=rows.findIndex(item=>item.id===id);if(position>=0)rows[position]=next;else rows.push(next);upserts.push(next);}
+     dirty.clear();
+     if(freshnessChanged||upserts.length)delta={generation:origin+':'+epoch,baseRevision:revision,revision:++revision,
+      ...(freshnessChanged?{numberFreshness:nextFreshness}:{}),...(upserts.length?{upserts}:{})};
     }
+    numberFreshness=nextFreshness;
     return {objects:rows,delta};
    }
   };

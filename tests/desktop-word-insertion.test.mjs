@@ -221,6 +221,39 @@ test('changing an existing (1) to a chapter format creates missing counters; an 
  }
 });
 
+test('Opening an equation whose layout is unknown shows the document default without requesting a Word numbering write',async()=>{
+ for(const addNumber of [false,true]){
+  const editor=createEditor(),c=editor.context;
+  editor.element('layout-mode').options=[{value:'unknown',textContent:'未读取文档信息'}];
+  vm.runInContext(slice('function loadObjectLayout(',"$('arrange').onclick"),c);
+  const document=documentSnapshotFor(0);
+  document.wordNumberingSupported=true;
+  document.wordNumberingContextSupported=true;
+  document.documentNumberFormat='(#C1.#E1)';
+  document.objects[0].layout={mode:'unknown',numberText:null,chapter:null,section:null};
+  let submitted;
+  editor.setNativeBehavior(async(action,payload)=>{
+   if(action==='wordSessionRead')return document;
+   if(action==='wordSessionSave'){submitted=payload;return {acknowledgement:false};}
+   return {};
+  });
+  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+  c.loadObjectLayout(c.selected);
+  assert.equal(editor.element('layout-mode').value,'unknown');
+  assert.equal(editor.element('layout-format').value,'(#C1.#E1)');
+  assert.equal(c.wordSessionChanged(),false);
+  if(addNumber){
+   c.window.nativeApplyNumberingFormat();
+   assert.equal(c.wordSessionChanged(),true);
+  }else c.mf.value='x+2';
+  assert.equal(await c.window.nativeCommitWordSession(),true,editor.messages.map(m=>m.text).join(' | '));
+  if(addNumber)assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering)),{
+   format:'(#C1.#E1)',side:'right',context:{chapter:1,section:1,expectedChapter:0,expectedSection:0}
+  });
+  else assert.equal(submitted.numbering,undefined);
+ }
+});
+
 test('Word renumbering reloads the same clean equation and preserves a dirty draft without detaching',async()=>{
  for(const dirty of [false,true]){
   const editor=createEditor(),c=editor.context;

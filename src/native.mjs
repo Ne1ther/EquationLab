@@ -839,7 +839,7 @@ function renderTemplate(n,ctx){
   if(n.options)previewError('Nudged templates cannot be faithfully represented');
   const selector=n.selector,variation=n.variation;
   if(n.templateOptions&&!([0,1,2,3,4,5,6,7,8,9].includes(selector)&&[1,2].includes(n.templateOptions))&&!(selector===15&&n.templateOptions===1))previewError('Unknown template options');
-  const value=s=>s?renderNodes(s.type===1?s.children:[s],ctx):'';
+  const value=(s,context=ctx)=>s?renderNodes(s.type===1?s.children:[s],context):'';
   if(selector<=9){
     let left,right;
     if(selector===9){if(variation&~0x33)previewError('Unknown interval variation');const d=['(',')','[',']'];left=d[variation&3];right=d[variation>>4&3];}
@@ -852,7 +852,12 @@ function renderTemplate(n,ctx){
     return `\\left${escape(left)}${value(slots[0])}\\right${escape(right)}`;
   }
   if(selector===10){if(variation!==0&&variation!==1)previewError('Unknown root variation');const {slots}=slotsFor(n,2,{oldRoot:variation===0});if(variation===0&&slots[1]&&!(slots[1].options&1)&&value(slots[1]))previewError('Unexpected square-root index');return `\\sqrt${variation?`[${value(slots[1])}]`:''}{${value(slots[0])}}`;}
-  if(selector===11){if(![0,1,2,3,6].includes(variation))previewError('Unknown fraction variation');const {slots}=slotsFor(n,2),a=value(slots[0]),b=value(slots[1]);return variation&2?ctx.fontToken?`{${variation&1?'\\scriptstyle ':''}{}^{${a}}\\! /\\!{}_{${b}}}`:variation===2?preservedMacro('sfrac',a,b):preservedMacro('mtfrac',variation,a,b):`\\${variation?'tfrac':'frac'}{${a}}{${b}}`;}
+  if(selector===11){
+    if(![0,1,2,3,6].includes(variation))previewError('Unknown fraction variation');
+    const {slots}=slotsFor(n,2),inside=ctx.fontToken?ctx:{...ctx,nonDisplayMath:true};
+    const a=value(slots[0],inside),b=value(slots[1],inside);
+    return variation&2?ctx.fontToken?`{${variation&1?'\\scriptstyle ':''}{}^{${a}}\\! /\\!{}_{${b}}}`:variation===2?preservedMacro('sfrac',a,b):preservedMacro('mtfrac',variation,a,b):`\\${variation?'tfrac':'frac'}{${a}}{${b}}`;
+  }
   if([12,13].includes(selector)){if(variation&~1)previewError('Unknown bar variation');const {slots}=slotsFor(n,1),command=selector===12?'underline':'overline',body=value(slots[0]);return variation&&!ctx.fontToken?preservedMacro('mtdouble'+command,body):`\\${command}{${variation?`\\${command}{${body}}`:body}}`;}
   if(selector===14){
     if([5,9,13,21,25,29,37,41,45,6,10,14,22,26,30,38,42,46].includes(variation)){
@@ -875,7 +880,11 @@ function renderTemplate(n,ctx){
     const original=decor.length===expected.length&&decor.every((c,i)=>c.code===expected[i].code&&c.typeface===expected[i].typeface&&!c.children?.length);
     if(!legacy&&!original)previewError('Custom large-operator glyph is unsupported');
     if(!(variation&0x10)&&value(slots[1])||!(variation&0x20)&&value(slots[2]))previewError('Hidden operator limits contain unrepresented content');
-    const sum=!!(variation&0x40),defaultSum=!!bigOperators[command].sum,placement=sum===defaultSum?'':sum?'\\limits':'\\nolimits';
+    const sum=!!(variation&0x40),defaultSum=!!bigOperators[command].sum;
+    // Under a fraction the editor defaults movable limits to side scripts.
+    // MathType records their placement explicitly regardless of math style.
+    const forceStacked=ctx.nonDisplayMath&&sum&&!!(variation&0x30);
+    const placement=sum===defaultSum&&!forceStacked?'':sum?'\\limits':'\\nolimits';
     if(ctx.fontToken&&(variation&0x100||original&&!legacy))return `\\elStretchIntegral{${variation}}{${value(slots[0])}}{${value(slots[1])}}{${value(slots[2])}}`;
     if(variation&0x100)return preservedMacro(integralMacroName(variation),n.templateOptions,value(slots[0]),value(slots[1]),value(slots[2]));
     // Symbol has the single integral outline, but no Unicode double/triple

@@ -1,5 +1,27 @@
 # 版本记录
 
+## 0.7.0 · build104
+
+- **本地 AI Skill**。工具栏点 **AI → 安装或导出 Skill… → 安装到 Codex**，即可用 `$equation-lab` 检查 Word 公式、编号和引用，或批量编辑后另存副本。也可以导出给同一台 Mac 上支持 Skill 的客户端。
+- **长文档目录**。支持的 Word 文档可先显示可点选的公式目录，再补齐编号和公式内容。缩略图按需加载。
+- **编辑体验**。窄窗缩放菜单更易读，侧栏能区分空文档和读取失败。行内公式优先展示小分式模板。
+
+在 Codex 里试一句：`请用 $equation-lab 检查这份 Word 的公式、编号和交叉引用。`
+
+适用于 Apple Silicon 和 macOS 14+。实时联动需要桌面版 Word for Mac。安装前请保存文档并退出 Word 和 Equation Lab。
+
+---
+
+- **Local AI Skill.** Choose **AI → Install or Export Skill… → Install for Codex**. Use `$equation-lab` to check Word equations, numbers, and references, or apply batch edits to a new copy. You can also export it to another client that supports Skills on the same Mac.
+- **Long-document directory.** Supported Word documents can show a selectable equation directory first, then fill in equation text and numbers. Thumbnails load on demand.
+- **A clearer editor.** The zoom menu stays readable in narrow windows, and the sidebar distinguishes empty documents from read failures. The compact fraction template comes first for inline equations.
+
+Try in Codex: `Use $equation-lab to check this Word file’s equations, numbers, and cross-references.`
+
+Requires Apple Silicon and macOS 14 or later. Live integration requires desktop Word for Mac. Save your documents and quit Word and Equation Lab before installing.
+
+[下载 0.7.0 · Download 0.7.0](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.0)
+
 ## 0.6.15 · build103
 
 修复旧 MathType 编号与跨段落引用书签的兼容问题，以及编号失败后的部分写入。取消编辑和引用选择不再预先修改全文编号；失败时恢复正文与编号设置。改善长文档导航、快照复用、App 启动和预览调度，并更新彩色工作台、模板分类及窄窗口布局。

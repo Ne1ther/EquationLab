@@ -81,8 +81,8 @@ function installActualWordBrowse(context){
 
 function installWordCommit(context){
  const bind=appSource.slice(appSource.indexOf('async function bindSelectedWordFormula()'),appSource.indexOf('window.nativeCommitWordSession=()=>{'));
- const commit=appSource.slice(appSource.indexOf('window.nativeCommitWordSession=()=>{'),appSource.indexOf('async function finishWordSave()'));
- const finish=appSource.slice(appSource.indexOf('async function finishWordSave()'),appSource.indexOf('async function waitForWordSave()'));
+ const commit=appSource.slice(appSource.indexOf('window.nativeCommitWordSession=()=>{'),appSource.indexOf('async function finishWordSave('));
+ const finish=appSource.slice(appSource.indexOf('async function finishWordSave('),appSource.indexOf('async function waitForWordSave()'));
  const unavailable=appSource.split('\n').find(line=>line.startsWith('function wordSourceUnavailable()'));
  vm.runInContext([unavailable,bind,commit,finish].join('\n'),context);
 }
@@ -396,4 +396,40 @@ test('Thirty-formula Word reads stay bound to their requested native object and 
  const sorted=[...elapsed].sort((a,b)=>a-b),median=sorted[Math.floor(sorted.length/2)],p95=sorted[Math.ceil(sorted.length*.95)-1];
  assert.ok(elapsed.every(Number.isFinite));assert.equal(elapsed.length,30);
  t.diagnostic(`30-object Word read probe: total=${elapsed.reduce((a,b)=>a+b,0).toFixed(1)} ms; p50=${median.toFixed(1)} ms; p95=${p95.toFixed(1)} ms; max=${Math.max(...elapsed).toFixed(1)} ms`);
+});
+
+test('A full Word snapshot cannot clear a newer observed numbering revision',async()=>{
+ const workspaceCode=await readFile(new URL('../desktop/word-document-workspace.js',import.meta.url),'utf8');
+ const wiring=appSource.slice(appSource.indexOf('window.wordDocumentWorkspace=window.createWordDocumentWorkspace'),appSource.indexOf('window.nativeResumeWordDocument='));
+ const ticket='c'.repeat(64),identity='word:1:5',nativeSha256='d'.repeat(64);
+ const owner={index:0,nativeSha256,latex:'x',editorBaseline:'x'};
+ const initial={hasDocumentContext:true,documentIdentity:identity,documentName:'A.docx',documentSnapshot:7,
+  documentNumberingRevision:3,documentLoading:true,documentPosition:0,documentTotal:2,objects:[owner]};
+ const full={hasDocumentContext:true,wordTicket:ticket,documentIdentity:identity,documentName:'A.docx',documentSnapshot:8,
+  documentNumberingRevision:3,documentContext:{count:2},activeIndex:0,objects:[{index:0,nativeSha256,latex:'x',layout:{numberText:'(1)'}},{index:1,latex:'y',layout:{numberText:'(2)'}}]};
+ let notifyReadStarted,finishRead;
+ const readStarted=new Promise(resolve=>{notifyReadStarted=resolve;}),readGate=new Promise(resolve=>{finishRead=resolve;});
+ const {context}=createEditor(async action=>{
+  if(action==='wordSessionDocument'){notifyReadStarted();return readGate;}
+  if(action==='wordWorkspaceStatus')return {connected:true,revision:9,active:{identity,name:'A.docx'},
+   documents:[{identity,name:'A.docx',numberingRevision:4}]};
+  return {};
+ });
+ Object.assign(context,{wordTicket:ticket,source:initial,selected:owner,validationRunning:null,valid:false});
+ context.mf.value='x';
+ vm.runInContext(workspaceCode+'\n'+wiring,context);
+ const loading=context.loadWordDocument(ticket,initial);
+ await readStarted;
+ try{
+  await context.window.wordDocumentWorkspace.refreshList();
+  assert.equal(initial.liveNumberingRevision,4);
+  assert.equal(initial.numberingRefreshNeeded,true);
+ }finally{
+  finishRead({state:'available',document:full});
+ }
+ await loading;
+ assert.equal(context.source.documentNumberingRevision,3);
+ assert.equal(context.source.liveNumberingRevision,4);
+ assert.equal(context.source.numberingRefreshNeeded,true);
+ assert.equal(context.window.wordDocumentWorkspace.visibleSource(null).numberingRefreshNeeded,true);
 });

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFile} from 'node:fs/promises';
+import {access,readFile} from 'node:fs/promises';
+import {deflateRawSync} from 'node:zlib';
 import {nativeSessionOperation as op} from '../src/word-native-session.mjs';
 import {createDocx,flatOpc,inspectDocx} from '../src/document.mjs';
 import {inspectOle} from '../src/native.mjs';
@@ -20,12 +21,15 @@ test('The exact current owner is editable before the full list; enrichment retai
  try{
   const read=await op('native-read',{ticket});assert.equal(read.document.index,0);assert.equal(read.document.position,index);assert.equal(read.document.count,30);
   const current=await local(()=>desktopRequest({action:'wordSessionRead',payload:{ticket}}));
+  assert.match(read.catalogProof,/^\d{13}\.[0-9a-f]{64}$/);
+  assert.equal(current.catalogProof,read.catalogProof);
   assert.equal(current.documentLoading,true);assert.equal(current.activeIndex,0);assert.equal(current.documentPosition,index);assert.equal(current.objects.length,1);assert.equal(current.objects[0].nativeSha256,doc.objects[index].nativeSha256);
   await assert.rejects(op('native-navigate',{ticket,index:1}),/navigation/);
   assert.deepEqual(await op('native-enrich-request',{ticket}),{state:'pending'});
   assert.equal((await op('native-poll',{ticket})).loadDocument,true);
   await op('native-enrich',{ticket,session:read.session,initialSnapshot:100,document:context(false)});
   const loaded=await local(()=>desktopRequest({action:'wordSessionDocument',payload:{ticket}}));
+  assert.equal(loaded.document.catalogProof,undefined);
   assert.equal(loaded.state,'available');assert.equal(loaded.document.activeIndex,index);assert.equal(loaded.document.wordTicket,ticket);
   assert.deepEqual(loaded.document.objects.map(o=>o.nativeSha256),doc.objects.map(o=>o.nativeSha256));
   await assert.rejects(local(()=>desktopRequest({action:'wordSessionThumbnails',payload:{ticket,indices:[0],documentIdentity:'live:42',documentSnapshot:100}})),/snapshot is no longer current/);
@@ -56,4 +60,22 @@ test('List failure leaves the current owner and native data available for a dire
 test('A partial capture must contain exactly the activated equation, not another formula or a full list',async()=>{
  await assert.rejects(op('native-open',{session:String(seq++),native,document:{...context(),ooxml:full}}),/equation count/);
  await assert.rejects(op('native-open',{session:String(seq++),native:inspectOle(doc.objects[0].ole).native.toString('base64'),document:context()}),/activated equation/);
+});
+
+test('An active segmented load cannot hold up a save or install a snapshot after the session ends',async()=>{
+ const opened=await open(),ticket=opened.ticket;
+ try{
+  const partial=await op('native-read',{ticket});
+  const document={...context(false),encoding:'parts-deflate-base64',ooxml:deflateRawSync(JSON.stringify([full])).toString('base64')};
+  const loading=op('native-enrich',{ticket,session:partial.session,initialSnapshot:100,document});
+  const rejected=assert.rejects(loading,/no longer current|expired/);
+  const read=await op('native-read',{ticket});
+  assert.equal(read.document.scope,'selection','an independent read can still access the validated current equation');
+  await op('native-complete',{ticket,native,pdf:Buffer.from('%PDF-1.7\n').toString('base64'),width:12,height:14});
+  const final=await op('native-poll',{ticket});
+  assert.equal(final.state,'complete');assert.equal(final.native,native);
+  await rejected;
+  await assert.rejects(access(partial.path));
+  await assert.rejects(op('native-read',{ticket}),/expired/);
+ }finally{await close(ticket);}
 });

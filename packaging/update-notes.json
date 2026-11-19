@@ -1,5 +1,5 @@
 {
-  "version": "0.6.15",
-  "zh": "修复旧 MathType 编号与跨段落引用书签的兼容问题，以及编号失败后的部分写入。取消编辑和引用选择不再预先修改全文编号；失败时恢复正文与编号设置。改善长文档导航、快照复用、App 启动和预览调度，并更新彩色工作台、模板分类及窄窗口布局。",
-  "en": "Fixes legacy MathType numbering with enclosing reference bookmarks and partial writes after numbering failures. Cancelling an editor or reference selection no longer upgrades document numbering in advance; failures restore document edits and numbering settings. Improves long-document navigation, snapshot reuse, app startup and preview scheduling, and refreshes the colorful workbench, template categories and narrow-window layout."
+  "version": "0.7.0",
+  "zh": "工具栏 AI → 安装或导出 Skill… → 安装到 Codex。用 $equation-lab 检查 Word 公式、编号和引用，或批量编辑后另存副本。长文档可先显示公式目录，再补齐内容和按需加载缩略图；窄窗口与重试提示也更清楚。",
+  "en": "Choose AI → Install or Export Skill… → Install for Codex. Use $equation-lab to check Word equations, numbering, and references, or batch-edit a new copy. Long documents can show the equation directory first, with content and thumbnails loaded as needed. Narrow windows and retry prompts are clearer."
 }

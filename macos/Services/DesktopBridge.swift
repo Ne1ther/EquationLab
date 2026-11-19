@@ -96,6 +96,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var wordSessionDelivered = false
     private var wordOpenStarted: CFAbsoluteTime?
     private var pendingWordTickets: [String] = []
+    private var filePanelPending = false
     private var wordToolIntents: [String: String] = [:]
     private var wordDocumentRequestIDs: [String: String] = [:]
     private var deliveringWordTicket: String?
@@ -109,7 +110,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func syncActiveWordWorkspace() {
         guard editorReady, let webView, editorWindow?.isVisible == true,
-              deliveringWordTicket == nil, pendingWordTickets.isEmpty, !wordDocumentRequestPending else { return }
+              deliveringWordTicket == nil, pendingWordTickets.isEmpty, !wordDocumentRequestPending, !filePanelPending else { return }
         // Keep the picker current while the window is visible behind Word.
         // Only a foreground editor may follow another document into an edit.
         let editorIsFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
@@ -474,21 +475,30 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func userContentController(_ userContentController: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any], let action = body["action"] as? String else { return }
+        func milliseconds(_ key: String, in payload: [String: Any], limit: Double) -> Double? {
+            guard let value = payload[key] as? NSNumber,
+                  CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
+            let number = value.doubleValue
+            return number.isFinite && number >= 0 && number < limit ? number : nil
+        }
         if action == "wordOpenTiming" {
             let keys: Set<String> = ["readMs", "prepareMs", "sidebarMs", "validateMs", "totalMs"]
             guard let payload = body["payload"] as? [String: Any], Set(payload.keys) == keys else { return }
-            func milliseconds(_ key: String) -> Double? {
-                guard let value = payload[key] as? NSNumber,
-                      CFGetTypeID(value) != CFBooleanGetTypeID() else { return nil }
-                let number = value.doubleValue
-                return number.isFinite && number >= 0 && number < 60_000 ? number : nil
-            }
-            guard let readMs = milliseconds("readMs"),
-                  let prepareMs = milliseconds("prepareMs"),
-                  let sidebarMs = milliseconds("sidebarMs"),
-                  let validateMs = milliseconds("validateMs"),
-                  let totalMs = milliseconds("totalMs") else { return }
+            guard let readMs = milliseconds("readMs", in: payload, limit: 60_000),
+                  let prepareMs = milliseconds("prepareMs", in: payload, limit: 60_000),
+                  let sidebarMs = milliseconds("sidebarMs", in: payload, limit: 60_000),
+                  let validateMs = milliseconds("validateMs", in: payload, limit: 60_000),
+                  let totalMs = milliseconds("totalMs", in: payload, limit: 60_000) else { return }
             EditorLifecycleLog.logger.info("word_open_timing read_ms=\(readMs, format: .fixed(precision: 1)) prepare_ms=\(prepareMs, format: .fixed(precision: 1)) sidebar_ms=\(sidebarMs, format: .fixed(precision: 1)) validate_ms=\(validateMs, format: .fixed(precision: 1)) total_ms=\(totalMs, format: .fixed(precision: 1))")
+            return
+        }
+        if action == "wordSaveTiming" {
+            guard let payload = body["payload"] as? [String: Any],
+                  let kind = payload["kind"] as? String, ["save", "insert"].contains(kind),
+                  let confirmedMs = milliseconds("confirmedMs", in: payload, limit: 120_000),
+                  let totalMs = milliseconds("totalMs", in: payload, limit: 120_000), totalMs >= confirmedMs else { return }
+            EditorLifecycleLog.logger.info("word_save_timing kind=\(kind, privacy: .public) confirmed_ms=\(confirmedMs, format: .fixed(precision: 1)) total_ms=\(totalMs, format: .fixed(precision: 1))")
+            recordWordConnectionOperation(kind: kind, stage: "finished", state: "committed", elapsedMs: confirmedMs, receiptObserved: true)
             return
         }
         if action == "editorMenu" {
@@ -510,7 +520,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             return
         }
         guard let id = body["id"] as? String else { return }
-        var payload = body["payload"] as? [String: Any] ?? [:]
+        let payload = body["payload"] as? [String: Any] ?? [:]
         if action == "confirmDraftDiscard" {
             let alert = NSAlert()
             alert.messageText = language.usesEnglish ? "Discard the recovery draft?" : "丢弃这份恢复草稿？"
@@ -552,28 +562,40 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if action == "open" {
             let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "docx")!]; panel.allowsMultipleSelection = false
             panel.message = t("打开含旧 MathType 公式的 .docx 文档，原文件会保留。")
-            guard panel.runModal() == .OK, let url = panel.url else { reply(id, ["ok": false, "cancelled": true]); return }
-            payload["path"] = url.path
-            run(id, action: "inspect", payload: payload); return
+            runAfterFileSelection(panel, id: id, action: "inspect", payload: payload, pathKey: "path")
+            return
         }
         if action == "preferencesImport" {
             let panel = NSOpenPanel(); panel.allowedContentTypes = [UTType(filenameExtension: "eqp") ?? .plainText]; panel.allowsMultipleSelection = false
-            guard panel.runModal() == .OK, let url = panel.url else { reply(id, ["ok": false, "cancelled": true]); return }
-            payload["path"] = url.path
+            runAfterFileSelection(panel, id: id, action: action, payload: payload, pathKey: "path")
+            return
+        }
+        if action == "chooseDocumentToolSource" {
+            let panel = NSOpenPanel()
+            panel.allowedContentTypes = [UTType(filenameExtension: "docx")!]
+            panel.allowsMultipleSelection = false
+            panel.message = language.usesEnglish
+                ? "Save the document in Word, then select the saved .docx as the source for the copy."
+                : "请先在 Word 保存，再选择用于生成副本的 .docx 文件。"
+            if let name = payload["name"] as? String { panel.nameFieldStringValue = name }
+            selectFile(panel, id: id) { bridge, url in
+                bridge.reply(id, ["ok": true, "data": ["path": url.path, "name": url.lastPathComponent]])
+            }
+            return
         }
         if action == "preferencesExport" || action == "exportGraphic" {
             let ext = action == "preferencesExport" ? "eqp" : payload["format"] as? String ?? "svg"
             guard ["eqp", "svg", "png", "pdf"].contains(ext) else { reply(id, ["ok": false, "error": "未知格式"]); return }
             let panel = NSSavePanel(); panel.allowedContentTypes = [UTType(filenameExtension: ext) ?? .data]; panel.nameFieldStringValue = "Equation Lab.\(ext)"
-            guard panel.runModal() == .OK, let url = panel.url else { reply(id, ["ok": false, "cancelled": true]); return }
-            payload["output"] = url.path
+            runAfterFileSelection(panel, id: id, action: action, payload: payload, pathKey: "output")
+            return
         }
         if action == "export" || action == "edit" || action == "arrange" || action == "documentTypographyApply" || action == "documentNumberingApply" {
             let panel = NSSavePanel(); panel.allowedContentTypes = [UTType(filenameExtension: "docx")!]
             panel.nameFieldStringValue = language.usesEnglish ? (action == "export" ? "MathType equation.docx" : action == "arrange" ? "Equations arranged-copy.docx" : "Equations edited-copy.docx") : (action == "export" ? "MathType原生公式.docx" : action == "arrange" ? "公式已编排-副本.docx" : "公式已编辑-副本.docx")
             panel.message = t("保存含原生 MathType 对象的 Word 文档")
-            guard panel.runModal() == .OK, let url = panel.url else { reply(id, ["ok": false, "cancelled": true]); return }
-            payload["output"] = url.path
+            runAfterFileSelection(panel, id: id, action: action, payload: payload, pathKey: "output")
+            return
         }
         if action == "copyLatex" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(payload["latex"] as? String ?? "", forType: .string)
@@ -583,6 +605,38 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             run(id, action: "preview", payload: payload, copyPNG: true); return
         }
         run(id, action: action, payload: payload)
+    }
+    private func selectFile(_ panel: NSSavePanel, id: String, completion: @escaping (DesktopBridge, URL) -> Void) {
+        guard !filePanelPending else {
+            reply(id, ["ok": false, "cancelled": true])
+            return
+        }
+        filePanelPending = true
+        // Leave the WebKit callback before AppKit lays out the remote file view.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let finish: (NSApplication.ModalResponse) -> Void = { [weak self] response in
+                guard let self else { return }
+                self.filePanelPending = false
+                guard response == .OK, let url = panel.url else {
+                    self.reply(id, ["ok": false, "cancelled": true])
+                    return
+                }
+                completion(self, url)
+            }
+            if let window = self.editorWindow, window.isVisible, window.attachedSheet == nil {
+                panel.beginSheetModal(for: window, completionHandler: finish)
+            } else {
+                panel.begin(completionHandler: finish)
+            }
+        }
+    }
+    private func runAfterFileSelection(_ panel: NSSavePanel, id: String, action: String, payload: [String: Any], pathKey: String) {
+        selectFile(panel, id: id) { bridge, url in
+            var selectedPayload = payload
+            selectedPayload[pathKey] = url.path
+            bridge.run(id, action: action, payload: selectedPayload)
+        }
     }
     private func run(_ id: String, action: String, payload: [String: Any], copyPNG: Bool = false) {
         guard let root = Bundle.main.resourceURL?.appendingPathComponent("engine"),
