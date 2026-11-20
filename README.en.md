@@ -5,7 +5,7 @@ I started this project to keep editing MathType equations in Word on a Mac. It a
 
 [中文](README.md)
 
-**[Download 0.7.2 (build106)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.2/Equation-Lab-0.7.2.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
+**[Download 0.7.3 (build107)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.3/Equation-Lab-0.7.3.pkg)** · [Releases](https://github.com/Ne1ther/EquationLab/releases) · [Install](docs/install.md)
 
 **Work with Word equations in your AI client.** Choose **AI → Install or Export Skill…** to install the shared Skill. Codex and DSH read the shared folder by default. Claude Code and Antigravity can link to the same Skill. In your AI session, try `Use the equation-lab skill to check this Word file’s equations, numbers, and cross-references.`
 

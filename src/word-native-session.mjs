@@ -11,7 +11,7 @@ import {makeNewOle} from './new-formula.mjs';
 import {fromFlatOpc,inspectDocx,MAX_FLAT_OPC_BYTES} from './document.mjs';
 import {previewNumberFormat} from './layout.mjs';
 import {checkedWordSnapshotZip} from './word-snapshot.mjs';
-import {checkedWordNumbering} from './word-numbering.mjs';
+import {checkedWordNumbering,checkExistingWordNumberingTarget} from './word-numbering.mjs';
 import {wordCatalogProof} from './word-document-requests.mjs';
 import {performance} from 'node:perf_hooks';
 
@@ -118,7 +118,7 @@ function request(operation,body){
  for(const key of ['document','target','layout','numbering'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
  if(body.document?.insertionAfter&&typeof body.document.insertionAfter==='object')body.document.insertionAfter={...body.document.insertionAfter};
  if(body.numbering?.context&&typeof body.numbering.context==='object')body.numbering.context={...body.numbering.context};
- const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
+ const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','numberingExistingSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain','numberingLocal']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
  if(operation==='native-open'||operation==='native-insert-open')uint64(body.session);
  else{
@@ -275,16 +275,17 @@ function insertionLayout(value){
 function contextStatus(document){
  return document?{state:document.partial?'loading':'available',reason:document.partial?(document.scope==='insertion'?'insertion-captured':'selection-captured'):document.identity?'captured':'legacy-capture',identity:document.identity,snapshot:document.snapshot,count:document.count,index:document.position}:{state:'missing',reason:'not-captured',identity:null,snapshot:null,count:0,index:null};
 }
-function saveTarget(value,document){
+function saveTarget(value,document,numbering){
  if(value===undefined)return null;
  if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Invalid Word save target');
- if(!document?.identity||document.partial||value.documentIdentity!==document.identity)throw Error('Word save target document does not match the editing session');
- const selected=document.objects[value.index];
+ if(!document?.identity||document.partial&&numbering?.existingRevision===undefined||value.documentIdentity!==document.identity)throw Error('Word save target document does not match the editing session');
+ checkExistingWordNumberingTarget(numbering,document,value);
+ const selected=document.objects[document.partial?document.index:value.index];
  if(value.index>=document.count||!selected||selected.mainDocument!==true||selected.error||selected.nativeSha256!==value.expectedNativeSha256)throw Error('Word save target equation does not match the document snapshot');
  return {index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:document.identity};
 }
 function saveNumbering(value,target,entry){
- return checkedWordNumbering(value,{supported:!entry.insertion&&entry.numberingSupport,contextSupported:entry.numberingContextSupport,target});
+ return checkedWordNumbering(value,{supported:!entry.insertion&&entry.numberingSupport,contextSupported:entry.numberingContextSupport,existingSupported:entry.numberingExistingSupport&&entry.acknowledgement,target});
 }
 
 async function enrichDocument(body){
@@ -355,6 +356,7 @@ export async function nativeSessionOperation(path,body){
    if(operation==='native-ack'){
     const hasUncertain=Object.hasOwn(body,'uncertain');
     if(body.session!==receipt.session||typeof body.ok!=='boolean'||hasUncertain&&(body.uncertain!==true||body.ok!==false))throw Error('Invalid native acknowledgement');
+    if(Object.hasOwn(body,'numberingLocal')&&(body.numberingLocal!==true||!body.ok||!receipt.localNumberingAllowed))throw Error('Invalid native numbering acknowledgement');
     if(hasUncertain){
      if(!['delivered','unconfirmed','committed','failed'].includes(receipt.state))throw Error('Invalid native acknowledgement');
      if(receipt.state==='delivered'||receipt.state==='unconfirmed'){receipt.state='unconfirmed';receipt.expires=Date.now()+TTL;}
@@ -362,6 +364,7 @@ export async function nativeSessionOperation(path,body){
      if(!['delivered','unconfirmed','committed','failed'].includes(receipt.state))throw Error('Invalid native acknowledgement');
      const next=body.ok?'committed':'failed';
      if(['committed','failed'].includes(receipt.state)&&receipt.state!==next)throw Error('Conflicting native acknowledgement');
+     if(body.numberingLocal===true&&receipt.state!==next)receipt.change.numberingLocal=true;
      receipt.state=next;receipt.expires=Date.now()+TTL;
     }
    }
@@ -375,6 +378,7 @@ export async function nativeSessionOperation(path,body){
    if(!insertion&&body.acknowledgement!==undefined&&body.acknowledgement!==true)throw Error('Invalid native acknowledgement capability');
    if(!insertion&&body.numberingSupport!==undefined&&body.numberingSupport!==true)throw Error('Invalid native numbering capability');
    if(body.numberingContextSupport!==undefined&&(body.numberingContextSupport!==true||!insertion&&!body.numberingSupport))throw Error('Invalid native numbering context capability');
+   if(body.numberingExistingSupport!==undefined&&(body.numberingExistingSupport!==true||!body.numberingSupport))throw Error('Invalid native existing numbering capability');
    if(body.acknowledgement&&receipts.size>=64)throw Error('Too many native receipts');
    let native,document,layout;
    try{
@@ -392,7 +396,7 @@ export async function nativeSessionOperation(path,body){
    }catch(error){native?.fill(0);throw error;}
    let ticket;
    do{ticket=randomBytes(32).toString('hex');}while(sessions.has(ticket));
-   const entry={ticket,session:body.session,document,layout,insertion,numberingSupport:body.numberingSupport===true,numberingContextSupport:body.numberingContextSupport===true,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
+   const entry={ticket,session:body.session,document,layout,insertion,numberingSupport:body.numberingSupport===true,numberingContextSupport:body.numberingContextSupport===true,numberingExistingSupport:body.numberingExistingSupport===true,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
    sessions.set(ticket,entry);arm(entry);
    return {ticket,editorUrl:'equationlab://word-edit/'+ticket,documentContext:contextStatus(document)};
   }
@@ -417,7 +421,7 @@ export async function nativeSessionOperation(path,body){
    const snapshot=entry.document;
    const catalogProof=snapshot?.scope==='selection'&&snapshot.count>1&&Number.isSafeInteger(snapshot.snapshot)&&snapshot.snapshot<=0x7fffffff
     ?wordCatalogProof(snapshot.identity,snapshot.snapshot,snapshot.count,entry.expires):null;
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(snapshot),...catalogProof?{catalogProof}:{},...snapshot?{document:{path:snapshot.path,index:snapshot.index,name:snapshot.name,identity:snapshot.identity,snapshot:snapshot.snapshot,...snapshot.numberingRevision!==undefined?{numberingRevision:snapshot.numberingRevision}:{},...snapshot.mainStoryOnly?{mainStoryOnly:true}:{},...snapshot.partial?{scope:snapshot.scope,position:snapshot.position,count:snapshot.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(snapshot),...catalogProof?{catalogProof}:{},...snapshot?{document:{path:snapshot.path,index:snapshot.index,name:snapshot.name,identity:snapshot.identity,snapshot:snapshot.snapshot,...snapshot.numberingRevision!==undefined?{numberingRevision:snapshot.numberingRevision}:{},...snapshot.mainStoryOnly?{mainStoryOnly:true}:{},...snapshot.partial?{scope:snapshot.scope,position:snapshot.position,count:snapshot.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.numberingExistingSupport?{numberingExistingSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
   }
   if(operation==='native-navigate'){
    if(entry.insertion||!entry.document||entry.document.partial||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');
@@ -434,9 +438,12 @@ export async function nativeSessionOperation(path,body){
     if(body.target!==undefined)throw Error('Insertion completion cannot target an existing equation');
     if(body.docx===undefined)throw Error('Insertion completion requires a DOCX fragment');
    }else if(body.docx!==undefined)throw Error('DOCX fragments are only valid for insertion sessions');
-   const target=entry.insertion?null:saveTarget(body.target,entry.document);
-   const numbering=saveNumbering(body.numbering,target,entry);
-   native=nativeBlob(body.native);pdf=pdfBlob(body.pdf);
+   const numbering=saveNumbering(body.numbering,body.target,entry);
+   const target=entry.insertion?null:saveTarget(body.target,entry.document,numbering);
+   const existingNumberOnly=numbering?.existingRevision!==undefined;
+   native=nativeBlob(body.native);
+   if(existingNumberOnly&&!native.equals(entry.native))throw Error('Existing Word numbering cannot change the native equation');
+   pdf=pdfBlob(body.pdf);
    if(entry.insertion){
     docx=blob(body.docx);
     const fragment=await inspectDocx(docx),equations=fragment.objects;
@@ -455,14 +462,14 @@ export async function nativeSessionOperation(path,body){
    await removeStage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
    const document=entry.document;
-   const change=!entry.insertion&&document?.identity&&document.snapshot!=null&&!document.partial?{
+   const change=!entry.insertion&&document?.identity&&document.snapshot!=null&&(!document.partial||existingNumberOnly)?{
     documentIdentity:document.identity,documentSnapshot:document.snapshot,index:target?.index??document.position,
     previousNativeSha256:target?.expectedNativeSha256??createHash('sha256').update(entry.native).digest('hex'),
     nativeSha256:createHash('sha256').update(native).digest('hex'),numberingChanged:!!numbering
    }:null;
    stopEnrichment(entry);entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height,target,numbering,docx,insertionMode,insertionNumberFormat};entry.state='complete';
    // Keep an unresolved acknowledgement until Word reports a terminal result.
-   if(entry.acknowledgement)receipts.set(entry.ticket,{session:entry.session,state:'queued',deliveredAt:null,expires:null,change});
+   if(entry.acknowledgement)receipts.set(entry.ticket,{session:entry.session,state:'queued',deliveredAt:null,expires:null,change,localNumberingAllowed:!!change&&!!numbering&&!numbering.context});
    native=null;pdf=null;docx=null;return {ok:true,checked:true,state:'complete'};
   }finally{native?.fill(0);pdf?.fill(0);docx?.fill(0);}
  });

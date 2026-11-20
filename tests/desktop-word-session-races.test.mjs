@@ -68,6 +68,23 @@ function installWordBrowse(context){
  vm.runInContext(browse,context);
 }
 
+test('A failed full list retries the same owner once after the draft is clean',async()=>{
+ const code=appSource.slice(appSource.indexOf('window.nativeSyncWordWorkspace=async'),appSource.indexOf('window.nativeRefreshWordWorkspace='));
+ const calls=[];
+ let dirty=true;
+ const context=vm.createContext({window:{wordDocumentWorkspace:{
+  syncCurrent:async()=>false,select:async(index,options)=>{calls.push([index,options.reload]);return true;}
+ }},source:{documentIdentity:'word:1',hasDocumentContext:true,documentLoadFailed:true,documentPosition:2,documentNumberingRevision:4},
+ selected:{index:0},wordTicket:'owner',busy:false,wordNavigating:false,wordOutcomeUnknown:false,wordCommitRunning:null,wordSessionChanged:()=>dirty});
+ vm.runInContext(code,context);
+ assert.equal(await context.window.nativeSyncWordWorkspace(),false);
+ assert.deepEqual(calls,[]);
+ dirty=false;
+ assert.equal(await context.window.nativeSyncWordWorkspace(),true);
+ assert.equal(await context.window.nativeSyncWordWorkspace(),false);
+ assert.deepEqual(calls,[[0,true]]);
+});
+
 function installActualWordBrowse(context){
  const elements=new Map();
  context.$=id=>{if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,value:'',textContent:'',options:[],append(){},replaceChildren(){},querySelectorAll:()=>[]});return elements.get(id);};
@@ -301,6 +318,111 @@ test('The confirmed format edit passes the sidebar its provisional label without
   assert.equal(observed[4].previewText,previewReady?'(3-6)':undefined);
   assert.equal(context.wordTicket,null);
  }
+});
+
+test('Submitting a restored number format during loading uses the verified new snapshot or keeps the draft',async()=>{
+ for(const variant of ['verified','read failed','new revision','new format','draft changed','cancelled']){
+  const nativeSha256='f'.repeat(64),layout={numberFormat:'(#C1-#E1)',mode:'numbered-right'},object={index:0,nativeSha256,layout,latex:'x',editorNumberFormatBaseline:layout.numberFormat};
+  let finishLoad;const documentReady=new Promise(resolve=>{finishLoad=resolve;});
+  const editor=createEditor(async()=>({acknowledgement:false})),c=editor.context;
+  Object.assign(c,{wordTicket:'7'.repeat(64),selected:object,source:{activeIndex:0,documentIdentity:'word:1:2',
+   documentNumberingRevision:4,documentLoading:true,wordNumberingSupported:true,hasDocumentContext:true,
+   path:'/tmp/formula.docx',objects:[object],savedNumberingLayout:layout,documentReady}});
+  c.mf.value='x';c.$('layout-format').value='(#C1.#E1)';
+  installWordCommit(c);
+  const initial=c.source,pending=c.window.nativeCommitWordSession();
+  assert.equal(c.window.nativeCommitWordSession(),pending,'repeated click shares one request');
+  assert.equal(editor.calls.filter(call=>call.action==='wordSessionSave').length,0);
+  if(variant==='read failed')initial.documentLoadFailed=true;
+  else c.source={...initial,documentNumberingRevision:variant==='new revision'?5:4,documentLoading:false,documentSnapshot:19,savedNumberingLayout:null};
+  if(variant==='new format')object.layout={...layout,numberFormat:'[#C1-#E1]'};
+  if(variant==='draft changed')c.$('layout-format').value='(#E1)';
+  if(variant==='cancelled')c.wordTicket=null;
+  finishLoad();
+  assert.equal(await pending,variant==='verified',variant);
+  const saves=editor.calls.filter(call=>call.action==='wordSessionSave');
+  assert.equal(saves.length,variant==='verified'?1:0,variant);
+  if(saves.length)assert.equal(saves[0].payload.numbering.format,'(#C1.#E1)');
+  assert.equal(c.window.wordNumberingSaveWaiting,null);
+ }
+});
+
+test('Only a verified format-only Word edit can commit before the full document arrives',async()=>{
+ for(const variant of ['format only','old plugin','stale','other owner','formula','ruler','style','character','counter','invalid format','revision changed during preview']){
+  const nativeSha256='f'.repeat(64),layout={numberFormat:'(#C1-#E1)',mode:'numbered-right',chapter:2,section:1,equation:3};
+  const object={index:0,nativeSha256,layout,latex:'x',editorBaseline:'x',editorNumberFormatBaseline:layout.numberFormat,characters:[{offset:1,char:'x'}]};
+  let finishLoad;const documentReady=new Promise(resolve=>{finishLoad=resolve;});
+  const editor=createEditor(async action=>{
+   if(action==='numberingPreview'){
+    if(variant==='invalid format')throw Error('Invalid number format');
+    if(variant==='revision changed during preview')c.source.numberingRefreshNeeded=true;
+    return {text:'(2.3)'};
+   }
+   return {acknowledgement:true};
+  }),c=editor.context;
+  Object.assign(c,{wordTicket:'7'.repeat(64),selected:object,source:{activeIndex:0,documentIdentity:'word:1:2',
+   documentPosition:2,documentTotal:112,documentSnapshot:18,documentNumberingRevision:4,documentLoading:true,
+   wordNumberingSupported:true,wordNumberingExistingSupported:variant!=='old plugin',hasDocumentContext:true,
+   path:'/tmp/formula.docx',objects:[object],savedNumberingLayout:layout,documentReady}});
+  c.mf.value='x';c.$('layout-format').value='(#C1.#E1)';
+  c.$('layout-chapter').value='2';c.$('layout-section').value='1';
+  c.$('layout-chapter').disabled=c.$('layout-section').disabled=true;
+  c.window.desktopTypographyPatch=()=>variant==='style'?{fullSize:18}:null;
+  if(variant==='stale')c.source.numberingRefreshNeeded=true;
+  if(variant==='other owner')c.source.objects[0]={...object};
+  if(variant==='formula')c.mf.value='y';
+  if(variant==='ruler')c.editingRuler=[{position:1440,type:0}];
+  if(variant==='character')c.$('character-editor').querySelectorAll=()=>[{value:'y',dataset:{offset:'1'}}];
+  if(variant==='counter')c.$('layout-chapter').value='3';
+  installWordCommit(c);
+  vm.runInContext(appSource.slice(appSource.indexOf('function wordSessionChanged('),appSource.indexOf('window.nativePrepareToClose=')),c);
+  let acknowledgements=0;
+  c.waitForWordSave=async()=>{acknowledgements++;return {state:'committed'};};
+  const pending=c.window.nativeCommitWordSession();
+  await new Promise(resolve=>setImmediate(resolve));
+  const saves=editor.calls.filter(call=>call.action==='wordSessionSave');
+  if(variant==='format only'){
+   assert.equal(saves.length,1,'the full capture has not completed');
+   assert.deepEqual(JSON.parse(JSON.stringify(saves[0].payload)),{ticket:'7'.repeat(64),input:'/tmp/formula.docx',
+    target:{index:2,expectedNativeSha256:nativeSha256,documentIdentity:'word:1:2'},
+    numbering:{format:'(#C1.#E1)',side:'right',existingRevision:4},mode:'characters',replacements:{}});
+   assert.equal(await pending,true);
+   assert.equal(acknowledgements,1);
+  }else{
+   assert.equal(saves.length,0,variant);
+   if(!['invalid format','revision changed during preview'].includes(variant))assert.ok(c.window.wordNumberingSaveWaiting,variant);
+   c.source.documentLoadFailed=true;finishLoad();
+   assert.equal(await pending,false,variant);
+   assert.equal(c.$('layout-format').value,'(#C1.#E1)',variant);
+  }
+ }
+});
+
+test('Full capture enables Word counters and keeps the queued format as a draft',async()=>{
+ const nativeSha256='f'.repeat(64),layout={numberFormat:'(#C1-#E1)',mode:'numbered-right',numberText:'(2-1)'};
+ const owner={index:0,nativeSha256,layout,latex:'x',editorBaseline:'x',editorNumberFormatBaseline:layout.numberFormat};
+ const ticket='7'.repeat(64),identity='word:1:2',numberingRevision=4;
+ const initial={activeIndex:0,documentIdentity:identity,documentPosition:1,documentTotal:2,documentNumberingRevision:numberingRevision,
+  documentLoading:true,wordNumberingSupported:true,hasDocumentContext:true,objects:[owner],savedNumberingLayout:layout};
+ const full={wordTicket:ticket,activeIndex:1,documentIdentity:identity,documentNumberingRevision:numberingRevision,
+  documentContext:{count:2},objects:[{index:0},{...owner,index:1,layout:{...layout}}]};
+ const {context:c}=createEditor(async(action)=>action==='wordSessionDocument'?{state:'available',document:full}:{});
+ Object.assign(c,{wordTicket:ticket,source:initial,selected:owner,validationRunning:null,valid:false});
+ c.mf.value='x';
+ c.$('layout-format').value='(#C1.#E1)';
+ c.$('layout-chapter').disabled=true;
+ c.loadObjectLayout=object=>{
+  c.$('layout-format').value=object.layout.numberFormat;
+  c.$('layout-chapter').disabled=false;
+  object.editorNumberFormatBaseline=object.layout.numberFormat;
+ };
+ await c.loadWordDocument(ticket,initial);
+ assert.equal(c.source,full);
+ assert.equal(c.selected,owner);
+ assert.equal(c.selected.index,1);
+ assert.equal(c.$('layout-format').value,'(#C1.#E1)');
+ assert.equal(c.selected.editorNumberFormatBaseline,'(#C1-#E1)');
+ assert.equal(c.$('layout-chapter').disabled,false);
 });
 
 test('Chapter-only changes carry the old context and exact formula target, while a displayed default never numbers an untouched equation',async()=>{

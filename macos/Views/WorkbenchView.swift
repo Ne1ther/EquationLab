@@ -115,7 +115,7 @@ struct WorkbenchView: View {
                         Spacer(minLength: 8)
                         Button(bridge.language.usesEnglish ? "Restore draft" : "恢复草稿") { bridge.invoke("nativeRestoreDraft") }
                             .fixedSize()
-                        Button(bridge.language.usesEnglish ? "Discard" : "丢弃") { bridge.invoke("nativeDiscardRecovery") }
+                        Button(bridge.language.usesEnglish ? "Delete old draft" : "删除旧草稿") { bridge.invoke("nativeDiscardRecovery") }
                             .fixedSize()
                     }
                     .font(.callout).padding(.horizontal, 18).padding(.vertical, 8)

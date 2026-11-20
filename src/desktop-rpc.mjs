@@ -10,7 +10,7 @@ import {renderNative,nativePdf,warmNativeRenderer} from './font-renderer.mjs';
 import {readEqp,writeEqp} from './eqp.mjs';
 import {readTypography} from './typography-native.mjs';
 import {previewNumberFormat} from './layout.mjs';
-import {checkedWordNumbering} from './word-numbering.mjs';
+import {checkedWordNumbering,checkExistingWordNumberingTarget} from './word-numbering.mjs';
 import {createRenderScheduler} from './render-scheduler.mjs';
 import {auditDocx,getReferenceTargets} from './document-audit.mjs';
 import {preflightTypography,applyTypography,readTypographyPreset,readTypographyPresetFromPackage} from './document-typography.mjs';
@@ -89,7 +89,7 @@ async function readWordSession(ticket,execution={}){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,documentNumberingRevision:session.document?.numberingRevision??result.documentNumberingRevision,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},...session.document?.scope==='selection'&&typeof session.catalogProof==='string'?{catalogProof:session.catalogProof}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ return {...result,documentNumberingRevision:session.document?.numberingRevision??result.documentNumberingRevision,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},...session.document?.scope==='selection'&&typeof session.catalogProof==='string'?{catalogProof:session.catalogProof}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,wordNumberingExistingSupported:session.numberingExistingSupport===true&&session.acknowledgement===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -256,18 +256,31 @@ export async function desktopRequest(request,execution={}) {
    const value=payload.target;
    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Word 保存目标无效');
    if(!session.document?.identity||session.document.identity!==value.documentIdentity)throw Error('Word 保存目标不属于当前文档');
-   const document=await readDocument(session.document.path);o=document.objects[value.index];
-   if(!o||o.mainDocument!==true||o.parseError||o.nativeSha256!==value.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
    target={index:value.index,expectedNativeSha256:value.expectedNativeSha256,documentIdentity:session.document.identity};
   }
   let numbering;
   if(payload.numbering!==undefined){
    const value=payload.numbering;
    if(!session.numberingSupport||!target)throw Error('Word 编号目标或插件能力无效');
-   numbering=checkedWordNumbering(value,{supported:session.numberingSupport,contextSupported:session.numberingContextSupport,target});
+   numbering=checkedWordNumbering(value,{supported:session.numberingSupport,contextSupported:session.numberingContextSupport,existingSupported:session.numberingExistingSupport===true&&session.acknowledgement===true,target});
   }
-  const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex),ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),p=await nativePdf(ole);
-  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:inspectOle(ole).native.toString('base64'),...p,...target?{target}:{},...numbering?{numbering}:{}});
+  const existingNumberOnly=numbering?.existingRevision!==undefined;
+  if(target){
+   if(existingNumberOnly)checkExistingWordNumberingTarget(numbering,session.document,target);
+   else{
+    if(session.document.scope!==undefined)throw Error('Word 文档快照尚未载入完整，已阻止写回');
+    const document=await readDocument(session.document.path);o=document.objects[target.index];
+   }
+   if(!o||o.mainDocument!==true||o.parseError||o.nativeSha256!==target.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
+  }
+  const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex);
+  const ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload);
+  const editedNative=inspectOle(ole).native;
+  let submittedNative;
+  try{submittedNative=editedNative.toString('base64');}finally{editedNative.fill(0);}
+  if(existingNumberOnly&&submittedNative!==session.native)throw Error('仅改编号时不能修改公式内容');
+  const p=await nativePdf(existingNumberOnly?owner.ole:ole);
+  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:submittedNative,...p,...target?{target}:{},...numbering?{numbering}:{}});
   return {...result,...session.acknowledgement?{acknowledgement:true}:{}};
  }
  if(action==='validate') {

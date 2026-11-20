@@ -1,9 +1,15 @@
+import AppKit
 import SwiftUI
 
 struct AppUpdateSheet: View {
     @ObservedObject var updater: AppUpdater
     @ObservedObject var bridge: DesktopBridge
     @Environment(\.dismiss) private var dismiss
+    @State private var wordRunning = AppUpdater.isWordRunning
+    private var installBlocker: AppUpdater.InstallBlocker? {
+        guard updater.phase == .ready else { return nil }
+        return updater.installBlocker(bridge: bridge, wordRunning: wordRunning)
+    }
     private var title: String {
         switch updater.phase {
         case .checking: "正在检查更新…"
@@ -45,10 +51,15 @@ struct AppUpdateSheet: View {
                             .font(.caption).foregroundStyle(.secondary).monospacedDigit()
                     }
                 } else if updater.phase == .checking || updater.phase == .verifying { ProgressView().controlSize(.small) }
-                Text(bridge.t("安装前请保存公式并完全退出 Word。更新会同时维护 Word 插件，已有文档和收藏会保留。"))
-                    .font(.callout).foregroundStyle(.secondary)
+                if let installBlocker {
+                    Label(bridge.t(installBlocker.rawValue), systemImage: "exclamationmark.circle")
+                        .font(.callout).foregroundStyle(.orange)
+                } else {
+                    Text(bridge.t("安装前请保存公式并完全退出 Word。更新会同时维护 Word 插件，已有文档和收藏会保留。"))
+                        .font(.callout).foregroundStyle(.secondary)
+                }
             } else if updater.phase == .checking { ProgressView().controlSize(.small) }
-            if !updater.errorMessage.isEmpty {
+            if !updater.errorMessage.isEmpty, AppUpdater.InstallBlocker(rawValue: updater.errorMessage) == nil {
                 Label(bridge.t(updater.errorMessage), systemImage: "exclamationmark.circle")
                     .font(.callout).foregroundStyle(.orange).textSelection(.enabled)
             }
@@ -74,13 +85,21 @@ struct AppUpdateSheet: View {
                 } else if updater.phase == .ready {
                     Button(bridge.t("安装更新…")) { updater.install(bridge: bridge) }
                         .buttonStyle(.borderedProminent)
-                        .disabled(bridge.wordSessionActive || bridge.state.busy || bridge.installationRunning)
+                        .disabled(installBlocker != nil)
                 } else if updater.manifest != nil && updater.phase != .failed {
                     Button(bridge.t("下载更新")) { updater.download() }.buttonStyle(.borderedProminent)
                 } else {
                     Button(bridge.t("检查更新")) { updater.check() }.buttonStyle(.borderedProminent)
                 }
             }
-        }.padding(26).frame(width: 510)
+        }
+        .padding(26).frame(width: 510)
+        .onAppear { wordRunning = AppUpdater.isWordRunning }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didLaunchApplicationNotification)) { _ in
+            wordRunning = AppUpdater.isWordRunning
+        }
+        .onReceive(NSWorkspace.shared.notificationCenter.publisher(for: NSWorkspace.didTerminateApplicationNotification)) { _ in
+            wordRunning = AppUpdater.isWordRunning
+        }
     }
 }

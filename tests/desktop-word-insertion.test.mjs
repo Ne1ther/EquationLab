@@ -32,7 +32,7 @@ function workspaceBootstrap(){
  const start=appSource.indexOf('window.wordDocumentWorkspace=');
  const end=appSource.indexOf('\nfunction message(',start);
  assert.ok(start>=0&&end>start,'the production Word workspace bootstrap should be present');
- return appSource.slice(start,end)+'\n'+slice('function wordSessionChanged(){','window.nativePrepareToClose=async()=>{');
+ return appSource.slice(start,end)+'\n'+slice('function wordSessionChanged(','window.nativePrepareToClose=async()=>{');
 }
 
 function createEditor(){

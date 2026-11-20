@@ -516,7 +516,7 @@ End Sub
 
 ' Numbering a selected equation is deliberately restricted to a plain, single
 ' equation paragraph. It never inserts/replaces the OLE or imports a DOCX.
-Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1)
+Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, Optional ByVal patternOverride As String = "", Optional ByVal verifiedBackgroundTarget As Boolean = False, Optional ByVal chapter As Long = 0, Optional ByVal section As Long = 0, Optional ByVal expectedChapter As Long = -1, Optional ByVal expectedSection As Long = -1, Optional ByVal requireExisting As Boolean = False, Optional ByRef displayOnlyReceipt As Boolean = False)
     Dim transaction As Collection, changed As Boolean
     Dim failureNumber As Long, failureDescription As String, futureFormat As String, recovery As String
     Dim restoreScreenUpdating As Boolean, refreshedDisplayOnly As Boolean
@@ -531,7 +531,8 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
         restoreScreenUpdating = True
     End If
     Set transaction = ELBeginNumberingTransaction(Doc, "Equation Lab equation numbering")
-    If Not UpdateOrUnwrapSelectedSharedNumber(Doc, equation, rightSide, patternOverride, chapter <> 0 Or section <> 0, changed, refreshedDisplayOnly) Then
+    If Not UpdateOrUnwrapSelectedSharedNumber(Doc, equation, rightSide, patternOverride, chapter <> 0 Or section <> 0, changed, refreshedDisplayOnly, requireExisting) Then
+        If requireExisting Then Err.Raise vbObjectError + 7360, "Equation Lab", "The existing equation number changed. Reopen the equation before renumbering."
         NumberSelectedEquationCore Doc, equation, rightSide, changed, patternOverride, verifiedBackgroundTarget, chapter, section, expectedChapter, expectedSection
     End If
     If Not refreshedDisplayOnly Then
@@ -541,6 +542,7 @@ Public Sub NumberSelectedEquation(ByVal Doc As Document, ByVal equation As Inlin
     SaveSharedNumberFormat Doc, futureFormat
     NumberingChanged Doc: ELInvalidateDocumentSnapshot
     ELCommitNumberingTransaction transaction: Set transaction = Nothing
+    displayOnlyReceipt = refreshedDisplayOnly
     If restoreScreenUpdating Then Application.ScreenUpdating = True
     Exit Sub
 Failed:
@@ -2193,13 +2195,13 @@ Failed:
     Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
-Private Function UpdateOrUnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, ByVal patternOverride As String, ByVal contextChanged As Boolean, ByRef changed As Boolean, ByRef refreshedDisplayOnly As Boolean) As Boolean
+Private Function UpdateOrUnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal equation As InlineShape, ByVal rightSide As Boolean, ByVal patternOverride As String, ByVal contextChanged As Boolean, ByRef changed As Boolean, ByRef refreshedDisplayOnly As Boolean, ByVal requireExisting As Boolean) As Boolean
     Dim bookmark As Bookmark, target As Bookmark, paragraph As Range, envelope As Range, candidate As Range
     Dim pattern As String, chapter As Long, section As Long, equationNumber As Long, equationReset As Long
     Dim hasChapter As Boolean, hasSection As Boolean, found As Boolean, replaceInPlace As Boolean
     Dim fields As Collection, displayOnlyFields As Collection
     Set paragraph = NumberingEquationParagraph(Doc, equation)
-    EnsureSharedNumberBookmark Doc, equation, changed
+    If Not requireExisting Then EnsureSharedNumberBookmark Doc, equation, changed
     For Each bookmark In Doc.Bookmarks
         If IsNumberBookmarkName(bookmark.Name) And bookmark.Range.Start >= paragraph.Start And bookmark.Range.End <= paragraph.End Then
             Set candidate = NumberEnvelope(Doc, bookmark)
@@ -2217,10 +2219,12 @@ Private Function UpdateOrUnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal
         ValidateRibbonNumberFormat patternOverride
         replaceInPlace = SharedNumberOnRequestedSide(Doc, equation, paragraph, envelope, target.Range, rightSide)
         If replaceInPlace And patternOverride = pattern Then
+            refreshedDisplayOnly = requireExisting
             UpdateOrUnwrapSelectedSharedNumber = True
             Exit Function
         End If
     End If
+    If requireExisting And Not replaceInPlace Then Exit Function
     equationReset = NumberIncrementReset(Doc, target)
     Set fields = SequenceFieldsForDocument(Doc)
     equationNumber = SequenceBeforePosition(Doc, envelope.End, "MTEqn", found, fields)
@@ -2230,7 +2234,7 @@ Private Function UpdateOrUnwrapSelectedSharedNumber(ByVal Doc As Document, ByVal
         If InStr(1, patternOverride, "#C", vbBinaryCompare) > 0 And (Not hasChapter Or chapter < 1) Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #C token."
         If InStr(1, patternOverride, "#S", vbBinaryCompare) > 0 And (Not hasSection Or section < 1) Then Err.Raise vbObjectError + 7363, "Equation Lab", "Set Chapter/Section numbering before using a #S token."
         pattern = patternOverride
-        If Not HasLegacyNumbering(Doc, fields) Then Set displayOnlyFields = fields
+        If requireExisting Or Not HasLegacyNumbering(Doc, fields) Then Set displayOnlyFields = fields
     End If
     If chapter < 1 Then chapter = 1
     If section < 1 Then section = 1

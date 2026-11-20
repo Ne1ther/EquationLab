@@ -79,3 +79,65 @@ test('An active segmented load cannot hold up a save or install a snapshot after
   await assert.rejects(op('native-read',{ticket}),/expired/);
  }finally{await close(ticket);}
 });
+
+test('An acknowledged numbering-only save uses the live owner before or after enrichment',async()=>{
+ for(const enriched of [false,true]){
+  const revision=7,session=String(seq++);
+  const opened=await op('native-open',{session,native,acknowledgement:true,numberingSupport:true,numberingExistingSupport:true,document:{...context(),numberingRevision:revision}});
+  const ticket=opened.ticket,object=doc.objects[index];
+  try{
+   const staged=await op('native-read',{ticket});
+   assert.equal(staged.numberingExistingSupport,true);
+   const partial=await local(()=>desktopRequest({action:'wordSessionRead',payload:{ticket}}));
+   assert.equal(partial.wordNumberingExistingSupported,true);
+   assert.equal(partial.documentLoading,true);
+   assert.equal(partial.activeIndex,0);
+   assert.equal(partial.documentPosition,index);
+   if(enriched)await op('native-enrich',{ticket,session,initialSnapshot:100,document:{...context(false),numberingRevision:revision}});
+   const target={index,expectedNativeSha256:object.nativeSha256,documentIdentity:partial.documentIdentity};
+   const numbering={format:'(#C1-#E1)',side:'right',existingRevision:revision};
+   const payload={ticket,input:partial.activePath,mode:'characters',replacements:{},target,numbering};
+   const save=(patch={})=>local(()=>desktopRequest({action:'wordSessionSave',payload:{...payload,...patch}}));
+   await assert.rejects(save({numbering:{...numbering,existingRevision:revision-1}}),/revision changed/);
+   await assert.rejects(save({target:{...target,index:0}}),/target or revision changed/);
+   await assert.rejects(save({target:{...target,documentIdentity:'other:42'}}),/不属于当前文档/);
+   await assert.rejects(save({mode:'rebuild',latex:'w+7'}),/仅改编号时不能修改公式内容/);
+   if(!enriched)await assert.rejects(save({numbering:{format:numbering.format,side:numbering.side}}),/尚未载入完整/);
+   const complete={ticket,session,native,pdf:Buffer.from('%PDF-1.7\n').toString('base64'),width:12,height:14,target,numbering};
+   await assert.rejects(op('native-complete',{...complete,target:{...target,expectedNativeSha256:'1'.repeat(64)}}),/equation does not match/);
+   await assert.rejects(op('native-complete',{...complete,native:inspectOle(doc.objects[0].ole).native.toString('base64')}),/cannot change the native equation/);
+   await assert.rejects(op('native-complete',{...complete,numbering:{...numbering,context:{chapter:1,section:1,expectedChapter:1,expectedSection:1}}}),/Invalid existing Word numbering revision/);
+   assert.equal((await op('native-poll',{ticket})).state,'editing');
+   assert.equal((await save()).acknowledgement,true);
+   assert.deepEqual(await op('native-status',{ticket}),{state:'queued'});
+   const delivered=await op('native-poll',{ticket});
+   assert.deepEqual(delivered.target,target);
+   assert.deepEqual(delivered.numbering,numbering);
+   assert.equal(delivered.native,native);
+   await assert.rejects(op('native-ack',{ticket,session,ok:false,numberingLocal:true}),/Invalid native numbering acknowledgement/);
+   await op('native-ack',{ticket,session,ok:true,...enriched?{}:{numberingLocal:true}});
+   // Repeated acknowledgements cannot upgrade or erase the first scope.
+   await op('native-ack',{ticket,session,ok:true,...enriched?{numberingLocal:true}:{}});
+   assert.deepEqual(await op('native-status',{ticket}),{state:'committed',change:{
+    documentIdentity:target.documentIdentity,documentSnapshot:enriched?101:100,index,
+    previousNativeSha256:object.nativeSha256,nativeSha256:object.nativeSha256,numberingChanged:true,
+    ...enriched?{}:{numberingLocal:true}
+   }});
+  }finally{await close(ticket);}
+ }
+});
+
+test('Guarded numbering rejects older and non-acknowledging hosts and uncaptured revisions',async()=>{
+ const base={native,numberingSupport:true,acknowledgement:true,document:{...context(),numberingRevision:0}};
+ await assert.rejects(op('native-open',{...base,session:String(seq++),numberingSupport:undefined,numberingExistingSupport:true}),/Invalid native existing numbering capability/);
+ for(const patch of [{},{numberingExistingSupport:true,acknowledgement:undefined},{numberingExistingSupport:true,document:context()}]){
+  const {ticket}=await op('native-open',{...base,...patch,session:String(seq++)});
+  try{
+   const target={index,expectedNativeSha256:doc.objects[index].nativeSha256,documentIdentity:'live:42'};
+   const numbering={format:'(#C1-#E1)',side:'right',existingRevision:0};
+   const payload={ticket,native,pdf:Buffer.from('%PDF-1.7\n').toString('base64'),width:12,height:14,target,numbering};
+   await assert.rejects(op('native-complete',payload),/Invalid existing Word numbering revision|target or revision changed/);
+   assert.equal((await op('native-poll',{ticket})).state,'editing');
+  }finally{await close(ticket);}
+ }
+});

@@ -42,8 +42,8 @@ struct WorkbenchCommands: Commands {
 
     @CommandsBuilder private var commandsPart2: some Commands {
         CommandGroup(replacing: .undoRedo) {
-            Button(bridge.t("撤销公式编辑")) { bridge.action("click", ["id": "undo"]) }.keyboardShortcut("z").disabled(bridge.state.busy || bridge.state.readOnly)
-            Button(bridge.t("重做公式编辑")) { bridge.action("click", ["id": "redo"]) }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(bridge.state.busy || bridge.state.readOnly)
+            Button(bridge.t("撤销公式编辑")) { bridge.action("editorCommand", ["command": "undo"]) }.keyboardShortcut("z").disabled(bridge.state.busy || !bridge.state.canUndo)
+            Button(bridge.t("重做公式编辑")) { bridge.action("editorCommand", ["command": "redo"]) }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(bridge.state.busy || !bridge.state.canRedo)
         }
         CommandGroup(after: .pasteboard) {
             Divider()

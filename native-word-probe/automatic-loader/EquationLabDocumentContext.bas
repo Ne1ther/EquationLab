@@ -4,6 +4,7 @@ Option Explicit
 Private mEvents As EquationLabWordEvents
 Private mNumberingRegistered As Boolean
 Private mNumberingContextRegistered As Boolean
+Private mNumberingExistingRegistered As Boolean
 Private mDocument As Document
 Private mEquations As Collection
 Private mPollScheduled As Boolean
@@ -387,11 +388,12 @@ Public Sub ELStartDocumentEvents()
 End Sub
 
 Private Sub ELRegisterNumberingSupport()
-    If mNumberingRegistered And mNumberingContextRegistered Then Exit Sub
+    If mNumberingRegistered And mNumberingContextRegistered And mNumberingExistingRegistered Then Exit Sub
     On Error Resume Next
     ' Advertise only after the matching template has installed its callback.
     mNumberingRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingSupport") = 0)
     mNumberingContextRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingContextSupport") = 0)
+    mNumberingExistingRegistered = (EquationLabNativeCommand("MathTypeBridgeRegisterNumberingExistingSupport") = 0)
 End Sub
 
 Public Sub ELQueueDisplayRefresh(ByVal Doc As Document)
@@ -728,7 +730,7 @@ Public Sub ELCaptureEquation(ByVal target As InlineShape, Optional ByVal forceSn
     Dim shape As InlineShape, selected As Long, index As Long, directory As String, xml As String, result As Long
     Dim generation As Long, elapsed As Double, contentEnd As Long, shapeCount As Long, isSaved As Boolean, selectionText As String, contextHeader As String
     Dim activationNonce As Long, targetStart As Long, candidateStart As Long, previousStart As Long, candidateRange As Range, anchors As Collection, anchorsSorted As Boolean
-    Dim oldScreenUpdating As Boolean, screenGuard As Boolean, enumStart As Double, enumMs As Double, rememberStart As Double, rememberMs As Double
+    Dim enumStart As Double, enumMs As Double, rememberStart As Double, rememberMs As Double
     targetStart = targetRange.Start
     ELObserveDocument targetRange.Document
     selected = -1
@@ -779,9 +781,8 @@ BuildSnapshot:
     Set anchors = New Collection
     anchorsSorted = True
     selected = -1
-    oldScreenUpdating = Application.ScreenUpdating
-    screenGuard = True
-    If oldScreenUpdating Then Application.ScreenUpdating = False
+    ' This runs inside Word's selection callback as well as explicit opens.
+    ' Reading inline ranges needs no change to the host's painting state.
     enumStart = Timer
     For Each shape In mDocument.InlineShapes
         If Supported(shape) Then
@@ -799,8 +800,6 @@ BuildSnapshot:
     Next
     enumMs = Timer - enumStart
     If enumMs < 0 Then enumMs = enumMs + 86400#
-    If oldScreenUpdating Then Application.ScreenUpdating = True
-    screenGuard = False
     If selected < 0 Then GoTo Failed
     If prepareActivation Then
         ELClearActivationAnchor
@@ -911,11 +910,6 @@ Captured:
     If result = 0 Then SchedulePoll
     Exit Sub
 Failed:
-    If screenGuard Then
-        On Error Resume Next
-        If oldScreenUpdating Then Application.ScreenUpdating = True
-        On Error GoTo 0
-    End If
     mCapturing = False
     mSnapshotReady = False
     If activationNonce > 0 Then
@@ -1668,17 +1662,32 @@ Private Function EmbeddedEquationFieldStart(ByVal embedded As Field, ByVal Doc A
 Missing:
 End Function
 
-Private Function ResolveBoundEquation(ByVal Doc As Document, ByVal anchor As Range, ByVal expectedIndex As Long) As InlineShape
+Private Function ResolveBoundEquation(ByVal Doc As Document, ByVal anchor As Range, ByVal expectedIndex As Long, Optional ByVal readOnlyCapture As Boolean = False) As InlineShape
     On Error GoTo Missing
     If Doc Is Nothing Or anchor Is Nothing Then Exit Function
     If Not (anchor.Document Is Doc) Then Exit Function
     If anchor.StoryType <> wdMainTextStory Or anchor.Start >= anchor.End Then Exit Function
-    Dim shape As InlineShape, index As Long
+    Dim shape As InlineShape, span As Range, index As Long, startAt As Long, endAt As Long
+    startAt = anchor.Start
+    endAt = anchor.End
+    If readOnlyCapture Then
+        ' Word can expand a retained OLE range to include its EMBED field
+        ' delimiters after activation. Recover only its single inline object.
+        On Error Resume Next
+        If anchor.InlineShapes.Count = 1 Then Set span = anchor.InlineShapes(1).Range
+        On Error GoTo Missing
+        If Not span Is Nothing Then
+            startAt = span.Start
+            endAt = span.End
+        End If
+    End If
     For Each shape In Doc.InlineShapes
         If Supported(shape) Then
-            If shape.Range.Start = anchor.Start And shape.Range.End = anchor.End Then
+            If shape.Range.Start = startAt And shape.Range.End = endAt Then
                 If shape.Range.StoryType <> wdMainTextStory Then Exit Function
-                If shape.Range.InlineShapes.Count <> 1 Then Exit Function
+                If Not readOnlyCapture Then
+                    If shape.Range.InlineShapes.Count <> 1 Then Exit Function
+                End If
                 If index + 1 <> expectedIndex Then Exit Function
                 Set ResolveBoundEquation = shape
                 Exit Function
@@ -1817,10 +1826,11 @@ End Sub
 Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
     On Error GoTo Failed
     Dim snapshot As Long, index As Long, identity As Long, result As Long
-    Dim Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape, isOpen As Boolean
+    Dim Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape, isOpen As Boolean, enrichment As Boolean
     snapshot = EquationLabNativeCommand("MathTypeBridgeDocumentCaptureSnapshot")
     index = EquationLabNativeCommand("MathTypeBridgeDocumentCaptureIndex")
     identity = EquationLabNativeCommand("MathTypeBridgeDocumentCaptureIdentity")
+    enrichment = (EquationLabNativeCommand("MathTypeBridgeDocumentCaptureIsEnrichment") <> 0)
     If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> requestToken Then Exit Sub
     If snapshot > 0 Then
         If index <= 0 Or identity <= 0 Then GoTo Failed
@@ -1834,7 +1844,11 @@ Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
         Set anchors = mBoundRanges(CStr(snapshot))
         If index > anchors.Count Then GoTo Failed
         Set anchor = anchors(index)
-        Set shape = ResolveBoundEquation(Doc, anchor, index)
+        If enrichment Then
+            Set shape = ResolveBoundEquation(Doc, anchor, index, True)
+        Else
+            Set shape = ResolveBoundEquation(Doc, anchor, index)
+        End If
         If shape Is Nothing Then GoTo Failed
     Else
         If snapshot <> 0 Or index <> 0 Or identity <> 0 Or Application.Documents.Count = 0 Then GoTo Failed
@@ -1849,7 +1863,9 @@ Private Sub ApplyDocumentCaptureRequest(ByVal requestToken As Long)
     End If
     If Not (shape.Range.Document Is Doc) Then GoTo Failed
     If shape.Range.StoryType <> wdMainTextStory Then GoTo Failed
-    If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
+    If Not enrichment Then
+        If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
+    End If
     If Not Supported(shape) Then GoTo Failed
     ELObserveDocument Doc
     If EquationLabNativeCommand("MathTypeBridgeDocumentCaptureRequestToken") <> requestToken Then Exit Sub
@@ -1872,7 +1888,8 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
     On Error GoTo Failed
     Dim Doc As Document, anchors As Collection, anchor As Range, shape As InlineShape, index As Long, result As Long
     Dim stage As String, failureNumber As Long, failureDescription As String, side As Long, codeUnit As Long, numberFormat As String
-    Dim chapter As Long, section As Long, expectedChapter As Long, expectedSection As Long
+    Dim chapter As Long, section As Long, expectedChapter As Long, expectedSection As Long, existingRevision As Long
+    Dim displayOnly As Boolean
     stage = "bindings"
     If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
     stage = "document-anchor"
@@ -1889,12 +1906,18 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
     If Not (shape.Range.Document Is Doc) Then GoTo Failed
     If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
     If Not Supported(shape) Then GoTo Failed
+    existingRevision = -1
+    If mNumberingExistingRegistered Then existingRevision = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExistingRevision")
+    If existingRevision >= 0 Then
+        If Doc.ReadOnly Or Doc.ProtectionType <> wdNoProtection Or Doc.TrackRevisions Then GoTo Failed
+        If EquationLabRibbon.ELNumberingRevision(Doc) <> existingRevision Then GoTo Failed
+    End If
     ' Word may accept the OLE update without marking its container dirty.
     ' Mark this verified document before activating its exact target; this
     ' neither saves the file nor replaces its owner. A failed activation can
     ' leave an extra save prompt.
     stage = "mark-document-dirty"
-    Doc.Saved = False
+    If existingRevision < 0 Then Doc.Saved = False
     ' Activation supplies the target's real OLE owner and client site. Native
     ' code verifies its original Native hash and applies the prepared result
     ' directly. Do not select/scroll the object or launch the editor again.
@@ -1917,14 +1940,21 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
         Set shape = ResolveBoundEquation(Doc, anchor, index)
         If shape Is Nothing Then Err.Raise vbObjectError + 7380, "Equation Lab", "The saved equation is no longer available for numbering."
         stage = "apply-numbering"
+        If existingRevision >= 0 And EquationLabRibbon.ELNumberingRevision(Doc) <> existingRevision Then GoTo Failed
         chapter = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingChapter")
         section = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingSection")
         expectedChapter = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedChapter")
         expectedSection = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedSection")
-        EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True, chapter, section, expectedChapter, expectedSection
+        EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True, chapter, section, expectedChapter, expectedSection, (existingRevision >= 0), displayOnly
         ELRememberNumberedSave Doc, token, index
         stage = "finish-numbering"
-        result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumbering")
+        result = -1
+        If displayOnly Then
+            On Error Resume Next
+            result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumberingDisplayOnly")
+            On Error GoTo Failed
+        End If
+        If result <> 0 Then result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumbering")
         If result <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Word did not confirm the numbering update."
     End If
     stage = "finish-activation"

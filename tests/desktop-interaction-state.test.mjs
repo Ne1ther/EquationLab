@@ -23,6 +23,23 @@ test('preflight editing allows insertion commands without allowing file or navig
  context.wordNavigating=true;assert.equal(await context.window.workbenchAction('insertLetter',{latex:'y'}),false);assert.deepEqual(events,['focus','x','changed']);
 });
 
+test('Reverting the ruler restores the open equation’s own tab stops without changing its text',async()=>{
+ const code=source.slice(source.indexOf('window.workbenchAction=async'),source.indexOf("document.body.classList.add('workbench-canvas')"));
+ const original=[{position:3200,type:3}];
+ let changes=0;
+ const context=vm.createContext({window:{},wordNavigating:false,busy:false,
+  mf:{value:'x+1',readOnly:false},editingRuler:[{position:6400,type:0}],
+  selected:{ruler:original},changed(){changes++;},requestWorkbenchSync(){}});
+ vm.runInContext(code,context);
+ assert.equal(await context.window.workbenchAction('restoreRuler'),true);
+ assert.strictEqual(context.editingRuler,original);
+ assert.equal(context.mf.value,'x+1');
+ assert.equal(changes,1);
+ context.selected=null;
+ assert.equal(await context.window.workbenchAction('restoreRuler'),true);
+ assert.equal(context.editingRuler,undefined);
+});
+
 test('A busy New action is blocked; Word completion waits for the native window to hide before clearing the editor',async()=>{
  const names=['function resetNewFormula()','window.nativeNew='];
  const finish=source.slice(source.indexOf('async function finishWordSave('),source.indexOf('function releaseWordSaveLock()'));
@@ -31,10 +48,10 @@ test('A busy New action is blocked; Word completion waits for the native window 
  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
  let hide;const hidden=new Promise(resolve=>{hide=resolve;});
  const metrics=[];let now=5;
- const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:value=>metrics.push(value)}}}},performance:{now:()=>now},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},mf,$:element,
+ const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:value=>metrics.push(value)}}}},performance:{now:()=>now},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},editingRuler:[{position:3200,type:0}],mf,$:element,
   renderObjects(){},changed(){},loadObjectLayout(){},syncSidebar(){return hidden;},message(){}});
  vm.runInContext(code,context);assert.equal(context.window.nativeNew(),false);assert.equal(mf.value,'edited formula');
- const completion=vm.runInContext('finishWordSave({started: 1, kind: "save"})',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');now=9;hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(element('word-session-actions').hidden,true);
+ const completion=vm.runInContext('finishWordSave({started: 1, kind: "save"})',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');now=9;hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(context.editingRuler,undefined);assert.equal(element('word-session-actions').hidden,true);
  assert.deepEqual(JSON.parse(JSON.stringify(metrics)),[{action:'wordSaveTiming',payload:{kind:'save',confirmedMs:4,totalMs:8}}]);
 });
 
@@ -83,7 +100,7 @@ test('Loading a legacy macro records its normalized editor baseline before dirty
  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',replaceChildren(){},querySelectorAll:()=>[]});return elements.get(id);};
  const object={index:0,latex:'legacy macro spelling',progId:'Equation.DSMT4',ruler:[],characters:[]},mf={value:''};
  const context=vm.createContext({window:{syncEquationMacros(field){if(field.value==='legacy macro spelling')field.value='canonical macro spelling';}},source:{objects:[object]},selected:null,mode:'rebuild',editingRuler:undefined,mf,$:element,loadObjectLayout(){},renderModes(){},renderObjects(){},changed(){context.window.syncEquationMacros(mf);},controls(){},status(){}});
- const select=source.split('\n').find(line=>line.startsWith('function selectObject(')),dirty=source.slice(source.indexOf('function wordSessionChanged(){'),source.indexOf('\nwindow.nativePrepareToClose=')),mode=source.split('\n').find(line=>line.startsWith('function sourceEditMode('));
+ const select=source.split('\n').find(line=>line.startsWith('function selectObject(')),dirty=source.slice(source.indexOf('function wordSessionChanged('),source.indexOf('\nwindow.nativePrepareToClose=')),mode=source.split('\n').find(line=>line.startsWith('function sourceEditMode('));
  vm.runInContext(select+'\n'+dirty+'\n'+mode,context);vm.runInContext('selectObject(0)',context);
  assert.equal(object.editorBaseline,'canonical macro spelling');assert.equal(vm.runInContext('wordSessionChanged()',context),false);assert.equal(vm.runInContext('sourceEditMode()',context),'characters','normalization alone retains native bytes');
  mf.value+=' + user edit';assert.equal(vm.runInContext('wordSessionChanged()',context),true);assert.equal(vm.runInContext('sourceEditMode()',context),'rebuild');

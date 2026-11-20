@@ -185,21 +185,21 @@ struct TemplateShelf: View {
                 .help(bridge.t("公式菜单"))
                 .accessibilityLabel(bridge.t("公式菜单"))
 
-                Button { bridge.action("click", ["id": "undo"]) } label: {
+                Button { bridge.action("editorCommand", ["command": "undo"]) } label: {
                     Image(systemName: "arrow.uturn.backward").frame(width: iconWidth)
                 }
                 .buttonStyle(WorkbenchButtonStyle(horizontalPadding: iconPadding))
                 .help(bridge.t("撤销"))
                 .accessibilityLabel(bridge.t("撤销"))
-                .disabled(bridge.state.busy || bridge.state.readOnly)
+                .disabled(bridge.state.busy || !bridge.state.canUndo)
 
-                Button { bridge.action("click", ["id": "redo"]) } label: {
+                Button { bridge.action("editorCommand", ["command": "redo"]) } label: {
                     Image(systemName: "arrow.uturn.forward").frame(width: iconWidth)
                 }
                 .buttonStyle(WorkbenchButtonStyle(horizontalPadding: iconPadding))
                 .help(bridge.t("重做"))
                 .accessibilityLabel(bridge.t("重做"))
-                .disabled(bridge.state.busy || bridge.state.readOnly)
+                .disabled(bridge.state.busy || !bridge.state.canRedo)
             }
             .foregroundStyle(.secondary)
             .fixedSize()

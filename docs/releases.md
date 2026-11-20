@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.7.3 · build107
+
+- 修改现有单条 Word 公式的编号格式后，列表只更新这一条的编号，保留其余公式和缩略图。取消编辑后重新打开也会沿用已核对的列表，常规流程中无需手动刷新。
+- 标尺支持撤销与重做、还原制表位及就地用法提示。现在可以分别删除旧恢复草稿和取消当前编辑。
+- 减少 Word 读取公式时的界面重绘干扰，并在安装内置更新前更明确地提示需先退出 Word 或结束当前编辑。
+
+- Changing the numbering format of an existing Word equation updates only that item's number in the list while keeping other rows and thumbnails intact. Reopening after cancelling also reuses the verified list, so routine editing does not require a manual refresh.
+- The equation ruler now supports undo and redo, reverting tab stop changes, and inline help. You can delete an older recovery draft and cancel the current edit separately.
+- Reduces UI redraw interference while reading equations from Word and clarifies pre-install update prompts when Word is running or an edit is in progress.
+
+[下载 0.7.3 · Download 0.7.3](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.3)
+
 ## 0.7.2 · build106
 
 修复「适合窗口」模式下公式和标尺闪动、空闲时 CPU 占用偏高的问题。修改单条 Word 公式的编号格式后，侧栏会保留公式列表和缩略图，可直接点回刚编辑的公式。

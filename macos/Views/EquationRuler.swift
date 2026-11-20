@@ -6,6 +6,7 @@ struct EquationRuler: View {
     @State private var tabType = 0
     @State private var dragging: Int?
     @State private var dragX: CGFloat = 0
+    @State private var showingHelp = false
     private let names = ["左对齐", "居中", "右对齐", "关系对齐", "小数点对齐"]
     private let marks = ["└", "┴", "┘", "=", "·"]
     private var scale: CGFloat {
@@ -15,15 +16,31 @@ struct EquationRuler: View {
     private func save(_ tabs: [RulerTab]) {
         bridge.action("ruler", ["tabs": tabs.sorted { $0.position < $1.position }.map { ["position": $0.position, "type": $0.type] }])
     }
+    private var helpText: String {
+        bridge.language.usesEnglish
+            ? "Choose an alignment and click the ruler to set a tab stop. Put the cursor in the equation, then choose Insert Tab to jump to the next stop. Use Word Layout Preview to check the alignment."
+            : "先选对齐方式，再点击刻度设定制表位。把光标放到公式要分隔的位置，再选「插入制表符」，后面的内容就会按下一个制表位对齐。效果可在「Word 排版预览」里查看。"
+    }
     var body: some View {
         HStack(spacing: 4) {
             Menu {
-                ForEach(0..<names.count, id: \.self) { i in Button(bridge.t(names[i])) { tabType = i } }
+                ForEach(0..<names.count, id: \.self) { i in
+                    Button { tabType = i } label: {
+                        if tabType == i { Label(bridge.t(names[i]), systemImage: "checkmark") }
+                        else { Text(bridge.t(names[i])) }
+                    }
+                }
                 Divider()
                 Button(bridge.t("插入制表符")) { bridge.action("editorCommand", ["command": "insertTab"]) }
+                Button(bridge.language.usesEnglish ? "Revert Tab Stop Changes" : "还原制表位") {
+                    bridge.action("restoreRuler", [:])
+                }.disabled(!bridge.state.rulerChanged)
                 Button(bridge.t("清除制表位")) { save([]) }.disabled(bridge.state.ruler.isEmpty)
             } label: { Text(marks[tabType]).font(.system(size: 17, weight: .semibold)).frame(width: 24, height: 28) }
-                .menuStyle(.borderlessButton).fixedSize().help(bridge.t("选择制表位类型；点击标尺添加，拖动移动，拖出删除"))
+                .menuStyle(.borderlessButton).fixedSize()
+                .accessibilityLabel(bridge.language.usesEnglish ? "Tab stop alignment" : "制表位对齐方式")
+                .accessibilityValue(bridge.t(names[tabType]))
+                .help(bridge.t("选择制表位类型；点击标尺添加，拖动移动，拖出删除"))
             GeometryReader { geometry in
                 ZStack(alignment: .topLeading) {
                     Canvas { context, size in
@@ -63,6 +80,12 @@ struct EquationRuler: View {
                 }.coordinateSpace(name: "ruler")
             }
             Text("pt").font(.system(size: 9)).foregroundStyle(.secondary).frame(width: 16)
+            Button { showingHelp.toggle() } label: { Image(systemName: "questionmark.circle") }
+                .buttonStyle(.plain).foregroundStyle(.secondary)
+                .accessibilityLabel(bridge.language.usesEnglish ? "Tab stop help" : "制表位用法")
+                .popover(isPresented: $showingHelp) {
+                    Text(helpText).font(.callout).frame(width: 240, alignment: .leading).padding(12)
+                }
         }.disabled(bridge.state.readOnly || bridge.state.busy)
             .padding(.horizontal, 7).background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 6))
             .onExitCommand { dragging = nil }
@@ -79,8 +102,8 @@ extension DesktopBridge {
             menu.addItem(entry)
         }
         let editable = !state.readOnly && !state.busy
-        item("撤销", "undo", "arrow.uturn.backward", key: "z", enabled: editable)
-        item("重做", "redo", "arrow.uturn.forward", enabled: editable)
+        item("撤销", "undo", "arrow.uturn.backward", key: "z", enabled: editable && state.canUndo)
+        item("重做", "redo", "arrow.uturn.forward", enabled: editable && state.canRedo)
         menu.addItem(.separator())
         item("剪切", "cutToClipboard", "scissors", key: "x", enabled: editable)
         item("复制", "copyToClipboard", "doc.on.doc", key: "c", enabled: !state.latex.isEmpty)

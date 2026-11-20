@@ -25,6 +25,12 @@ private final class UpdateTransferDelegate: NSObject, URLSessionDownloadDelegate
 final class AppUpdater: ObservableObject {
     typealias Fetcher = @Sendable (URL, Int64, @escaping @Sendable (Double) -> Void) async throws -> URL
     enum Phase: Equatable { case idle, checking, current, available, downloading, verifying, ready, failed }
+    enum InstallBlocker: String {
+        case editing = "请先保存或结束当前的 Word 公式编辑，再安装更新。"
+        case wordRunning = "请先保存文档并完全退出 Word（⌘Q），再安装更新。"
+        case busy = "Equation Lab 正在处理，请完成当前操作后再安装更新。"
+        case installingPlugin = "请等 Word 插件安装完成，再安装更新。"
+    }
     @Published var phase: Phase = .idle
     @Published var showPanel = false
     @Published var manifest: UpdateManifest?
@@ -42,6 +48,7 @@ final class AppUpdater: ObservableObject {
     private let downloadDirectory: URL?
     private var timer: Timer?
     private var started = false
+    private var installedUpdate: UpdateManifest?
     private(set) var packageURL: URL?
     var working: Bool { [.checking, .downloading, .verifying].contains(phase) }
     var hasUpdate: Bool { manifest != nil }
@@ -58,16 +65,23 @@ final class AppUpdater: ObservableObject {
         automaticDownloads = defaults.bool(forKey: "updates.automaticDownloads")
         lastChecked = defaults.object(forKey: "updates.lastSuccess") as? Date
         if let cached = defaults.data(forKey: "updates.signedManifest") {
-            if let update = try? UpdateManifest.verified(cached, publicKey: verificationKey),
-               (try? update.isNewer(than: currentVersion, build: currentBuild)) == true,
-               (try? update.supports(os: ProcessInfo.processInfo.operatingSystemVersion)) == true {
-                manifest = update; phase = .available
-            } else { defaults.removeObject(forKey: "updates.signedManifest") }
+            if let update = try? UpdateManifest.verified(cached, publicKey: verificationKey) {
+                if (try? update.isNewer(than: currentVersion, build: currentBuild)) == false {
+                    installedUpdate = update
+                } else if (try? update.supports(os: ProcessInfo.processInfo.operatingSystemVersion)) == true {
+                    manifest = update; phase = .available
+                }
+            }
+            if manifest == nil {
+                defaults.removeObject(forKey: "updates.signedManifest")
+            }
         }
     }
     deinit { timer?.invalidate(); operation?.cancel() }
     func start() {
         guard !started else { return }; started = true
+        pruneInstalledDownloads(installedUpdate)
+        installedUpdate = nil
         restorePendingDownload()
         checkAutomaticallyIfDue()
         timer = Timer.scheduledTimer(withTimeInterval: 60 * 60, repeats: true) { [weak self] _ in
@@ -116,6 +130,7 @@ final class AppUpdater: ObservableObject {
                 let update = try UpdateManifest.verified(signedData, publicKey: verificationKey)
                 try Task.checkCancellation()
                 guard try update.isNewer(than: currentVersion, build: currentBuild) else {
+                    pruneInstalledDownloads(update)
                     manifest = nil; packageURL = nil; defaults.removeObject(forKey: "updates.signedManifest"); phase = .current; recordSuccess(); return
                 }
                 manifest = update
@@ -149,9 +164,7 @@ final class AppUpdater: ObservableObject {
                 try Task.checkCancellation()
                 try FileManager.default.moveItem(at: file, to: destination)
                 temporary = nil
-                // This folder contains only this updater's verified packages.
-                for old in try FileManager.default.contentsOfDirectory(at: cache, includingPropertiesForKeys: nil)
-                    where old.lastPathComponent != destination.lastPathComponent && old.lastPathComponent.hasSuffix(".pkg") { try? FileManager.default.removeItem(at: old) }
+                Self.pruneDownloads(in: cache, olderThan: update.version)
                 packageURL = destination; progress = 1; phase = .ready
             } catch { if let temporary { try? FileManager.default.removeItem(at: temporary) }; handle(error) }
         }
@@ -172,14 +185,23 @@ final class AppUpdater: ObservableObject {
         default: errorMessage = "无法完成更新检查或下载，请检查网络后重试。"
         }
     }
+    static var isWordRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty
+    }
+    func installBlocker(bridge: DesktopBridge, wordRunning: Bool) -> InstallBlocker? {
+        if bridge.installationRunning { return .installingPlugin }
+        if bridge.hasWordSessionOrRequest { return .editing }
+        if wordRunning { return .wordRunning }
+        if bridge.state.busy { return .busy }
+        return nil
+    }
     func install(bridge: DesktopBridge) {
         guard phase == .ready, let manifest, let packageURL else { return }
-        guard !bridge.state.busy, !bridge.wordSessionActive, !bridge.installationRunning else {
-            errorMessage = "请先完成当前公式编辑或插件安装，再安装更新。"; return
+        if let blocker = installBlocker(bridge: bridge, wordRunning: Self.isWordRunning) {
+            errorMessage = blocker.rawValue
+            return
         }
-        guard NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty else {
-            errorMessage = "请先保存文档并完全退出 Word，再安装更新。"; return
-        }
+        errorMessage = ""
         let alert = NSAlert()
         alert.messageText = bridge.t("安装 Equation Lab 更新")
         alert.informativeText = bridge.t("请先保存当前公式。继续后会打开 macOS 安装器并退出 Equation Lab；安装器可能需要管理员验证。安装完成后重新打开应用。")
@@ -190,9 +212,10 @@ final class AppUpdater: ObservableObject {
             do {
                 // Recheck immediately before handing the local file to Installer.
                 try await Self.verify(manifest, file: packageURL)
-                guard !bridge.wordSessionActive, !bridge.state.busy, !bridge.installationRunning,
-                      NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty else {
-                    phase = .ready; errorMessage = "请先完成当前公式编辑或插件安装，再安装更新。"; return
+                if let blocker = installBlocker(bridge: bridge, wordRunning: Self.isWordRunning) {
+                    phase = .ready
+                    errorMessage = blocker.rawValue
+                    return
                 }
                 phase = .ready
                 let configuration = NSWorkspace.OpenConfiguration()
@@ -210,10 +233,33 @@ final class AppUpdater: ObservableObject {
         try Task.checkCancellation()
     }
     nonisolated private static func cacheDirectory() throws -> URL {
-        let root = try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+        try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false)
             .appendingPathComponent("app.equationlab.updates", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
-        return root
+    }
+    private func pruneInstalledDownloads(_ update: UpdateManifest?) {
+        guard let cache = try? downloadDirectory ?? Self.cacheDirectory() else { return }
+        // The cache filename has no build number. To remove a package at the
+        // current version, require its verified manifest to identify the file.
+        let exactPackage = update.map { $0.sha256 + "-" + $0.filename }
+        Self.pruneDownloads(in: cache, olderThan: currentVersion, including: exactPackage)
+    }
+    nonisolated private static func pruneDownloads(in cache: URL, olderThan version: String, including installedPackage: String? = nil) {
+        let fileManager = FileManager.default
+        let keys: Set<URLResourceKey> = [.isRegularFileKey, .isSymbolicLinkKey]
+        guard let version = try? ReleaseVersion(version),
+              let root = try? cache.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey]),
+              root.isDirectory == true, root.isSymbolicLink == false,
+              let entries = try? fileManager.contentsOfDirectory(at: cache, includingPropertiesForKeys: Array(keys)) else { return }
+        let prefixLength = 64 + "-Equation-Lab-".count
+        for file in entries {
+            let name = file.lastPathComponent
+            guard name.range(of: #"^[a-f0-9]{64}-Equation-Lab-[0-9]+\.[0-9]+\.[0-9]+\.pkg$"#, options: .regularExpression) != nil,
+                  let release = try? ReleaseVersion(String(name.dropFirst(prefixLength).dropLast(".pkg".count))),
+                  release < version || name == installedPackage,
+                  let attributes = try? file.resourceValues(forKeys: keys),
+                  attributes.isRegularFile == true, attributes.isSymbolicLink == false else { continue }
+            try? fileManager.removeItem(at: file)
+        }
     }
     nonisolated static func fetch(_ url: URL, limit: Int64, progress: @escaping @Sendable (Double) -> Void = { _ in }) async throws -> URL {
         guard UpdateNetworkPolicy.allows(url) else { throw UpdateError.invalidManifest }

@@ -35,7 +35,7 @@ function harness({old=false}={}){
   setTimeout(fn,delay=0){const id=++nextTimer;timers.set(id,{fn,at:now+delay});return id;},clearTimeout(id){timers.delete(id);}});
  vm.runInContext(workspace,context);
  vm.runInContext(old?oldPrefix:prefix,context);
- vm.runInContext(`${line('async function perform(')}\n${line('window.nativeExport=')}\n${app.slice(app.indexOf('function wordSessionChanged(){'),app.indexOf('window.nativePrepareToClose=async()=>{'))}`,context);
+ vm.runInContext(`${line('async function perform(')}\n${line('window.nativeExport=')}\n${app.slice(app.indexOf('function wordSessionChanged('),app.indexOf('window.nativePrepareToClose=async()=>{'))}`,context);
  vm.runInContext('editorViewport={refresh:()=>viewportRefresh()}; window.resetEditorHistory()',Object.assign(context,{viewportRefresh:()=>viewport.push('refresh')}));
  const reply=(request,result)=>win.nativeReply({id:request.id,result:{ok:true,data:result}});
  const advance=async ms=>{const end=now+ms;while(true){const due=[...timers].filter(([,t])=>t.at<=end).sort((a,b)=>a[1].at-b[1].at||a[0]-b[0])[0];if(!due)break;now=due[1].at;timers.delete(due[0]);due[1].fn();await microtasks();}now=end;await microtasks();};

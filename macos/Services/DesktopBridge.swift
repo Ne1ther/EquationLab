@@ -497,7 +497,8 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
                   let kind = payload["kind"] as? String, ["save", "insert"].contains(kind),
                   let confirmedMs = milliseconds("confirmedMs", in: payload, limit: 120_000),
                   let totalMs = milliseconds("totalMs", in: payload, limit: 120_000), totalMs >= confirmedMs else { return }
-            EditorLifecycleLog.logger.info("word_save_timing kind=\(kind, privacy: .public) confirmed_ms=\(confirmedMs, format: .fixed(precision: 1)) total_ms=\(totalMs, format: .fixed(precision: 1))")
+            let scoped = payload["scoped"] as? Bool == true
+            EditorLifecycleLog.logger.info("word_save_timing kind=\(kind, privacy: .public) scoped=\(scoped, privacy: .public) confirmed_ms=\(confirmedMs, format: .fixed(precision: 1)) total_ms=\(totalMs, format: .fixed(precision: 1))")
             recordWordConnectionOperation(kind: kind, stage: "finished", state: "committed", elapsedMs: confirmedMs, receiptObserved: true)
             return
         }

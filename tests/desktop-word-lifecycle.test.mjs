@@ -124,10 +124,15 @@ test('Closing a valid formula with an expired save binding offers recovery inste
 });
 
 test('Reopening the same live document object on a fresh ticket restores its existing draft automatically',async()=>{
- const p=editor(),c=p.context;installCommit(c);c.mode='rebuild';c.editingRuler=[{position:100,type:1}];c.renderModes=()=>{};
+ const p=editor(),c=p.context;installCommit(c);c.mode='rebuild';c.renderModes=()=>{};
+ c.window.syncEquationMacros=()=>{};c.loadObjectLayout=()=>{};c.document={};c.mf.focus=()=>{};c.$('original-preview').replaceChildren=()=>{};
+ vm.runInContext('let editorHistory=[],editorHistoryIndex=-1,restoringHistory=false;\n'+slice('function historySnapshot()','window.nativeReply=')+'\n'+code.split('\n').find(line=>line.startsWith('function selectObject('))+'\nfunction changed(){recordEditorHistory();}',c);
  let counter=0;c.native=async(action)=>{if(action==='wordSessionRead')return {documentIdentity:'live-doc-1',documentSnapshot:'snapshot-1',hasDocumentContext:true,activeIndex:1,objects:[{index:0,latex:'other',nativeSha256:'0'.repeat(64)},{index:1,latex:'original',nativeSha256:'1'.repeat(64)}]};if(action==='confirmWordSessionSwitch'){counter++;return {discard:false};}return {};};
- await c.window.nativeOpenWordSession('a'.repeat(64));c.mf.value='important retained draft';
+ await c.window.nativeOpenWordSession('a'.repeat(64));c.mf.value='important retained draft';c.changed();c.editingRuler=[{position:100,type:1}];c.changed();
  assert.equal(await c.window.nativeOpenWordSession('b'.repeat(64)),true);assert.equal(c.mf.value,'important retained draft');assert.equal(c.wordTicket,'b'.repeat(64));assert.equal(c.source.documentIdentity,'live-doc-1');assert.equal(counter,0);
+ assert.equal(c.editorUndo(),true);assert.equal(c.editingRuler,undefined);assert.equal(c.mf.value,'important retained draft');
+ assert.equal(c.editorUndo(),true);assert.equal(c.mf.value,'original');
+ assert.equal(c.editorUndo(true),true);assert.equal(c.mf.value,'important retained draft');assert.equal(c.editorUndo(true),true);assert.equal(c.editingRuler[0].position,100);
 });
 
 test('A different snapshot with the same formula bytes and position cannot silently adopt an existing draft',async()=>{

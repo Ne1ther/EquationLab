@@ -35,6 +35,17 @@ globalThis.ready=(async()=>{
  n=window.imeRequests.filter(x=>x.action==='validate').length;t.value='\\text{中文}';t.setSelectionRange(t.value.length,t.value.length);input(t,'中文');comp(t,'compositionend','中文');input(t,'中文',false);await validated(n);state('textarea-final');
  stage='cancel';const before=f.value;n=window.imeRequests.filter(x=>x.action==='validate').length;comp(t,'compositionstart');t.value='cancelled';t.setSelectionRange(2,4);input(t,'cancelled');await wait(110);t.value=before;comp(t,'compositionend','');await validated(n);state('cancel-final');
  stage='second';n=window.imeRequests.filter(x=>x.action==='validate').length;comp(t,'compositionstart');t.value='\\text{中文二}';input(t,'二');comp(t,'compositionend','二');await validated(n);state('second-final');
+ stage='ruler-undo';window.resetEditorHistory();const formula=f.value;
+ const tabs=[{position:768,type:2}];check(await window.workbenchAction('ruler',{tabs}),'ruler action rejected');
+ const key=(element,shiftKey)=>element.dispatchEvent(new KeyboardEvent('keydown',{key:shiftKey?'Z':'z',metaKey:true,shiftKey,bubbles:true,cancelable:true}));
+ t.focus();key(t,false);check(!rulerPatch().ruler,'undo in LaTeX editor did not remove the ruler mark');
+ check(f.value===formula&&document.activeElement===t,'undo of a ruler edit moved focus or rewrote the formula');
+ key(t,true);check(rulerPatch().ruler?.[0]?.position===768,'redo in LaTeX editor did not restore the ruler mark');
+ check(await window.workbenchAction('editorCommand',{command:'undo'}),'native toolbar undo rejected');
+ check(!rulerPatch().ruler&&f.value===formula,'native toolbar undo did not remove only the ruler mark');
+ check(await window.workbenchAction('ruler',{tabs}),'ruler change rejected');
+ check(await window.workbenchAction('restoreRuler'),'revert tab stops rejected');
+ check(!rulerPatch().ruler&&f.value===formula,'revert tab stops did not restore the initial ruler');
 })().catch(e=>{out.error=String(e);out.stack=e.stack;});
 globalThis.readout=()=>out;
 `;

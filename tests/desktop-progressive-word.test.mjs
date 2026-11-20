@@ -110,7 +110,7 @@ test('Favorites reuse an available preview when an earlier document row has the 
   wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordOutcomeUnknown:false,valid:true,mode:'rebuild',
   workbenchFavoriteImages:new Map(),workbenchFavoriteRenderRunning:false,workbenchLastFields:new Map(),workbenchZoom:0,
   editorViewport:{effectiveZoom:100},editingRuler:null,validationPending:false,validationRunning:false,
-  workbenchFields:()=>[],matrixContext:()=>null,exportAvailable:()=>true,setTimeout:queueMicrotask,
+  workbenchFields:()=>[],matrixContext:()=>null,canMoveEditorHistory:()=>false,exportAvailable:()=>true,setTimeout:queueMicrotask,
   native:async(...args)=>{nativeCalls.push(args);return {};},requestWorkbenchSync(){}
  });
  vm.runInContext(app.slice(app.indexOf('function documentSidebarState('),app.indexOf('function workbenchField(')),context);

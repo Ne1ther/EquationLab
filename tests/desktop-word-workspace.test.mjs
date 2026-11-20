@@ -64,6 +64,21 @@ test('reload keeps the cached rows visible while reading an independently bound 
  assert.equal(workspace.visibleSource(fresh),fresh);
 });
 
+test('Retrying a failed full capture reopens the current owner by its actual Word position',async()=>{
+ const e=setup(),partial={...document(),insertion:false,activeIndex:0,documentPosition:2,
+  documentTotal:112,documentLoadFailed:true,objects:[{index:0,nativeSha256:digest}]};
+ e.state.source=partial;e.state.wordTicket=ticket;
+ e.state.draftChanged=true;
+ assert.equal(await e.workspace.select(0,{reload:true}),false);
+ assert.equal(e.calls.length,0);
+ e.state.draftChanged=false;
+ assert.equal(await e.workspace.select(0,{reload:true}),true);
+ assert.deepEqual({...e.calls.find(call=>call.action==='wordDocumentOpen').payload.target},
+  {identity:partial.documentIdentity,snapshot:17,index:2,nativeSha256:digest});
+ const wrongOwner={...partial,documentSnapshot:18,documentPosition:0};
+ await assert.rejects(e.workspace.prepareIncoming(wrongOwner,requestId),/内容或位置已经变化/);
+});
+
 test('A fresh capture of the same Word document reuses only previews with matching native content',()=>{
  const {workspace}=setup(),cached=document();
  cached.objects[0].image='first preview';
@@ -135,20 +150,21 @@ test('Dock still requests a fresh capture when the content acknowledgement or li
  }
 });
 
-test('A confirmed same-side number format save keeps all 112 rows and skips automatic recapture',async()=>{
- for(const [revision,published] of [[3,3],[3,4],[2147483646,1]]){
+test('A confirmed same-side number format save keeps all 112 rows fresh and skips automatic recapture',async()=>{
+ for(const [revision,published,publicationArrived] of [[3,3,false],[3,4,false],[3,4,true],[2147483646,1,false]]){
   const e=setup(),source={...document(),insertion:false,documentNumberingRevision:revision,
    objects:Array.from({length:112},(_,index)=>({index,nativeSha256:digest,latex:`x_${index}`,image:`image-${index}`,
     layout:{mode:'numbered-right',chapter:2,equation:index+1,numberFormat:'(#C1.#E1)',numberText:`(2.${index+1})`}}))};
-  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:2,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true};
-  e.workspace.rememberAfterSave(source,2,ack,'x_2',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)'});
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:2,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true,numberingLocal:true};
+  if(publicationArrived){source.numberingRefreshNeeded=true;source.liveNumberingRevision=published;}
+  e.workspace.rememberAfterSave(source,2,ack,'x_2',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)',verifiedStartRevision:revision});
   const cached=e.workspace.visibleSource(null);
   assert.equal(cached.objects.length,112);
   assert.equal(cached.objects[2].layout.numberText,'(2-3)');
   assert.equal(source.objects[2].layout.numberText,'(2.3)');
   assert.equal(cached.objects[111].layout.numberText,'(2.112)');
   assert.ok(cached.objects.every((row,index)=>row.image===`image-${index}`));
-  assert.equal(cached.numberingRefreshNeeded,true);
+  assert.equal(cached.numberingRefreshNeeded,false);
   e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,revision:1,active:{identity:source.documentIdentity,name:source.documentName},
    documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:published}]}:undefined);
   assert.equal(await e.workspace.resume(),true);
@@ -159,30 +175,122 @@ test('A confirmed same-side number format save keeps all 112 rows and skips auto
   assert.equal(await e.workspace.select(2),true);
   assert.deepEqual({...e.calls.find(call=>call.action==='wordDocumentOpen').payload.target},
    {identity:source.documentIdentity,snapshot:source.documentSnapshot,index:2,nativeSha256:digest});
-  const partial={...source,documentLoading:true,catalogProof:'proof',documentTotal:112,documentPosition:2,objects:[source.objects[2]]};
+  const partial={...source,documentLoading:true,catalogProof:'proof',documentTotal:112,documentPosition:2,activeIndex:0,
+   documentNumberingRevision:revision===2147483646?1:revision+1,numberingRefreshNeeded:false,objects:[source.objects[2]]};
   const duringLoad=e.workspace.visibleSource(partial);
   assert.equal(duringLoad.objects.length,112);
   assert.equal(duringLoad.objects[2].layout.numberText,'(2-3)');
   assert.ok(duringLoad.objects.every((row,index)=>row.image===`image-${index}`));
   assert.equal(duringLoad.documentLoading,true);
+  assert.equal(duringLoad.numberingRefreshNeeded,false);
   const changedCount={...partial,documentTotal:113};
   assert.equal(e.workspace.visibleSource(changedCount),changedCount);
  }
 });
 
+test('Returning after cancellation keeps verified numbers and rejects a changed Word revision',async()=>{
+ for(const updated of [false,true]){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  e.workspace.rememberAfterCancel(source);
+  const partial={...source,documentPosition:1,activeIndex:0,documentTotal:2,documentLoading:true,objects:[source.objects[1]]};
+  assert.equal(e.workspace.visibleSource(partial).numberingRefreshNeeded,false);
+  assert.equal(e.workspace.visibleSource({...partial,objects:[source.objects[0]]}).numberingRefreshNeeded,true);
+  const {documentIdentity:identity,documentName:name}=source;
+  e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,active:{identity,name},
+   documents:[{identity,name,readOnly:false,numberingRevision:updated?4:3}]}:undefined);
+  assert.equal(await e.workspace.resume(),true);
+  assert.equal(e.calls.some(c=>c.action==='wordDocumentOpen'),updated);
+ }
+});
+
 test('Counter changes, an unbound save, or newer Word numbering still require a fresh document',async()=>{
- for(const variant of ['context','bad receipt','newer revision','writing side']){
+ for(const variant of ['context','bad receipt','newer revision','writing side','missing locality']){
   const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
   source.objects[0].layout={mode:'numbered-right',numberText:'(2.1)'};
   const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,
-   previousNativeSha256:variant==='bad receipt'?'e'.repeat(64):digest,nativeSha256:digest,numberingChanged:true};
-  const numbering={format:'(#C1-#E1)',side:variant==='writing side'?'left':'right',context:variant==='context'?{chapter:3,section:1}:undefined};
+   previousNativeSha256:variant==='bad receipt'?'e'.repeat(64):digest,nativeSha256:digest,numberingChanged:true,
+   ...variant==='missing locality'?{}:{numberingLocal:true}};
+  const numbering={format:'(#C1-#E1)',side:variant==='writing side'?'left':'right',previewText:'(2-1)',context:variant==='context'?{chapter:3,section:1}:undefined};
   e.workspace.rememberAfterSave(source,0,ack,'x+1',numbering);
   e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,active:{identity:source.documentIdentity,name:source.documentName},
    documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:variant==='newer revision'?5:4}]}:undefined);
   assert.equal(await e.workspace.resume(),true,variant);
   assert.equal(e.workspace.pending,true,variant);
   assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
+ }
+});
+
+test('Only an exact reopen of a confirmed format save can offer the saved format before full capture',async()=>{
+ for(const variant of ['matched','old revision','different row','different count']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  source.objects[0].layout={mode:'numbered-right',numberFormat:'(#C1.#E1)',numberText:'(2.1)'};
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:17,index:0,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true};
+  e.workspace.rememberAfterSave(source,0,ack,'x+1',{format:'(#C1-#E1)',side:'right',previewText:'(2-1)'});
+  const index=variant==='different row'?1:0;
+  assert.equal(await e.workspace.select(index),true);
+  const incoming={...source,documentSnapshot:18,activeIndex:0,documentPosition:index,
+   documentTotal:variant==='different count'?3:2,documentNumberingRevision:variant==='old revision'?3:4,
+   documentLoading:true,wordNumberingSupported:true,objects:[{index:0,nativeSha256:source.objects[index].nativeSha256}]};
+  await e.workspace.prepareIncoming(incoming,requestId);
+  assert.equal(incoming.savedNumberingLayout?.numberFormat,variant==='matched'?'(#C1-#E1)':undefined,variant);
+  if(variant==='matched')assert.equal(incoming.objects[0].layout.numberText,'(2-1)');
+ }
+});
+
+test('Direct Word opens reuse a confirmed format only for the same live owner',async()=>{
+ for(const variant of ['matched','another digest','another revision','another document']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  source.objects[0].layout={mode:'numbered-right',numberFormat:'(#C1.#E1)',numberText:'(2.1)'};
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:17,index:0,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true};
+  e.workspace.rememberAfterSave(source,0,ack,'x+1',{format:'(#C1-#E1)',side:'right',previewText:'(2-1)'});
+  const incoming={...source,documentSnapshot:18,activeIndex:0,documentPosition:0,documentTotal:2,
+   documentIdentity:variant==='another document'?'word:other':source.documentIdentity,
+   documentNumberingRevision:variant==='another revision'?5:4,documentLoading:true,wordNumberingSupported:true,
+   objects:[{index:0,nativeSha256:variant==='another digest'?'f'.repeat(64):digest}]};
+  await e.workspace.prepareIncoming(incoming);
+  assert.equal(incoming.savedNumberingLayout?.numberFormat,variant==='matched'?'(#C1-#E1)':undefined,variant);
+ }
+});
+
+test('A scoped numbering receipt rebinds only the same cached row with unchanged Native',async()=>{
+ for(const variant of ['verified','success published before receipt','wrong snapshot','wrong ordinal','changed bytes','another revision']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  const index=1,ownerDigest=source.objects[index].nativeSha256;
+  source.objects[index].layout={mode:'numbered-right',numberFormat:'(#C1.#E1)',numberText:'(2.2)',chapter:2,equation:2};
+  const before={documentIdentity:source.documentIdentity,documentSnapshot:17,index,previousNativeSha256:ownerDigest,nativeSha256:ownerDigest,numberingChanged:true,numberingLocal:true};
+  e.workspace.rememberAfterSave(source,index,before,'y+2',{format:'(#C1-#E1)',side:'right',previewText:'(2-2)'});
+  assert.equal(await e.workspace.select(index),true);
+  const incoming={...source,documentSnapshot:18,activeIndex:0,documentPosition:index,documentTotal:2,
+   documentNumberingRevision:4,documentLoading:true,wordNumberingSupported:true,wordNumberingExistingSupported:true,
+   objects:[{index:0,nativeSha256:ownerDigest}]};
+  await e.workspace.prepareIncoming(incoming,requestId);
+  e.workspace.accepted(incoming);
+  const success=variant==='verified'||variant==='success published before receipt';
+  if(variant==='success published before receipt'||variant==='another revision'){
+   incoming.liveNumberingRevision=variant==='another revision'?6:5;
+   incoming.numberingRefreshNeeded=true;
+   e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,documents:[{
+    identity:source.documentIdentity,name:source.documentName,numberingRevision:incoming.liveNumberingRevision
+   }]}:undefined);
+   await e.workspace.refreshList();
+  }
+  const change={...before,documentSnapshot:variant==='wrong snapshot'?19:18,index:variant==='wrong ordinal'?0:index,
+   nativeSha256:variant==='changed bytes'?'e'.repeat(64):ownerDigest};
+  e.workspace.rememberAfterSave(incoming,0,change,'y+2',{format:'(#C1.#E1)',side:'right',previewText:'(2.2)',existingRevision:4});
+  const cached=e.workspace.visibleSource(null);
+  assert.equal(cached.objects[0].nativeSha256,source.objects[0].nativeSha256);
+  assert.equal(cached.documentSnapshot,17,'other rows retain their full snapshot');
+  assert.equal(cached.objects[index].nativeSha256,success?ownerDigest:null,variant);
+  assert.equal(await e.workspace.select(index),success,variant);
+  if(success){
+   assert.equal(cached.objects[index].layout.numberText,'(2.2)');
+   assert.equal(cached.numberingRefreshNeeded,false);
+   assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').at(-1).payload.target.snapshot,18);
+   const reopened={...incoming,documentSnapshot:19,documentNumberingRevision:5,objects:[{index:0,nativeSha256:ownerDigest}]};
+   await e.workspace.prepareIncoming(reopened,requestId);
+   assert.equal(reopened.savedNumberingLayout.numberFormat,'(#C1.#E1)');
+   assert.equal(reopened.savedNumberingSnapshot,18);
+  }
  }
 });
 

@@ -112,13 +112,16 @@ final class AppUpdaterTests: XCTestCase {
     }
     func testCurrentSignedReleaseClearsCachedUpdateAndBadgeState() async throws {
         let preferences=defaults(), key=Curve25519.Signing.PrivateKey()
+        let directory = try makeUpdateCache()
         let current=try signedManifest(version:"0.6.2",build:67,using:key)
         let cachedNewer=try signedManifest(version:"0.6.3",build:68,using:key)
         preferences.set(cachedNewer.data,forKey:"updates.signedManifest")
+        let installedPackage = try cacheFile(version: "0.6.2", hash: "0", in: directory)
+        let pendingPackage = try cacheFile(version: "0.6.3", hash: "0", in: directory)
         let updater=AppUpdater(defaults:preferences,installed:("0.6.2",67),fetcher:{ _,_,_ in
             let file=FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
             try current.data.write(to:file); return file
-        },verificationKey:current.publicKey)
+        },verificationKey:current.publicKey,downloadDirectory:directory)
 
         XCTAssertTrue(updater.hasUpdate)
         updater.check(manually:false)
@@ -129,6 +132,59 @@ final class AppUpdaterTests: XCTestCase {
         XCTAssertFalse(updater.hasUpdate)
         XCTAssertNil(preferences.data(forKey:"updates.signedManifest"))
         XCTAssertNotNil(updater.lastChecked)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: installedPackage.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: pendingPackage.path))
+    }
+    func testStartupRemovesOnlyObsoleteUpdaterPackages() throws {
+        let preferences = defaults(), directory = try makeUpdateCache()
+        let current = try signedManifest(version: "0.7.2", build: 106)
+        preferences.set(false, forKey: "updates.automaticChecks")
+        preferences.set(current.data, forKey: "updates.signedManifest")
+        let old = try cacheFile(version: "0.7.1", hash: "a", in: directory)
+        let installed = try cacheFile(version: "0.7.2", hash: "0", in: directory)
+        let otherBuild = try cacheFile(version: "0.7.2", hash: "b", in: directory)
+        let newer = try cacheFile(version: "0.7.3", hash: "c", in: directory)
+        let unrelated = directory.appendingPathComponent("Another-App.pkg")
+        try Data().write(to: unrelated)
+        let symlink = directory.appendingPathComponent(String(repeating: "d", count: 64) + "-Equation-Lab-0.7.0.pkg")
+        try FileManager.default.createSymbolicLink(at: symlink, withDestinationURL: unrelated)
+        let updater = AppUpdater(defaults: preferences, installed: ("0.7.2", 106),
+                                 verificationKey: current.publicKey, downloadDirectory: directory)
+
+        updater.start()
+
+        for file in [old, installed] { XCTAssertFalse(FileManager.default.fileExists(atPath: file.path)) }
+        for file in [otherBuild, newer, unrelated, symlink] { XCTAssertTrue(FileManager.default.fileExists(atPath: file.path)) }
+        XCTAssertNil(preferences.data(forKey: "updates.signedManifest"))
+    }
+    func testInstallBlockerUpdatesWithWordAndEditorState() {
+        let updater = AppUpdater(defaults: defaults())
+        let bridge = DesktopBridge()
+        XCTAssertEqual(updater.installBlocker(bridge: bridge, wordRunning: true), .wordRunning)
+        bridge.wordSessionActive = true
+        XCTAssertEqual(updater.installBlocker(bridge: bridge, wordRunning: true), .editing)
+        bridge.wordSessionActive = false
+        bridge.wordDocumentRequestPending = true
+        XCTAssertEqual(updater.installBlocker(bridge: bridge, wordRunning: false), .editing)
+        bridge.wordDocumentRequestPending = false
+        bridge.installationRunning = true
+        XCTAssertEqual(updater.installBlocker(bridge: bridge, wordRunning: false), .installingPlugin)
+        bridge.installationRunning = false
+        bridge.state.busy = true
+        XCTAssertEqual(updater.installBlocker(bridge: bridge, wordRunning: false), .busy)
+        bridge.state.busy = false
+        XCTAssertNil(updater.installBlocker(bridge: bridge, wordRunning: false))
+    }
+    private func makeUpdateCache() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try FileManager.default.removeItem(at: directory) }
+        return directory
+    }
+    private func cacheFile(version: String, hash: String, in directory: URL) throws -> URL {
+        let file = directory.appendingPathComponent(String(repeating: hash, count: 64) + "-Equation-Lab-\(version).pkg")
+        try Data("pkg".utf8).write(to: file)
+        return file
     }
     func testAutomaticCheckThrottleAppliesAfterFailureButManualRetryBypassesIt() async {
         let preferences=defaults(), counter=UpdateRequestCounter()

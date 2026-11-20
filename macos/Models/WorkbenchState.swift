@@ -185,6 +185,9 @@ struct WorkbenchState: Decodable {
     var effectiveZoom = 100
     var keyboardVisible = false
     var ruler: [RulerTab] = []
+    var rulerChanged = false
+    var canUndo = false
+    var canRedo = false
     var matrix: MatrixContext? = nil
 
     mutating func apply(_ payload: [String: Any]) throws {
@@ -267,6 +270,9 @@ struct WorkbenchState: Decodable {
         if let v = try value("effectiveZoom", Int.self) { effectiveZoom = v }
         if let v = try value("keyboardVisible", Bool.self) { keyboardVisible = v }
         if let v = try value("ruler", [RulerTab].self) { ruler = v }
+        if let v = try value("rulerChanged", Bool.self) { rulerChanged = v }
+        if let v = try value("canUndo", Bool.self) { canUndo = v }
+        if let v = try value("canRedo", Bool.self) { canRedo = v }
         if payload["matrix"] is NSNull { matrix = nil } else if let v = try value("matrix", MatrixContext.self) { matrix = v }
     }
 }

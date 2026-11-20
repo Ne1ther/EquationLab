@@ -18,9 +18,14 @@ window.createWordDocumentWorkspace = api => {
   const cachedMetadata=next.find(item=>item.identity===cached?.documentIdentity);
   let cachedChanged=false;
   if(Number.isSafeInteger(cachedMetadata?.numberingRevision)&&Number.isSafeInteger(cached?.documentNumberingRevision)){
-   const stale=cached.confirmedNumberingChange||cachedMetadata.numberingRevision!==cached.documentNumberingRevision;
+   const observed=cachedMetadata.numberingRevision;
+   const matches=observed===cached.documentNumberingRevision||observed===cached.formatSaveRevision;
+   if(cached.formatSaveRevision!==null&&!matches){
+    cached.formatSaveRevision=null;
+    cached.confirmedNumberingChange=true;
+   }
+   const stale=cached.confirmedNumberingChange||!matches;
    if(stale)cached.confirmedContentSaveIndex=null;
-   if(cached.formatSaveRevision!==null&&cachedMetadata.numberingRevision!==cached.documentNumberingRevision&&cachedMetadata.numberingRevision!==cached.formatSaveRevision)cached.formatSaveRevision=null;
    if(stale!==cached.numberingRefreshNeeded){cached.numberingRefreshNeeded=stale;cachedChanged=true;}
   }
   const nextInsertionSupported=nextConnected&&status.insertionRequestSupport===true;
@@ -47,8 +52,32 @@ window.createWordDocumentWorkspace = api => {
   catch(error){api.message('未能读取 Word 文档列表：'+error.message,true);return false;}
  }
  const validTarget=target=>target&&typeof target.identity==='string'&&target.identity.length>0&&target.snapshot!=null&&Number.isInteger(target.index)&&/^[a-f0-9]{64}$/.test(target.nativeSha256||'');
+ const nextNumberingRevision=revision=>revision===2147483646?1:revision+1;
+ const snapshotForRow=(document,index)=>document.formatSaveRevision!=null&&document.formatSaveIndex===index?document.formatSaveSnapshot:document.documentSnapshot;
+ const cachedNumberingRevision=()=>cached?.formatSaveRevision??cached?.documentNumberingRevision;
+ function matchesCachedNumbering(document){
+  if(!cached||cached.numberingRefreshNeeded||document.numberingRefreshNeeded||cached.documentIdentity!==document.documentIdentity||
+   document.documentTotal!==cached.objects.length||!Number.isSafeInteger(document.documentNumberingRevision)||
+   document.documentNumberingRevision!==cachedNumberingRevision())return false;
+  const owner=document.objects?.[document.activeIndex],row=cached.objects[document.documentPosition];
+  return /^[a-f0-9]{64}$/.test(owner?.nativeSha256??'')&&owner.nativeSha256===row?.nativeSha256;
+ }
+ function restoreSavedNumberingLayout(document){
+  const index=document.documentPosition;
+  if(!document.documentLoading||document.insertion||!document.wordNumberingSupported||!cached||
+   document.documentIdentity!==cached.documentIdentity||cached.formatSaveIndex!==index||
+   cached.formatSaveRevision==null||cached.formatSaveRevision!==document.documentNumberingRevision||
+   document.documentTotal!==cached.objects.length)return;
+  const object=document.objects?.[document.activeIndex],previous=cached.objects[index];
+  if(!previous?.layout||!/^[a-f0-9]{64}$/.test(object?.nativeSha256??'')||object.nativeSha256!==previous.nativeSha256)return;
+  // An exact owner match also covers reopening directly from Word or Dock.
+  document.savedNumberingLayout={...previous.layout};
+  document.savedNumberingSnapshot=cached.formatSaveSnapshot;
+  document.savedNumberingLocal=!cached.numberingRefreshNeeded;
+  object.layout=document.savedNumberingLayout;
+ }
  const clearUnavailable=()=>{if(!wordDocumentUnavailable&&!unavailableIdentity&&!unavailableName)return false;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';changed();return true;};
- const remember=(document,confirmedContentSaveIndex=null,formatSaveRevision=null)=>{
+ const remember=(document,confirmedContentSaveIndex=null,formatSaveRevision=null,formatSaveIndex=null,formatSaveSnapshot=document?.documentSnapshot)=>{
   if(!document?.hasDocumentContext||!document.documentIdentity||document.documentLoading||document.documentLoadFailed)return;
   if(knownRetired.has(document.documentIdentity)||wordDocumentUnavailable&&document.documentIdentity===unavailableIdentity)return;
   if(cached?.documentIdentity===document.documentIdentity&&cached.documentSnapshot!==document.documentSnapshot){
@@ -59,13 +88,46 @@ window.createWordDocumentWorkspace = api => {
     if(!object.image&&!object.error&&images.has(object.nativeSha256))object.image=images.get(object.nativeSha256);
    }
   }
-  cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,documentNumberingRevision:document.documentNumberingRevision,numberingRefreshNeeded:!!document.numberingRefreshNeeded,confirmedNumberingChange:!!document.confirmedNumberingChange,confirmedContentSaveIndex,formatSaveRevision,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
+  cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,documentNumberingRevision:document.documentNumberingRevision,numberingRefreshNeeded:!!document.numberingRefreshNeeded,confirmedNumberingChange:!!document.confirmedNumberingChange,confirmedContentSaveIndex,formatSaveRevision,formatSaveIndex,formatSaveSnapshot,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
  };
+ function rememberAfterCancel(document){
+  if(!document?.hasDocumentContext||document.insertion||knownRetired.has(document.documentIdentity))return;
+  if(document.documentLoading||document.documentLoadFailed){
+   if(!matchesCachedNumbering(document))return;
+  }else{
+   remember(document);
+   if(cached?.documentSnapshot!==document.documentSnapshot||cached?.documentIdentity!==document.documentIdentity)return;
+  }
+  cached.cancelledEdit=true;
+ }
+ function rememberScopedNumbering(document,change,numbering){
+  const index=document.documentPosition,revision=document.documentNumberingRevision,layout=document.savedNumberingLayout;
+  const previous=cached.objects[index],owner=document.objects[document.activeIndex],observed=document.liveNumberingRevision;
+  if(document.insertion||document.wordNumberingExistingSupported!==true||!layout||!previous||!owner||
+   cached.objects.length!==document.documentTotal||cached.formatSaveIndex!==index||cached.formatSaveSnapshot!==document.savedNumberingSnapshot||
+   previous.layout?.mode!==layout.mode||previous.layout?.numberFormat!==layout.numberFormat||
+   layout.mode!=='numbered-'+numbering?.side||typeof numbering?.format!=='string'||numbering.context||
+   !Number.isSafeInteger(revision)||revision<0||revision>2147483646||numbering.existingRevision!==revision||
+   Number.isSafeInteger(observed)&&observed!==revision&&observed!==nextNumberingRevision(revision)||
+   !change||change.numberingChanged!==true||change.documentIdentity!==document.documentIdentity||
+   change.documentSnapshot!==document.documentSnapshot||change.documentSnapshot==null||change.index!==index||
+   !/^[a-f0-9]{64}$/.test(owner.nativeSha256??'')||previous.nativeSha256!==owner.nativeSha256||
+   change.previousNativeSha256!==owner.nativeSha256||change.nativeSha256!==owner.nativeSha256)return false;
+  const objects=cached.objects.slice();
+  objects[index]={...previous,layout:{...layout,numberFormat:numbering.format,numberText:numbering.previewText??null}};
+  // Bind only the confirmed row to the scoped snapshot. Other cached rows
+  // retain their full snapshot and still require a fresh capture to edit.
+  const stale=!document.savedNumberingLocal||typeof numbering.previewText!=='string'||!numbering.previewText;
+  remember({...cached,objects,documentNumberingRevision:revision,confirmedNumberingChange:!!stale,numberingRefreshNeeded:!!stale},
+   null,nextNumberingRevision(revision),index,change.documentSnapshot);
+  return true;
+ }
  function rememberAfterSave(document,index,change,latex,numbering){
   if(!document?.hasDocumentContext||!document.documentIdentity)return;
   const insertion=!!document.insertion;
   if(document.documentLoading||document.documentLoadFailed){
    if(cached?.documentIdentity!==document.documentIdentity)return;
+   if(rememberScopedNumbering(document,change,numbering))return;
    // No current full snapshot can bind this row. Keep the old context visible
    // but prevent its stale row from being sent as a verified target.
    index=document.documentPosition;
@@ -76,23 +138,27 @@ window.createWordDocumentWorkspace = api => {
   const confirmed=previous&&change?.documentIdentity===document.documentIdentity&&change.documentSnapshot===document.documentSnapshot&&change.index===index&&change.previousNativeSha256===previous.nativeSha256&&validTarget({identity:change.documentIdentity,snapshot:change.documentSnapshot,index,nativeSha256:change.nativeSha256});
   const objects=document.objects.slice();
   const revision=document.documentNumberingRevision;
-  const formatOnly=confirmed&&change.numberingChanged===true&&!document.numberingRefreshNeeded
+  const publishedLocalSave=change?.numberingLocal===true&&Number.isSafeInteger(revision)&&
+   numbering?.verifiedStartRevision===revision&&document.liveNumberingRevision===nextNumberingRevision(revision);
+  const formatOnly=confirmed&&change.numberingChanged===true&&(!document.numberingRefreshNeeded||publishedLocalSave)
    &&typeof numbering?.format==='string'&&!numbering.context&&previous.layout?.numberText
    &&previous.layout.mode==='numbered-'+numbering.side&&Number.isSafeInteger(revision);
   if(previous&&(!confirmed||previous.nativeSha256!==change.nativeSha256)){
    objects[index]={...previous,nativeSha256:confirmed?change.nativeSha256:null,latex:confirmed?latex:previous.latex,image:null};
   }
-  if(formatOnly&&typeof numbering.previewText==='string')objects[index]={...objects[index],layout:{
-   ...previous.layout,numberFormat:numbering.format,numberText:numbering.previewText
+  if(formatOnly)objects[index]={...objects[index],layout:{
+   ...previous.layout,numberFormat:numbering.format,numberText:numbering.previewText??null
   }};
-  const confirmedNumberingChange=!!(document.confirmedNumberingChange||insertion||numbering||change?.numberingChanged);
-  const numberingRefreshNeeded=!!document.numberingRefreshNeeded||confirmedNumberingChange;
+  // Only Word can confirm that no other numbering fields were rebuilt.
+  const localNumbering=formatOnly&&change.numberingLocal===true&&typeof numbering.previewText==='string'&&!!numbering.previewText;
+  const confirmedNumberingChange=!!(document.confirmedNumberingChange||insertion||!localNumbering&&(numbering||change?.numberingChanged));
+  const numberingRefreshNeeded=!!document.numberingRefreshNeeded&&!localNumbering||confirmedNumberingChange;
   const confirmedContentSave=!!confirmed&&index>=0&&previous.index===index&&/^[a-f0-9]{64}$/.test(previous.nativeSha256||'')
    &&change.numberingChanged===false&&!numberingRefreshNeeded&&Number.isSafeInteger(document.documentNumberingRevision);
   // Word advances this revision once per confirmed numbering transaction.
   // The previous publication can still be in flight when Dock reveals us.
-  const formatSaveRevision=formatOnly?(revision===2147483646?1:revision+1):null;
-  remember({...document,objects,confirmedNumberingChange,numberingRefreshNeeded},confirmedContentSave?index:null,formatSaveRevision);
+  const formatSaveRevision=formatOnly?nextNumberingRevision(revision):null;
+  remember({...document,objects,confirmedNumberingChange,numberingRefreshNeeded},confirmedContentSave?index:null,formatSaveRevision,formatOnly?index:null);
  }
  async function cancelPending(){
   const old=pending;pending=null;preparedInsertionDraft=null;generation++;changed();
@@ -181,8 +247,11 @@ window.createWordDocumentWorkspace = api => {
   const loadingSameDocument=(source?.documentLoading||source?.documentLoadFailed)&&identityOf(source)===identityOf(cached);
   if(cached?.objects.length&&(waitingOnCachedDocument||loadingSameDocument)){
    const total=source?.documentTotal??cached.objects.length,failed=!!source?.documentLoadFailed;
-   if(!displayedDuringLoad||displayedDuringLoad.objects!==cached.objects||displayedDuringLoad.documentTotal!==total||displayedDuringLoad.documentLoadFailed!==failed){
-    displayedDuringLoad={...cached,documentTotal:total,documentLoading:!failed,documentLoadFailed:failed,numberingRefreshNeeded:true};
+   const projected=source?matchesCachedNumbering(source):!cached.numberingRefreshNeeded&&
+    documents.some(doc=>doc.identity===cached.documentIdentity&&Number.isSafeInteger(doc.numberingRevision)&&doc.numberingRevision===cachedNumberingRevision());
+   const stale=!projected;
+   if(!displayedDuringLoad||displayedDuringLoad.objects!==cached.objects||displayedDuringLoad.documentTotal!==total||displayedDuringLoad.documentLoadFailed!==failed||displayedDuringLoad.numberingRefreshNeeded!==stale){
+    displayedDuringLoad={...cached,documentTotal:total,documentLoading:!failed,documentLoadFailed:failed,numberingRefreshNeeded:stale};
    }
    return displayedDuringLoad;
   }
@@ -369,6 +438,7 @@ window.createWordDocumentWorkspace = api => {
  }
  return {
   remember,
+  rememberAfterCancel,
   rememberAfterSave,
   visibleSource,
   get wordDocumentUnavailable(){return wordDocumentUnavailable;},
@@ -433,9 +503,11 @@ window.createWordDocumentWorkspace = api => {
     // Selecting any row still requires a fresh Word capture with its target.
     const matchingDocument=cached&&active?.identity===cached.documentIdentity&&entry?.readOnly===false&&!wordDocumentUnavailable;
     const contentSave=matchingDocument&&Number.isInteger(cached.confirmedContentSaveIndex)&&!cached.numberingRefreshNeeded&&entry.numberingRevision===cached.documentNumberingRevision;
-    const formatSave=matchingDocument&&cached.formatSaveRevision!==null
+    const formatSave=matchingDocument&&!cached.numberingRefreshNeeded&&cached.formatSaveRevision!==null
      &&(entry.numberingRevision===cached.documentNumberingRevision||entry.numberingRevision===cached.formatSaveRevision);
-    if(contentSave||formatSave){
+    const cancelledEdit=matchingDocument&&cached.cancelledEdit&&!cached.numberingRefreshNeeded
+     &&Number.isSafeInteger(entry.numberingRevision)&&entry.numberingRevision===cachedNumberingRevision();
+    if(contentSave||formatSave||cancelledEdit){
      cached.warmDockVerified=true;
      changed();return true;
     }
@@ -443,7 +515,9 @@ window.createWordDocumentWorkspace = api => {
    return requestOpen(null,false,status?.connected?active?.identity:null);
   },
   async select(index,{reload=false}={}){
-   const beforeGeneration=generation,state=api.state(),document=state.source||cached,object=document?.objects[index];
+   const beforeGeneration=generation,state=api.state(),document=state.source||cached;
+   const retryOwner=reload&&state.wordTicket&&document?.documentLoadFailed&&index===document.activeIndex;
+   const object=document?.objects[index];
    if(wordDocumentUnavailable){api.message('文档连接已结束，无法再选择原文档公式。草稿已保留。',true);return false;}
    if(state.wordTicket&&state.source?.catalogProof&&!reload){
     if(state.busy||state.outcomeUnknown||pending||selecting||!Number.isInteger(index)||index<0||index>=document.documentTotal||index===document.documentPosition)return false;
@@ -462,7 +536,7 @@ window.createWordDocumentWorkspace = api => {
    }
    if(state.busy||state.outcomeUnknown||pending||selecting||!object)return false;
    if(reload&&state.draftChanged)return false;
-   const target={identity:document.documentIdentity,snapshot:document.documentSnapshot,index,nativeSha256:object.nativeSha256};
+   const target={identity:document.documentIdentity,snapshot:snapshotForRow(document,index),index:retryOwner?document.documentPosition??index:index,nativeSha256:object.nativeSha256};
    if(!validTarget(target)){api.message('文档信息已失效，请从 Word 重新打开公式。',true);return false;}
    const retrySavedTarget=!reload&&document.warmDockVerified&&document.confirmedContentSaveIndex===index&&canRetrySavedTarget(target);
    selecting=true;changed();
@@ -471,11 +545,11 @@ window.createWordDocumentWorkspace = api => {
     if(state.draftChanged){const answer=await api.native('confirmWordSessionSwitch',{browsing:true});if(!answer?.discard)return false;approved=true;}
     let current=api.state();
     if(generation!==beforeGeneration||current.source!==state.source||current.wordTicket!==state.wordTicket||current.busy||current.outcomeUnknown||current.draftChanged&&!approved)return false;
-    remember(document);
+    if(document!==cached||cached.formatSaveRevision===null)remember(document);
     if(state.wordTicket&&!await api.detach())return false;
     current=api.state();
     if(generation!==beforeGeneration||current.wordTicket||current.busy||current.outcomeUnknown||!state.wordTicket&&current.source!==state.source)return false;
-    return await requestOpen(target,approved||reload,null,false,null,null,retrySavedTarget);
+    return await requestOpen(target,approved||reload,retryOwner?target.identity:null,false,null,null,retrySavedTarget);
    }finally{selecting=false;changed();}
   },
   async newFormula(){
@@ -504,14 +578,15 @@ window.createWordDocumentWorkspace = api => {
     throw Error('该 Word 文档连接已结束。草稿仍保留，请重新选择当前文档。');
    }
    if(requestId&&(pending!==request||request.generation!==generation))throw Error('这次 Word 文档打开请求已经结束。');
-   if(!request)return false;
-   if(!requestId){await cancelPending();return false;}
+   if(!request){restoreSavedNumberingLayout(document);return false;}
+   if(!requestId){await cancelPending();restoreSavedNumberingLayout(document);return false;}
    if(request.expectedIdentity&&document.documentIdentity!==request.expectedIdentity){await cancelPending();throw Error('Word 当前文档已变化。草稿仍保留，请重新打开目标文档。');}
    if(request.insertion&&(!document.insertion||document.insertionLayout?.mode!==request.insertion.mode)){await cancelPending();throw Error('Word 返回的插入会话不匹配。草稿仍保留。');}
    const target=request.target,object=document.objects?.[request.insertion?target?.index:document.activeIndex];
    if(request.catalogTarget&&(document.insertion||(document.documentPosition??document.activeIndex)!==request.catalogTarget.index||!/^[0-9a-f]{64}$/.test(object?.nativeSha256||''))){await cancelPending();throw Error('Word 返回的公式与所选目录行不一致。请刷新文档后再选。');}
    const same=target&&document.documentIdentity===target.identity&&(request.insertion?target.index:(document.documentPosition??document.activeIndex))===target.index;
    if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){await cancelPending();throw Error('Word 中的公式内容或位置已经变化。草稿仍保留，请重新打开文档后再选。');}
+   restoreSavedNumberingLayout(document);
    const approved=request.discardApproved&&(!target||same);
    preparedInsertionDraft=request.insertion?{requestId,draft:request.insertion.draft}:null;
    pending=null;generation++;changed();return !!approved;

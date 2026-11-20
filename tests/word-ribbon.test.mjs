@@ -181,12 +181,14 @@ test('requested capture uses retained anchors or an exact first selection withou
  assert.match(remember,/anchors\.Count <> mEquations\.Count/);assert.match(remember,/RememberDocumentRanges mDocument, mSnapshotToken, anchors/);
  const preflight=procedure('Public Sub ELCaptureEquation');
  assert.match(preflight,/Set candidateRange = shape\.Range[\s\S]*?mEquations\.Add shape\s+anchors\.Add candidateRange\.Duplicate/);
+ assert.doesNotMatch(preflight,/ScreenUpdating|ScreenRefresh|\.Select\b|\.Activate\b/);
  const rememberRanges=procedure('Private Sub RememberDocumentRanges');assert.match(rememberRanges,/mBoundRanges\.Add anchors, CStr\(snapshotToken\)/);
  assert.doesNotMatch(remember,/mBoundRanges\.Add mEquations/);
  const capture=procedure('Private Sub ApplyDocumentCaptureRequest');
  assert.match(capture,/mBoundDocuments\(CStr\(snapshot\)\)/);assert.match(capture,/KnownDocumentIdentity\(Doc\) <> identity/);
  assert.match(capture,/For Each candidate In Application.Documents/);assert.match(capture,/mBoundRanges\(CStr\(snapshot\)\)/);
  assert.match(capture,/Set anchor = anchors\(index\)/);assert.match(capture,/ResolveBoundEquation\(Doc, anchor, index\)/);
+ assert.match(capture,/If enrichment Then\s+Set shape = ResolveBoundEquation\(Doc, anchor, index, True\)/);
  assert.match(capture,/shape.Range.Document Is Doc/);assert.match(capture,/ELCaptureEquation shape, True/);
  assert.doesNotMatch(capture,/\.Select\b|\.Activate\b|ScreenRefresh/i);
  assert.doesNotMatch(capture,/Set shape = equations\(index\)/);
@@ -196,8 +198,10 @@ test('requested capture uses retained anchors or an exact first selection withou
  assert.match(capture,/MathTypeBridgeDocumentCaptureRequestToken/);
  const resolver=source.slice(source.indexOf('Private Function ResolveBoundEquation'),source.indexOf('End Function',source.indexOf('Private Function ResolveBoundEquation')));
  assert.match(resolver,/anchor\.Document Is Doc/);assert.match(resolver,/anchor\.StoryType <> wdMainTextStory/);
- assert.match(resolver,/anchor\.Start >= anchor\.End/);assert.match(resolver,/shape\.Range\.Start = anchor\.Start And shape\.Range\.End = anchor\.End/);
- assert.match(resolver,/shape\.Range\.InlineShapes\.Count <> 1/);assert.match(resolver,/Supported\(shape\)/);assert.match(resolver,/index \+ 1 <> expectedIndex/);
+ assert.match(resolver,/anchor\.Start >= anchor\.End/);assert.match(resolver,/startAt = anchor\.Start\s+endAt = anchor\.End/);
+ assert.match(resolver,/If readOnlyCapture Then[\s\S]*?If anchor\.InlineShapes\.Count = 1 Then Set span = anchor\.InlineShapes\(1\)\.Range[\s\S]*?startAt = span\.Start\s+endAt = span\.End/);
+ assert.match(resolver,/shape\.Range\.Start = startAt And shape\.Range\.End = endAt/);
+ assert.match(resolver,/If Not readOnlyCapture Then\s+If shape\.Range\.InlineShapes\.Count <> 1/);assert.match(resolver,/Supported\(shape\)/);assert.match(resolver,/index \+ 1 <> expectedIndex/);
  const save=procedure('Private Sub ApplyBackgroundSave');
  assert.match(save,/mBoundRanges\(CStr\(token\)\)/);assert.match(save,/ResolveBoundEquation\(Doc, anchor, index\)/);
  assert.doesNotMatch(save,/Set shape = equations\(index\)/);
@@ -618,7 +622,7 @@ test('unreferenced MathType numbers receive only a bounded display anchor inside
  const unwrap=vba.slice(vba.indexOf('Private Function UpdateOrUnwrapSelectedSharedNumber'),vba.indexOf('Private Function PendingSharedNumberSpan'));
  assert.match(unwrap,/EnsureSharedNumberBookmark Doc, equation, changed/);
  assert.match(unwrap,/patternOverride <> "" And Not contextChanged[\s\S]*SharedNumberOnRequestedSide[\s\S]*ReplaceNumberXML Doc, envelope, pattern, target.Name, chapter, section, equationNumber, replaceInPlace, changed, equationReset/);
- assert.match(unwrap,/If Not HasLegacyNumbering\(Doc, fields\) Then Set displayOnlyFields = fields[\s\S]*?refreshedDisplayOnly = Not displayOnlyFields Is Nothing/);
+ assert.match(unwrap,/If requireExisting Or Not HasLegacyNumbering\(Doc, fields\) Then Set displayOnlyFields = fields[\s\S]*?refreshedDisplayOnly = Not displayOnlyFields Is Nothing/);
  assert.match(unwrap,/ValidateEquationParagraphRemainder Doc, paragraph, oleRange, envelope/);
  assert.doesNotMatch(unwrap,/\.InsertXML|NormalizeNumberParagraph|\bSelection\b/);
  const upgrade=vba.slice(vba.indexOf('Public Sub ELUpgradeNumberingForInterop'),vba.indexOf('Private Function ValidDisplaySequence'));
@@ -628,6 +632,19 @@ test('unreferenced MathType numbers receive only a bounded display anchor inside
  assert.doesNotMatch(reference,/ELUpgradeNumberingForInterop Doc/);
  assert.ok(reference.indexOf('ChooseReference(')<reference.indexOf('ELBeginNumberingTransaction'));
  assert.ok(reference.indexOf('ELBeginNumberingTransaction')<reference.indexOf('EnsureSharedNumberBookmark Doc, equation, changed'));
+});
+
+test('Word verifies the existing numbering revision before the exact owner verb and again before any numbering write',async()=>{
+ const [host,ribbon]=await Promise.all([
+  readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8'),
+  readFile(new URL('../native-word-probe/automatic-loader/EquationLabRibbon.bas',import.meta.url),'utf8')
+ ]);
+ const save=host.slice(host.indexOf('Private Sub ApplyBackgroundSave('),host.indexOf('Private Sub ELRememberNumberedSave('));
+ assert.match(save,/ELNumberingRevision\(Doc\) <> existingRevision Then GoTo Failed[\s\S]*?shape\.OLEFormat\.Activate[\s\S]*?ELNumberingRevision\(Doc\) <> existingRevision Then GoTo Failed[\s\S]*?NumberSelectedEquation[^\n]*\(existingRevision >= 0\)/);
+ assert.match(save,/If existingRevision < 0 Then Doc\.Saved = False/);
+ const update=ribbon.slice(ribbon.indexOf('Private Function UpdateOrUnwrapSelectedSharedNumber('),ribbon.indexOf('Private Function SharedNumberOnRequestedSide('));
+ assert.match(update,/If Not requireExisting Then EnsureSharedNumberBookmark/);
+ assert.match(update,/If requireExisting And Not replaceInPlace Then Exit Function[\s\S]*?ReplaceNumberXML/);
 });
 
 test('reference picker text handles truncated UTF-16 without altering valid pairs',async()=>{

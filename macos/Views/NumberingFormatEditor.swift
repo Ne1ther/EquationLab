@@ -111,14 +111,16 @@ struct NumberingFormatEditor: View {
                 HStack(alignment: .firstTextBaseline) {
                     Text(bridge.t("格式预览")).font(.caption).foregroundStyle(.secondary)
                     Spacer()
-                    scopeTag
+                    if !field.disabled { scopeTag }
                 }
                 if invalid {
                     Text(bridge.t("格式无效：包含一个 #E 序号，章、节和序号各用一次；数字需在 1–32767 之间。"))
                         .font(.caption).foregroundStyle(.red)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if field.disabled && bridge.state.wordDocumentLoading {
-                    Text(label("正在读取 Word 编号…", "Loading numbers from Word…"))
+                } else if field.disabled && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed) {
+                    Text(bridge.state.wordDocumentLoadFailed
+                         ? label("重试载入后，可预览当前公式的编号。", "Reload the document to preview this equation’s number.")
+                         : label("正在读取 Word 编号…", "Loading numbers from Word…"))
                         .font(.caption).foregroundStyle(.secondary)
                 } else {
                     numberBadge(preview.isEmpty ? "…" : preview)
@@ -139,7 +141,7 @@ struct NumberingFormatEditor: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
 
-            scopeConsequenceNote
+            if !field.disabled { scopeConsequenceNote }
 
             if bridge.state.layout.contains(where: { ($0.id == "layout-chapter" || $0.id == "layout-section") && !$0.disabled }) {
                 Text(bridge.t("章、节来自当前位置的编号字段；修改后从当前公式重新起号，无需先给 Word 标题分章。"))
@@ -211,9 +213,11 @@ struct NumberingFormatEditor: View {
     }
 
     private func editFormat(_ value: String) {
-        guard !field.disabled else { return }
+        guard !field.disabled, value != draft else { return }
         draft = value
-        if value != field.value { bridge.fieldBinding(field.id, fallback: field.value).wrappedValue = value }
+        // The view's field snapshot can still contain the value the user
+        // just reverted to. Send the new edit even in that case.
+        bridge.fieldBinding(field.id, fallback: field.value).wrappedValue = value
     }
 
     @ViewBuilder

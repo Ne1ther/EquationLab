@@ -267,6 +267,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic,strong) NSDictionary* numbering;
 @property(nonatomic) NSUInteger numberingCursor;
 @property(nonatomic) BOOL nativeApplied;
+@property(nonatomic) BOOL displayOnlyNumbering;
 @end
 @implementation ProbeBackgroundSave
 @end
@@ -293,6 +294,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 @property(nonatomic,strong) ProbeBackgroundSave* backgroundSave;
 @property(nonatomic) BOOL numberingSupportRegistered;
 @property(nonatomic) BOOL numberingContextSupportRegistered;
+@property(nonatomic) BOOL numberingExistingSupportRegistered;
 @property(nonatomic,strong) NSDictionary* reopenToolHandoff;
 @property(nonatomic,strong) NSDictionary* testDocumentContext;
 @property(nonatomic) std::uint64_t activation;
@@ -436,6 +438,8 @@ static ProbeEditorTransport* transport=nil;
     self.captureRequest=nil;EquationLabDiscardDocumentParts();
     if(state.retryingLiveCapture&&[context[@"encoding"] isEqual:@"docx-base64"]){[self captureFailed:state];return -3;}
     if(!matches){
+        os_log_info(OS_LOG_DEFAULT,"WordHostCapture rejected by host=%d fresh=%d bound=%d enrichment=%d",
+                    !success,commonMatch,hasBinding,state.enrichingDocument);
         state.captureRequested=NO;
         if(state.activation==self.activation&&state.captureAttempts<3){[self requestCapture:state];return -3;}
         [self captureFailed:state];return -3;
@@ -662,7 +666,9 @@ static ProbeEditorTransport* transport=nil;
     if(self.backgroundSave!=save)return;self.backgroundSave=nil;
     save.native=nil;save.pdf=nil;save.binding=nil;
     if(!ok)lastError=ApplyFailure;
-    [self request:@"/api/native-ack" body:@{@"ticket":save.ticket,@"session":save.session,@"ok":@(ok)} reply:^(NSDictionary*,NSError*){}];
+    NSMutableDictionary* receipt=[@{@"ticket":save.ticket,@"session":save.session,@"ok":@(ok)} mutableCopy];
+    if(ok&&save.displayOnlyNumbering)receipt[@"numberingLocal"]=@YES;
+    [self request:@"/api/native-ack" body:receipt reply:^(NSDictionary*,NSError*){}];
 }
 - (void)ackBackgroundUncertain:(ProbeBackgroundSave*)save {
     if(self.backgroundSave!=save)return;self.backgroundSave=nil;
@@ -680,6 +686,15 @@ static ProbeEditorTransport* transport=nil;
     if(!bridge_probe::bindEditDocument(sessionId,[save.binding[@"identity"] UTF8String])){bridge_probe::completeEdit(sessionId,nullptr,0,false);[self ackBackground:save ok:NO];return YES;}
     NSMutableDictionary* targetBinding=[save.binding mutableCopy];targetBinding[@"index"]=@(save.index);
     [self rememberCaptureOwner:bridge_probe::editObjectIdentity(sessionId) context:targetBinding digest:save.expectedDigest];
+    if(save.numbering[@"existingRevision"]){
+        // For a format-only edit, use the verb to verify the live owner.
+        // Release it without replacing the formula, its preview or its extent.
+        const bool unchanged=[native isEqualToData:save.native];
+        const auto hr=bridge_probe::completeEdit(sessionId,nullptr,0,false);
+        if(unchanged&&hr==bridge_probe::Ok)save.nativeApplied=YES;
+        else [self ackBackground:save ok:NO];
+        return YES;
+    }
     self.applying=YES;
     auto hr=bridge_probe::setSessionPreview(sessionId,static_cast<const std::uint8_t*>(save.pdf.bytes),save.pdf.length,save.extent);
     if(hr==bridge_probe::Ok)hr=bridge_probe::completeEdit(sessionId,static_cast<const std::uint8_t*>(save.native.bytes),save.native.length,true);
@@ -743,6 +758,7 @@ static ProbeEditorTransport* transport=nil;
     NSMutableDictionary* body=[@{@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],@"native":[state.openNative base64EncodedStringWithOptions:0],@"acknowledgement":@YES} mutableCopy];
     if(self.numberingSupportRegistered&&!state.retainedOwnerOnly)body[@"numberingSupport"]=@YES;
     if(self.numberingContextSupportRegistered&&!state.retainedOwnerOnly)body[@"numberingContextSupport"]=@YES;
+    if(self.numberingExistingSupportRegistered&&!state.retainedOwnerOnly)body[@"numberingExistingSupport"]=@YES;
     if(state.documentContext){
         // ELCTX4's one-shot token belongs to the Word/native handshake. The
         // service accepts only its public document schema after that check.
@@ -851,7 +867,13 @@ static ProbeEditorTransport* transport=nil;
         id targetValue=json[@"target"],numberingValue=json[@"numbering"];
         if(current.retainedOwnerOnly&&(numberingValue||targetValue||bridge_probe::editObjectIdentity(current.sessionId)!=current.ownerIdentity)){[self failResult:current code:InvalidReply];return;}
         if(numberingValue){
-            if(!self.numberingSupportRegistered||![numberingValue isKindOfClass:NSDictionary.class]||[numberingValue count]!=static_cast<NSUInteger>(numberingValue[@"context"]?3:2)||![numberingValue[@"format"] isKindOfClass:NSString.class]||[numberingValue[@"format"] length]<1||[numberingValue[@"format"] length]>128||![@[@"left",@"right"] containsObject:numberingValue[@"side"]]||[numberingValue[@"format"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){[self failResult:current code:InvalidReply];return;}
+            if(!self.numberingSupportRegistered||![numberingValue isKindOfClass:NSDictionary.class]||[numberingValue count]!=static_cast<NSUInteger>(2+(numberingValue[@"context"]?1:0)+(numberingValue[@"existingRevision"]?1:0))||![numberingValue[@"format"] isKindOfClass:NSString.class]||[numberingValue[@"format"] length]<1||[numberingValue[@"format"] length]>128||![@[@"left",@"right"] containsObject:numberingValue[@"side"]]||[numberingValue[@"format"] rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound){[self failResult:current code:InvalidReply];return;}
+        }
+        NSNumber* existingRevision=numberingValue[@"existingRevision"];
+        if(existingRevision&&(!self.numberingExistingSupportRegistered||numberingValue[@"context"]||
+            ![existingRevision isKindOfClass:NSNumber.class]||CFGetTypeID((__bridge CFTypeRef)existingRevision)==CFBooleanGetTypeID()||
+            existingRevision.doubleValue!=existingRevision.intValue||existingRevision.intValue<0||existingRevision.intValue>2147483646)){
+            [self failResult:current code:InvalidReply];return;
         }
         if(numberingValue[@"context"]){
             NSDictionary* context=numberingValue[@"context"];
@@ -868,6 +890,9 @@ static ProbeEditorTransport* transport=nil;
             NSCharacterSet* badDigest=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
             NSDictionary* binding=current.bindingContext;
             if(![target isKindOfClass:NSDictionary.class]||![index isKindOfClass:NSNumber.class]||[index intValue]<0||[index intValue]>10000||[index doubleValue]!=[index intValue]||![expected isKindOfClass:NSString.class]||[expected length]!=64||[expected rangeOfCharacterFromSet:badDigest].location!=NSNotFound||![identity isKindOfClass:NSString.class]||![identity isEqual:binding[@"identity"]]||![binding[@"snapshot"] isKindOfClass:NSNumber.class]||[binding[@"snapshot"] intValue]<=0||self.backgroundSave){
+                [self failResult:current code:InvalidReply];return;
+            }
+            if(existingRevision&&(![index isEqual:binding[@"index"]]||![existingRevision isEqual:binding[@"numberingRevision"]]||![nativeDigest(native) isEqual:expected])){
                 [self failResult:current code:InvalidReply];return;
             }
             ProbeBackgroundSave* save=[ProbeBackgroundSave new];save.ticket=current.ticket;save.session=[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(current.sessionId)];save.native=native;save.pdf=pdf;save.extent={static_cast<std::int32_t>(w),static_cast<std::int32_t>(h)};save.index=[index intValue];save.expectedDigest=expected;save.binding=binding;save.numbering=numberingValue;self.backgroundSave=save;
@@ -1019,6 +1044,14 @@ std::int32_t MathTypeBridgeRegisterNumberingSupport(){if(!NSThread.isMainThread|
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeRegisterNumberingContextSupport(){if(!NSThread.isMainThread||!transport)return -1;transport.numberingContextSupportRegistered=YES;return 0;}
 extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeRegisterNumberingExistingSupport(){if(!NSThread.isMainThread||!transport)return -1;transport.numberingExistingSupportRegistered=YES;return 0;}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeBackgroundNumberingExistingRevision(){
+    ProbeBackgroundSave* save=NSThread.isMainThread?transport.backgroundSave:nil;
+    NSNumber* revision=save.claimed?save.numbering[@"existingRevision"]:nil;
+    return revision?revision.intValue:-1;
+}
+extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingSide(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return 0;return [save.numbering[@"side"] isEqual:@"left"]?1:2;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingNext(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;NSString* format=save.numbering[@"format"];if(save.numberingCursor>=format.length)return 0;return static_cast<std::int32_t>([format characterAtIndex:save.numberingCursor++])+1;}
@@ -1037,8 +1070,18 @@ extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingExpectedChapter(){return backgroundNumberingCounter(@"expectedChapter");}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeBackgroundNumberingExpectedSection(){return backgroundNumberingCounter(@"expectedSection");}
+static std::int32_t finishBackgroundNumbering(BOOL displayOnly){
+    if(!NSThread.isMainThread)return -1;
+    ProbeBackgroundSave* save=transport.backgroundSave;
+    if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;
+    save.displayOnlyNumbering=displayOnly;
+    [transport ackBackground:save ok:YES];
+    return 0;
+}
 extern "C" __attribute__((visibility("default")))
-std::int32_t MathTypeBridgeFinishBackgroundNumbering(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(!save.claimed||!save.nativeApplied||!save.numbering)return -1;[transport ackBackground:save ok:YES];return 0;}
+std::int32_t MathTypeBridgeFinishBackgroundNumbering(){return finishBackgroundNumbering(NO);}
+extern "C" __attribute__((visibility("default")))
+std::int32_t MathTypeBridgeFinishBackgroundNumberingDisplayOnly(){return finishBackgroundNumbering(YES);}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeFailBackgroundSave(){if(!NSThread.isMainThread)return -1;ProbeBackgroundSave* save=transport.backgroundSave;if(save){if(save.nativeApplied)[transport ackBackgroundUncertain:save];else [transport ackBackground:save ok:NO];}return 0;}
 extern "C" __attribute__((visibility("default")))
