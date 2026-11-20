@@ -138,10 +138,7 @@ async function run() {
     const { TYPOGRAPHY_SPACES, TYPOGRAPHY_EXTRA_SIZES, TYPOGRAPHY_FONTS } = await load('typography-native.mjs');
     return { spaces: TYPOGRAPHY_SPACES, extraSizes: TYPOGRAPHY_EXTRA_SIZES, candidateFonts: TYPOGRAPHY_FONTS };
   }
-  const monitor = await load('ai-coordination.mjs').catch(() => null);
-  const operation = command === 'arrange-copy' ? 'arrange' : command;
-  const execute = () => runDocumentCommand(load, command, input, specOrIndex, output);
-  return monitor ? monitor.withAIActivity(operation, execute) : execute();
+  return runDocumentCommand(load, command, input, specOrIndex, output);
 }
 
 async function runDocumentCommand(load, command, input, specOrIndex, output) {

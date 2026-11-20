@@ -2,22 +2,24 @@ import XCTest
 @testable import EquationLab
 
 final class EquationLabSkillInstallationTests: XCTestCase {
+    private let fixtureSkill = "---\nname: equation-lab\ndescription: Fixture\n---\n"
+
     func testInstallsUnderSelectedHomeAndIsIdempotent() throws {
         try withFixture { installer in
-            XCTAssertEqual(installer.codexDestination.path, installer.userHome.path + "/.agents/skills/equation-lab")
-            XCTAssertEqual(installer.existing(at: installer.codexDestination), .available)
-            let installed = try installer.install(in: installer.codexDirectory)
-            XCTAssertEqual(installed, installer.codexDestination)
+            XCTAssertEqual(installer.sharedDestination.path, installer.userHome.path + "/.agents/skills/equation-lab")
+            XCTAssertEqual(installer.existing(at: installer.sharedDestination), .available)
+            let installed = try installer.install(in: installer.sharedDirectory)
+            XCTAssertEqual(installed, installer.sharedDestination)
             XCTAssertEqual(installer.existing(at: installed), .current)
-            XCTAssertEqual(try String(contentsOf: installed.appendingPathComponent("SKILL.md"), encoding: .utf8), "# Equation Lab\n")
+            XCTAssertEqual(try String(contentsOf: installed.appendingPathComponent("SKILL.md"), encoding: .utf8), fixtureSkill)
             XCTAssertEqual(try String(contentsOf: installed.appendingPathComponent(".equation-lab-resources"), encoding: .utf8), installer.resources.path + "\n")
-            XCTAssertEqual(try installer.install(in: installer.codexDirectory), installed)
-            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: installer.codexDirectory.path), ["equation-lab"])
+            XCTAssertEqual(try installer.install(in: installer.sharedDirectory), installed)
+            XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: installer.sharedDirectory.path), ["equation-lab"])
 
             let pointer = installed.appendingPathComponent(".equation-lab-resources")
             try "/previous/Equation Lab.app/Contents/Resources\n".write(to: pointer, atomically: true, encoding: .utf8)
             XCTAssertEqual(installer.existing(at: installed), .relink)
-            XCTAssertEqual(try installer.install(in: installer.codexDirectory), installed)
+            XCTAssertEqual(try installer.install(in: installer.sharedDirectory), installed)
             XCTAssertEqual(installer.existing(at: installed), .current)
             XCTAssertEqual(try String(contentsOf: pointer, encoding: .utf8), installer.resources.path + "\n")
         }
@@ -25,11 +27,11 @@ final class EquationLabSkillInstallationTests: XCTestCase {
 
     func testProtectsUserEditsAndDanglingLinksAtSameSkillName() throws {
         try withFixture { installer in
-            let installed = try installer.install(in: installer.codexDirectory)
+            let installed = try installer.install(in: installer.sharedDirectory)
             let readme = installed.appendingPathComponent("SKILL.md")
             try "User changes".write(to: readme, atomically: true, encoding: .utf8)
             XCTAssertEqual(installer.existing(at: installed), .conflict)
-            XCTAssertThrowsError(try installer.install(in: installer.codexDirectory)) {
+            XCTAssertThrowsError(try installer.install(in: installer.sharedDirectory)) {
                 XCTAssertTrue($0 is EquationLabSkillInstallation.Conflict)
             }
             XCTAssertEqual(try String(contentsOf: readme, encoding: .utf8), "User changes")
@@ -45,6 +47,73 @@ final class EquationLabSkillInstallationTests: XCTestCase {
         }
     }
 
+    func testSharesOneCopyAcrossClientsAndPreservesExistingFolders() throws {
+        try withFixture { installer in
+            let files = FileManager.default
+            let claude = try installer.link(.claude)
+            let antigravity = try installer.link(.antigravity)
+            XCTAssertEqual(claude.path, installer.userHome.path + "/.claude/skills/equation-lab")
+            XCTAssertEqual(antigravity.path, installer.userHome.path + "/.gemini/config/skills/equation-lab")
+            for (link, target) in [(claude, "../../.agents/skills/equation-lab"),
+                                   (antigravity, "../../../.agents/skills/equation-lab")] {
+                XCTAssertEqual(try files.destinationOfSymbolicLink(atPath: link.path), target)
+                XCTAssertEqual(try String(contentsOf: link.appendingPathComponent("SKILL.md"), encoding: .utf8), fixtureSkill)
+            }
+            XCTAssertEqual(try installer.link(.claude), claude)
+
+            try files.removeItem(at: claude)
+            try files.createDirectory(at: claude, withIntermediateDirectories: false)
+            let customized = claude.appendingPathComponent("SKILL.md")
+            try "Local skill".write(to: customized, atomically: true, encoding: .utf8)
+            XCTAssertThrowsError(try installer.link(.claude)) {
+                XCTAssertEqual(($0 as? EquationLabSkillInstallation.Conflict)?.destination, claude)
+            }
+            XCTAssertEqual(try String(contentsOf: customized, encoding: .utf8), "Local skill")
+        }
+    }
+
+    func testPreservesAnExistingSharedLink() throws {
+        try withFixture { installer in
+            let files = FileManager.default
+            try files.createDirectory(at: installer.sharedDirectory, withIntermediateDirectories: true)
+            try files.createSymbolicLink(at: installer.sharedDestination, withDestinationURL: installer.source)
+            XCTAssertEqual(installer.existing(at: installer.sharedDestination), .linked)
+            XCTAssertEqual(try installer.install(in: installer.sharedDirectory), installer.sharedDestination)
+            let claude = try installer.link(.claude)
+            XCTAssertEqual(claude.resolvingSymlinksInPath(), installer.source.resolvingSymlinksInPath())
+            XCTAssertFalse(files.fileExists(atPath: installer.source.appendingPathComponent(".equation-lab-resources").path))
+        }
+    }
+
+    func testUpgradesAppManagedCopyWithoutBreakingClientLink() throws {
+        try withFixture { installer in
+            let claude = try installer.link(.claude)
+            let newSkill = fixtureSkill + "\nUpdated\n"
+            try newSkill.write(to: installer.source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            XCTAssertEqual(installer.existing(at: installer.sharedDestination), .upgrade)
+            _ = try installer.install(in: installer.sharedDirectory)
+            XCTAssertEqual(installer.existing(at: installer.sharedDestination), .current)
+            XCTAssertEqual(claude.resolvingSymlinksInPath(), installer.sharedDestination.resolvingSymlinksInPath())
+            XCTAssertEqual(try String(contentsOf: claude.appendingPathComponent("SKILL.md"), encoding: .utf8), newSkill)
+        }
+    }
+
+    func testClientLinksFollowSharedCopyAfterMovingToAnotherHome() throws {
+        try withFixture { installer in
+            let files = FileManager.default
+            for client in EquationLabSkillInstallation.Client.allCases { try installer.link(client) }
+            let movedHome = installer.userHome.deletingLastPathComponent()
+                .appendingPathComponent("用户 B", isDirectory: true)
+            try files.moveItem(at: installer.userHome, to: movedHome)
+            let receiver = EquationLabSkillInstallation(resources: installer.resources, userHome: movedHome)
+            for client in EquationLabSkillInstallation.Client.allCases {
+                let link = try receiver.link(client)
+                XCTAssertEqual(link.resolvingSymlinksInPath(), receiver.sharedDestination.resolvingSymlinksInPath())
+                XCTAssertEqual(try String(contentsOf: link.appendingPathComponent("SKILL.md"), encoding: .utf8), fixtureSkill)
+            }
+        }
+    }
+
     private func withFixture(_ work: (EquationLabSkillInstallation) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let resources = directory.appendingPathComponent("Equation Lab.app/Contents/Resources", isDirectory: true)
@@ -53,7 +122,7 @@ final class EquationLabSkillInstallationTests: XCTestCase {
         for path in ["skills/equation-lab/scripts", "runtime/bin", "engine/src"] {
             try FileManager.default.createDirectory(at: resources.appendingPathComponent(path), withIntermediateDirectories: true)
         }
-        try "# Equation Lab\n".write(to: installer.source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+        try fixtureSkill.write(to: installer.source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
         try "#!/bin/sh\n".write(to: installer.source.appendingPathComponent("scripts/run"), atomically: true, encoding: .utf8)
         try Data().write(to: resources.appendingPathComponent("engine/src/cli.mjs"))
         let executable = resources.appendingPathComponent("runtime/bin/node")

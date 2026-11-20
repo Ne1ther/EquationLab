@@ -51,7 +51,7 @@
 
 给 AI 使用时，可从 [Equation Lab Skill](../skills/equation-lab/SKILL.md) 开始。它包含查看公式清单、生成可编辑的 MathType 公式、核对编号和引用、批量编辑的操作步骤。在 Word 正文指定位置插入公式时，使用 Word 功能区的对应命令。
 
-在 App 顶栏点 **AI**，打开 **AI 协作**，即可查看本机 Skill 和命令行任务的进度、完成或失败状态。操作从 AI 会话发起。关闭开关会停止显示状态，已经启动的命令继续执行。
+在 App 顶栏点 **AI → 安装或导出 Skill…**。Codex 和 DSH 默认读取共享目录，点 Claude Code 或 Antigravity 卡片可添加链接。其他客户端可通过 **🧠 其他客户端** 复制说明或导出文件夹。 [各客户端设置](../skills/equation-lab/references/installing.md)
 
 文档检查和副本处理也可直接用于 `.docx` 文件：
 

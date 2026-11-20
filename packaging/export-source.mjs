@@ -31,6 +31,7 @@ const roots = [
   'docs/source-publication.md', 'docs/feature-parity.md', 'docs/document-tools.md', 'docs/draft-recovery.md', 'docs/word-performance.md', 'docs/new-formula-defaults.md', 'docs/examples', 'docs/preview',
   'docs/compatibility-regression.md',
   'design/office-product-icons',
+  'design/ai-client-icons',
   'design/workbench-concepts/assets/equationlab-header-mark.svg',
   'design/equation-lab-icons/v5/svg/e2-lab-orange-paper.svg',
   'design/equation-lab-icons/v6/manifest.json', 'design/equation-lab-icons/v6/EquationLab.icns',

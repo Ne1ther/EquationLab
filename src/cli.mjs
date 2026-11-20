@@ -4,15 +4,8 @@ import {auditDocx,getReferenceTargets} from './document-audit.mjs';
 import {preflightTypography,applyTypography,readTypographyPreset} from './document-typography.mjs';
 import {preflightNumbering,applyNumbering} from './document-numbering-plan.mjs';
 import {collectConnectionDiagnostics} from './connection-diagnostics.mjs';
-import {withAIActivity} from './ai-coordination.mjs';
 const [command,...args]=process.argv.slice(2);
 const root=new URL('../',import.meta.url);
-const activity={
-  inspect:'inspect',audit:'audit',references:'audit','read-preset':'inspect',
-  'edit-char':'edit','edit-batch':'edit',
-  'plan-numbering':'planNumbering','apply-numbering':'applyNumbering',
-  'plan-typography':'planTypography','apply-typography':'applyTypography',
-};
 function serial(objects) {return objects.map(({ole,element,shape,image,partDoc,rels,...o})=>o);}
 async function writeNewCopy(path,bytes){
   const file=await open(path,'wx');
@@ -73,4 +66,4 @@ async function run(){
   } else throw Error('Usage: demo | inspect FILE | audit FILE | references FILE [QUERY] | read-preset FILE | plan-typography INPUT OPTIONS.json PLAN.json | apply-typography INPUT PLAN.json NEW_OUTPUT.docx | plan-numbering INPUT OPTIONS.json PLAN.json | apply-numbering INPUT PLAN.json NEW_OUTPUT.docx | diagnostics | edit-char INPUT OUTPUT INDEX OFFSET CHARACTER | edit-batch INPUT.docx EDITS.json NEW_OUTPUT.docx');
 }
 
-await withAIActivity(activity[command],run);
+await run();

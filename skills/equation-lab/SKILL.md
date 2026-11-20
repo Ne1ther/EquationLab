@@ -14,7 +14,9 @@ When several existing formulas need changes and the user accepts a saved copy, p
 
 Run `scripts/run` from this Skill with the user's explicit document paths. When installed or exported from the Mac App, the launcher uses the App's bundled runtime and tools. A developer can also run it from the Equation Lab checkout with its Node 24 dependencies installed. Quote document paths and use absolute paths when executing in another directory.
 
-The optional AI coordination switch in the macOS App shows local activity from these commands. The commands also work offline with the App closed and the switch off. [Saved DOCX commands](references/saved-docx.md)
+For a first inventory, pass the DOCX path as the first argument after `inspect`: `sh "$skillDir/scripts/run" inspect "$input"`. Resolve `skillDir` to the folder containing this `SKILL.md` and `input` to the user's DOCX path.
+
+For saved DOCX operations, the launcher runs locally with the App closed. If another AI client cannot discover this Skill, follow [the shared Skill setup](references/installing.md).
 
 ## Work from a stable document version
 

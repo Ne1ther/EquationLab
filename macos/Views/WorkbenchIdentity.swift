@@ -1,11 +1,15 @@
 import SwiftUI
 import AppKit
 
-private enum WorkbenchArtwork {
+enum WorkbenchArtwork {
     static let header = load("EquationLab-header")
     static let darkHeader = load("EquationLab-header-dark")
     static let word = load("Word")
     static let office = load("Microsoft365")
+    static let codex = load("Codex")
+    static let antigravity = load("Antigravity")
+    static let claudeCode = load("ClaudeCode")
+    static let deepSeekHarness = load("DeepSeekHarness")
     private static func load(_ name: String) -> NSImage? {
         guard let url = Bundle.main.resourceURL?.appendingPathComponent("brand/\(name).png") else { return nil }
         return NSImage(contentsOf: url)

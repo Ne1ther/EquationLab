@@ -3,14 +3,18 @@ import {join} from 'node:path';
 import {createHash} from 'node:crypto';
 import sharp from 'sharp';
 
-/** Compile reviewed SVGs once. The dark header keeps the approved outlines
+/** Prepare bundled toolbar and product icons once. The dark header keeps the approved outlines
  * and orange exponent, with light ink for contrast on native dark chrome. */
 export async function buildWorkbenchAssets({root, resources}) {
  const target=join(resources,'brand');await mkdir(target,{recursive:true});
  const inputs=[
   ['EquationLab-header','design/workbench-concepts/assets/equationlab-header-mark.svg',144,96],
   ['Word','design/office-product-icons/microsoft-20251117/word_48x1.svg',64,64],
-  ['Microsoft365','design/office-product-icons/microsoft-20251117/m365_48x1.svg',64,64]
+  ['Microsoft365','design/office-product-icons/microsoft-20251117/m365_48x1.svg',64,64],
+  ['Codex','design/ai-client-icons/Codex.png',64,64],
+  ['Antigravity','design/ai-client-icons/Antigravity.png',64,64],
+  ['ClaudeCode','design/ai-client-icons/ClaudeCode.png',64,64],
+  ['DeepSeekHarness','design/ai-client-icons/DeepSeekHarness.png',64,64]
  ];
  const assets=[];
  for(const [name,path,width,height] of inputs){
@@ -24,5 +28,6 @@ export async function buildWorkbenchAssets({root, resources}) {
   }
  }
  await writeFile(join(target,'Microsoft-product-icons-NOTICE.md'),await readFile(join(root,'design/office-product-icons/README.md'),'utf8'));
+ await writeFile(join(target,'AI-client-icons-NOTICE.md'),await readFile(join(root,'design/ai-client-icons/README.md'),'utf8'));
  return {assets,runtime:'cached AppKit images; no SVG rendering process'};
 }

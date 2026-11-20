@@ -1,5 +1,5 @@
 {
-  "version": "0.7.0",
-  "zh": "工具栏 AI → 安装或导出 Skill… → 安装到 Codex。用 $equation-lab 检查 Word 公式、编号和引用，或批量编辑后另存副本。长文档可先显示公式目录，再补齐内容和按需加载缩略图；窄窗口与重试提示也更清楚。",
-  "en": "Choose AI → Install or Export Skill… → Install for Codex. Use $equation-lab to check Word equations, numbering, and references, or batch-edit a new copy. Long documents can show the equation directory first, with content and thumbnails loaded as needed. Narrow windows and retry prompts are clearer."
+  "version": "0.7.1",
+  "zh": "在工具栏的 AI → 安装或导出 Skill… 选择 Codex、Claude Code、Antigravity 或 DeepSeek Harness。四个客户端共用一份本地 Skill，其他客户端也可以复制连接说明。AI 按钮直接打开指引。",
+  "en": "Choose Codex, Claude Code, Antigravity, or DeepSeek Harness under AI → Install or Export Skill…. The four clients can share one local Skill. Copy setup instructions for other clients. The AI button opens the guide directly."
 }

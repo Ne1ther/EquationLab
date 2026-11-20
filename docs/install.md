@@ -1,6 +1,6 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.7.0（build104）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)**
+**[下载 Equation Lab 0.7.1（build105）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.1/Equation-Lab-0.7.1.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
@@ -11,11 +11,11 @@
 3. 打开 Equation Lab；如果提示访问 Office 文件夹，按提示授权，再点击“安装 / 更新 Word 插件”。
 4. 重新打开 Word，新建或打开文档，点击顶部的 **Equation Lab**。
 
-## 在 Codex 里使用 Skill
+## 在 AI 客户端中使用 Skill
 
-**在 Codex 里处理 Word 公式**。打开工具栏的 **AI → 安装或导出 Skill… → 安装到 Codex**，然后在 Codex 试一句：`请用 $equation-lab 检查这份 Word 的公式、编号和交叉引用。` 批量修改可以另存为新副本。
+在工具栏点 **AI → 安装或导出 Skill…**。点 **安装共享 Skill**，即可安装到 `~/.agents/skills/equation-lab`。在 AI 会话里试一句：`请用 equation-lab 检查这份 Word 的公式、编号和交叉引用。`
 
-也可以导出 Skill 文件夹，供同一台 Mac 上其他支持 Skill 的客户端使用。
+每台 Mac 都从本机安装的 Equation Lab 安装一次 Skill。Codex 和 DeepSeek Harness 默认读取共享目录，Claude Code、Antigravity 和其他客户端可连接到同一份 Skill。 [各客户端设置](../skills/equation-lab/references/installing.md)
 
 ## 开始编辑
 
@@ -75,7 +75,7 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.7.0 (build104)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.0/Equation-Lab-0.7.0.pkg)**
+**[Download Equation Lab 0.7.1 (build105)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.1/Equation-Lab-0.7.1.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
@@ -86,11 +86,11 @@ The app uses ad-hoc signing and has not been notarized by Apple, so macOS may re
 3. Open Equation Lab. If prompted for Office folder access, grant it and choose **Install / Update Word plugin**.
 4. Reopen Word, create or open a document, and choose the **Equation Lab** ribbon.
 
-## Use the Skill in Codex
+## Use the Skill in your AI client
 
-**Work with Word equations in Codex.** Choose **AI → Install or Export Skill… → Install for Codex** in the toolbar. Then try `Use $equation-lab to check this Word file’s equations, numbers, and cross-references.` Save batch edits to a new copy.
+Choose **AI → Install or Export Skill…** in the toolbar. **Install Shared Skill** puts the Skill in the shared folder at `~/.agents/skills/equation-lab`. In your AI session, try `Use the equation-lab skill to check this Word file’s equations, numbers, and cross-references.`
 
-You can also export the Skill folder for another client on the same Mac.
+Install the Skill once from Equation Lab on each Mac. Codex and DeepSeek Harness read the shared folder by default. Claude Code, Antigravity and other local clients can link to the same Skill. [Client setup](../skills/equation-lab/references/installing.md)
 
 ## Start editing
 

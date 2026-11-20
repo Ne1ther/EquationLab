@@ -13,10 +13,6 @@ sh "$eq" cli read-preset "$input"
 
 The compact inventory uses zero-based indices. `inspect INPUT INDEX` adds the selected row's character offsets, native typography and ruler tabs. It scans the saved package once in that invocation. `audit` lists equation targets, bookmarks, cached REF/PAGEREF text, and structural findings. `references` searches referenceable numbered targets by cached number, bookmark, or one-based equation display index. Use the audit's `coverage.parts` when reporting which document stories were inspected.
 
-## Optional App activity
-
-Enable AI coordination in the macOS App to show the operation and whether it is running, completed, or failed. The CLI and skill helper exchange only local status metadata, including task IDs, operation type, timestamps, and process ID. Formula content, document paths, and command errors stay outside the status reports. The setting controls App visibility. The commands work independently of the App and keep their usual output and exit status.
-
 ## Generate new editable equations
 
 Create a standalone fragment with real embedded MathType equation objects. The following spec generates an inline formula and a numbered fraction, then adds a Word REF to the numbered formula in the new document.

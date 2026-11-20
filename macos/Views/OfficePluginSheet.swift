@@ -5,8 +5,6 @@ struct OfficePluginSheet: View {
     @ObservedObject var bridge: DesktopBridge
     let showsSkillFirst: Bool
     @Environment(\.dismiss) private var dismiss
-    @State private var skillFeedback = ""
-    @State private var skillFeedbackIsError = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
@@ -15,30 +13,13 @@ struct OfficePluginSheet: View {
                 Spacer()
                 Button(bridge.t("完成")) { dismiss() }.keyboardShortcut(.cancelAction)
             }
-            ViewThatFits(in: .vertical) {
-                pluginContent.fixedSize(horizontal: false, vertical: true)
-                ScrollView { pluginContent.padding(.trailing, 6) }
-            }
-            .frame(maxHeight: 520)
+            ScrollView { pluginContent.padding(.trailing, 6) }
+                .frame(maxHeight: 520)
             if bridge.installationRunning { ProgressView(bridge.t("正在处理插件…")).controlSize(.small) }
         }
         .padding(26).frame(width: 620)
         .disabled(bridge.installationRunning)
-        .onAppear {
-            bridge.verifyWordPlugin()
-            if let installer = EquationLabSkillInstallation.bundled {
-                switch installer.existing(at: installer.codexDestination) {
-                case .current:
-                    skillFeedback = skillText("已安装到 Codex。", "Installed in Codex.")
-                case .relink:
-                    skillFeedback = skillText("App 位置已变化，点击安装即可更新连接。", "The App location changed. Click Install to update the connection.")
-                case .conflict:
-                    skillFeedback = skillText("Codex 已有同名 Skill。可使用现有版本，或导出此版本。", "Codex already has a Skill with this name. Use that version or export this one.")
-                case .available:
-                    break
-                }
-            }
-        }
+        .onAppear { bridge.verifyWordPlugin() }
         .alert(bridge.t("Office 插件"), isPresented: Binding(get: { !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {
             Button(bridge.t("好"), role: .cancel) { bridge.installationMessage = "" }
         } message: { Text(bridge.t(bridge.installationMessage)) }
@@ -46,9 +27,9 @@ struct OfficePluginSheet: View {
 
     private var pluginContent: some View {
         VStack(alignment: .leading, spacing: 16) {
-            if showsSkillFirst { skillInstallation }
+            if showsSkillFirst { SkillInstallationCard(english: bridge.language.usesEnglish) }
             wordInstallation
-            if !showsSkillFirst { skillInstallation }
+            if !showsSkillFirst { SkillInstallationCard(english: bridge.language.usesEnglish) }
         }
     }
 
@@ -96,79 +77,7 @@ struct OfficePluginSheet: View {
         }
     }
 
-    private var skillInstallation: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 8) {
-                Label("Equation Lab Skill", systemImage: "sparkles").font(.headline)
-                Text(skillText("在 Codex 里用 $equation-lab 处理 Word 公式。也可以导出文件夹，导入其他支持 Skill 的本地客户端。",
-                               "Use $equation-lab in Codex to work with Word equations. Export the folder to use it in another local client that supports Skills."))
-                    .foregroundStyle(.secondary)
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
-                if let installer = EquationLabSkillInstallation.bundled {
-                    HStack {
-                        Button(skillText("安装到 Codex", "Install for Codex")) {
-                            copySkill(installer, into: installer.codexDirectory, forCodex: true)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        Button(skillText("导出 Skill 文件夹…", "Export Skill Folder…")) {
-                            chooseSkillExportFolder(installer)
-                        }
-                    }
-                    if !skillFeedback.isEmpty {
-                        Text(skillFeedback).font(.callout)
-                            .foregroundStyle(skillFeedbackIsError ? Color.orange : Color.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .textSelection(.enabled)
-                    }
-                } else {
-                    Text(skillText("这个构建没有随附 Skill 运行环境。", "The Skill runtime is unavailable in this build."))
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-            }.frame(maxWidth: .infinity, alignment: .leading).padding(10)
-        }
-    }
-
     private func skillText(_ chinese: String, _ english: String) -> String {
         bridge.language.usesEnglish ? english : chinese
-    }
-
-    private func chooseSkillExportFolder(_ installer: EquationLabSkillInstallation) {
-        let panel = NSOpenPanel()
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.canCreateDirectories = true
-        panel.allowsMultipleSelection = false
-        panel.prompt = skillText("导出", "Export")
-        panel.message = skillText("选择存放 equation-lab Skill 文件夹的位置。", "Choose a destination for the equation-lab Skill folder.")
-        panel.begin { result in
-            guard result == .OK, let directory = panel.url else { return }
-            copySkill(installer, into: directory, forCodex: false)
-        }
-    }
-
-    private func copySkill(_ installer: EquationLabSkillInstallation, into directory: URL, forCodex: Bool) {
-        let destination = directory.appendingPathComponent("equation-lab", isDirectory: true)
-        let alreadyInstalled = installer.existing(at: destination) == .current
-        do {
-            try installer.install(in: directory)
-            skillFeedbackIsError = false
-            if forCodex {
-                skillFeedback = alreadyInstalled
-                    ? skillText("此版本已经安装。可在 Codex 中调用 $equation-lab。", "This version is already installed. Use $equation-lab in Codex.")
-                    : skillText("安装完成。可在 Codex 中调用 $equation-lab。", "Installed. Use $equation-lab in Codex.")
-            } else {
-                skillFeedback = skillText("Skill 文件夹已准备好。", "The Skill folder is ready.")
-                NSWorkspace.shared.activateFileViewerSelecting([destination])
-            }
-        } catch is EquationLabSkillInstallation.Conflict {
-            skillFeedbackIsError = true
-            skillFeedback = forCodex
-                ? skillText("Codex 已有同名 Skill。可保留现有版本，或导出此版本。", "Codex already has a Skill with this name. You can keep it or export this version.")
-                : skillText("这个位置已有同名 Skill。请选择其他导出位置。", "This location already has a Skill with this name. Choose a different export location.")
-        } catch {
-            skillFeedbackIsError = true
-            skillFeedback = skillText("无法复制 Skill。请检查目标目录的写入权限。", "Could not copy the Skill. Check write access to the destination.")
-        }
     }
 }

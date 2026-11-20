@@ -1,5 +1,15 @@
 # 版本记录
 
+## 0.7.1 · build105
+
+在 **AI → 安装或导出 Skill…** 选择 Codex、Claude Code、Antigravity 或 DeepSeek Harness。四个客户端共用一份本地 Skill，其他客户端也可复制连接说明或导出文件夹。彩色 AI 按钮直接打开使用指引。
+
+---
+
+Choose Codex, Claude Code, Antigravity, or DeepSeek Harness under **AI → Install or Export Skill…**. The four clients can share one local Skill. Copy setup instructions or export the Skill folder for other clients. The colorful AI button opens the guide directly.
+
+[下载 0.7.1 · Download 0.7.1](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.1)
+
 ## 0.7.0 · build104
 
 - **本地 AI Skill**。工具栏点 **AI → 安装或导出 Skill… → 安装到 Codex**，即可用 `$equation-lab` 检查 Word 公式、编号和引用，或批量编辑后另存副本。也可以导出给同一台 Mac 上支持 Skill 的客户端。
