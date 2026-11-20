@@ -276,6 +276,33 @@ test('A changed Word number format is bound to the selected equation, including 
  assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering)),{format:'[#C1-#E1]',side:'right'});
 });
 
+test('The confirmed format edit passes the sidebar its provisional label without waiting on preview',async()=>{
+ for(const previewReady of [true,false]){
+  const ticket='7'.repeat(64),object={...sourceDocument.objects[25],index:0};
+  const change={documentIdentity:'live-document-1',documentSnapshot:17,index:0,
+   previousNativeSha256:object.nativeSha256,nativeSha256:object.nativeSha256,numberingChanged:true};
+  const editor=createEditor(async action=>{
+   if(action==='numberingPreview')return previewReady?{text:'(3-6)'}:new Promise(()=>{});
+   if(action==='wordSessionSave')return {acknowledgement:true};
+   return {};
+  }),context=editor.context;
+  context.wordTicket=ticket;context.source={wordNumberingSupported:true,hasDocumentContext:true,documentIdentity:change.documentIdentity,
+   documentSnapshot:change.documentSnapshot,activeIndex:0,path:'/tmp/equations.docx',objects:[object]};
+  context.selected=object;context.mf.value=object.latex;context.$('layout-format').value='(#C1-#E1)';
+  const original=context.source;
+  let observed;
+  context.waitForWordSave=async()=>({change});
+  context.window.wordDocumentWorkspace={rememberAfterSave:(...args)=>{observed=args;}};
+  installWordCommit(context);
+  assert.equal(await context.window.nativeCommitWordSession(),true,editor.messages.join(' | '));
+  assert.equal(observed[0],original);
+  assert.equal(observed[2],change);
+  assert.equal(observed[4].format,'(#C1-#E1)');
+  assert.equal(observed[4].previewText,previewReady?'(3-6)':undefined);
+  assert.equal(context.wordTicket,null);
+ }
+});
+
 test('Chapter-only changes carry the old context and exact formula target, while a displayed default never numbers an untouched equation',async()=>{
  for(const changeContext of [false,true]){
   let submitted;const editor=createEditor(async(action,payload)=>{if(action==='wordSessionSave')submitted=payload;return {acknowledgement:false};}),c=editor.context;

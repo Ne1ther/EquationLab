@@ -64,6 +64,22 @@ test('reload keeps the cached rows visible while reading an independently bound 
  assert.equal(workspace.visibleSource(fresh),fresh);
 });
 
+test('A fresh capture of the same Word document reuses only previews with matching native content',()=>{
+ const {workspace}=setup(),cached=document();
+ cached.objects[0].image='first preview';
+ cached.objects[1].image='second preview';
+ workspace.remember(cached);
+ const incoming={...cached,documentSnapshot:18,objects:[{index:0,nativeSha256:'e'.repeat(64)},
+  {index:1,nativeSha256:digest},{index:2,nativeSha256:cached.objects[1].nativeSha256,error:'unreadable'}]};
+ workspace.remember(incoming);
+ assert.equal(incoming.objects[0].image,undefined);
+ assert.equal(incoming.objects[1].image,'first preview');
+ assert.equal(incoming.objects[2].image,undefined);
+ const other={...incoming,documentIdentity:'word:other',objects:[{index:0,nativeSha256:digest}]};
+ workspace.remember(other);
+ assert.equal(other.objects[0].image,undefined);
+});
+
 test('Dock reuses a confirmed content-only save and reopens the changed row by exact target',async()=>{
  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
  source.objects[0].image='stale thumbnail';
@@ -116,6 +132,57 @@ test('Dock still requests a fresh capture when the content acknowledgement or li
   assert.equal(e.workspace.pending,true,variant);
   assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
   assert.equal(e.calls.find(call=>call.action==='wordDocumentOpen').payload.target,undefined,variant);
+ }
+});
+
+test('A confirmed same-side number format save keeps all 112 rows and skips automatic recapture',async()=>{
+ for(const [revision,published] of [[3,3],[3,4],[2147483646,1]]){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:revision,
+   objects:Array.from({length:112},(_,index)=>({index,nativeSha256:digest,latex:`x_${index}`,image:`image-${index}`,
+    layout:{mode:'numbered-right',chapter:2,equation:index+1,numberFormat:'(#C1.#E1)',numberText:`(2.${index+1})`}}))};
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:2,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true};
+  e.workspace.rememberAfterSave(source,2,ack,'x_2',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)'});
+  const cached=e.workspace.visibleSource(null);
+  assert.equal(cached.objects.length,112);
+  assert.equal(cached.objects[2].layout.numberText,'(2-3)');
+  assert.equal(source.objects[2].layout.numberText,'(2.3)');
+  assert.equal(cached.objects[111].layout.numberText,'(2.112)');
+  assert.ok(cached.objects.every((row,index)=>row.image===`image-${index}`));
+  assert.equal(cached.numberingRefreshNeeded,true);
+  e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,revision:1,active:{identity:source.documentIdentity,name:source.documentName},
+   documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:published}]}:undefined);
+  assert.equal(await e.workspace.resume(),true);
+  assert.equal(e.workspace.pending,false);
+  assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+  await e.workspace.syncCurrent();
+  assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+  assert.equal(await e.workspace.select(2),true);
+  assert.deepEqual({...e.calls.find(call=>call.action==='wordDocumentOpen').payload.target},
+   {identity:source.documentIdentity,snapshot:source.documentSnapshot,index:2,nativeSha256:digest});
+  const partial={...source,documentLoading:true,catalogProof:'proof',documentTotal:112,documentPosition:2,objects:[source.objects[2]]};
+  const duringLoad=e.workspace.visibleSource(partial);
+  assert.equal(duringLoad.objects.length,112);
+  assert.equal(duringLoad.objects[2].layout.numberText,'(2-3)');
+  assert.ok(duringLoad.objects.every((row,index)=>row.image===`image-${index}`));
+  assert.equal(duringLoad.documentLoading,true);
+  const changedCount={...partial,documentTotal:113};
+  assert.equal(e.workspace.visibleSource(changedCount),changedCount);
+ }
+});
+
+test('Counter changes, an unbound save, or newer Word numbering still require a fresh document',async()=>{
+ for(const variant of ['context','bad receipt','newer revision','writing side']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  source.objects[0].layout={mode:'numbered-right',numberText:'(2.1)'};
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,
+   previousNativeSha256:variant==='bad receipt'?'e'.repeat(64):digest,nativeSha256:digest,numberingChanged:true};
+  const numbering={format:'(#C1-#E1)',side:variant==='writing side'?'left':'right',context:variant==='context'?{chapter:3,section:1}:undefined};
+  e.workspace.rememberAfterSave(source,0,ack,'x+1',numbering);
+  e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,active:{identity:source.documentIdentity,name:source.documentName},
+   documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:variant==='newer revision'?5:4}]}:undefined);
+  assert.equal(await e.workspace.resume(),true,variant);
+  assert.equal(e.workspace.pending,true,variant);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
  }
 });
 

@@ -23,7 +23,22 @@
    snapshot(document){
     const nextFreshness=document?.numberingRefreshNeeded?'stale':document?.documentLoading||document?.catalogProof?'loading':'snapshot';
     const freshnessChanged=nextFreshness!==numberFreshness;
-    if(document!==current){current=document;reset=true;}
+    if(document!==current){
+     // A save can replace the editor source with its cached copy. Preserve the
+     // row generation and existing images when the Word snapshot is the same.
+     const sameSnapshot=document?.documentIdentity&&document.documentIdentity===current?.documentIdentity
+      &&document.documentSnapshot!=null&&document.documentSnapshot===current.documentSnapshot
+      &&document.documentPosition===undefined&&current.documentPosition===undefined
+      &&!document.catalogProof&&!current.catalogProof&&Array.isArray(document.objects)&&document.objects.length===rows.length
+      &&document.objects.every((object,index)=>object.index===rows[index].id);
+     if(!reset&&sameSnapshot){
+      for(const [index,object] of document.objects.entries()){
+       const next=row(object,document,numberFreshness);
+       if(Object.keys(next).some(key=>next[key]!==rows[index][key]))dirty.add(index);
+      }
+     }else reset=true;
+     current=document;
+    }
     let delta=null;
     if(reset){rows=rowsFor(document,nextFreshness);epoch++;revision=1;delta={generation:origin+':'+epoch,baseRevision:0,revision,reset:rows};reset=false;dirty.clear();}
     else if(freshnessChanged||dirty.size){
@@ -31,7 +46,7 @@
       const status=numberStatus(nextFreshness,item.numberText);
       return item.numberStatus===status?item:{...item,numberStatus:status};
      });
-     const upserts=[];for(const index of dirty){const object=document?.objects[index];if(!object)continue;const id=document.catalogProof?document.documentPosition:index,next=row(object,document,nextFreshness,id),position=rows.findIndex(item=>item.id===id);if(position>=0)rows[position]=next;else rows.push(next);upserts.push(next);}
+     const upserts=[];for(const index of dirty){const object=document?.objects[index];if(!object)continue;const id=document.catalogProof?document.documentPosition:object.index,next=row(object,document,nextFreshness,id),position=rows[index]?.id===id?index:rows.findIndex(item=>item.id===id);if(position>=0)rows[position]=next;else rows.push(next);upserts.push(next);}
      dirty.clear();
      if(freshnessChanged||upserts.length)delta={generation:origin+':'+epoch,baseRevision:revision,revision:++revision,
       ...(freshnessChanged?{numberFreshness:nextFreshness}:{}),...(upserts.length?{upserts}:{})};

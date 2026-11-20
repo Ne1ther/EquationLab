@@ -62,6 +62,27 @@ test('Number freshness publishes a compact status update without resending docum
  assert.notEqual(reset.generation,first.generation);
  assert.equal(reset.reset[0].numberStatus,'stale');
 });
+test('A number-format save publishes only the edited row when the same Word snapshot moves to cache',()=>{
+ const image='data:image/png;base64,'+Buffer.alloc(18_000,37).toString('base64');
+ const doc={documentIdentity:'word:1',documentSnapshot:17,
+  objects:Array.from({length:112},(_,index)=>({index,image,latex:`x_${index}`,layout:{numberText:`(2.${index+1})`}}))};
+ const p=publisher(),first=p.snapshot(doc).delta;
+ const cached={...doc,numberingRefreshNeeded:true,objects:doc.objects.map(row=>({...row}))};
+ cached.objects[2].layout={numberText:'(2-3)'};
+ const {delta,objects}=p.snapshot(cached);
+ assert.equal(delta.generation,first.generation);
+ assert.equal(delta.numberFreshness,'stale');
+ assert.equal(delta.reset,undefined);
+ assert.equal(delta.upserts.length,1);
+ assert.equal(delta.upserts[0].id,2);
+ assert.equal(delta.upserts[0].numberText,'(2-3)');
+ assert.equal(objects.length,112);
+ assert.ok(objects.every(row=>row.image===image));
+ assert.equal(p.snapshot(cached).delta,null);
+ const newSnapshot=p.snapshot({...doc,documentSnapshot:18}).delta;
+ assert.equal(newSnapshot.reset.length,112);
+ assert.notEqual(newSnapshot.generation,first.generation);
+});
 test('real DOCX number metadata reaches rows, later deltas and snapshot refreshes without replacing ids',async()=>{
  const bytes=await createDocx([{latex:'x',layout:{mode:'numbered-right',chapter:3,equation:28,numberFormat:'(#C1.#E1)'}},{latex:'y',layout:{mode:'inline'}}],{fragment:true});
  const doc=await inspectDocx(bytes),p=publisher(),initial=p.snapshot(doc);

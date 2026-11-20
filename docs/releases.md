@@ -1,5 +1,15 @@
 # 版本记录
 
+## 0.7.2 · build106
+
+修复「适合窗口」模式下公式和标尺闪动、空闲时 CPU 占用偏高的问题。修改单条 Word 公式的编号格式后，侧栏会保留公式列表和缩略图，可直接点回刚编辑的公式。
+
+---
+
+Fixes equation and ruler flicker and high idle CPU usage in Fit to Window. After changing a Word equation's numbering format, the sidebar keeps the equation list and thumbnails so you can reopen the edited equation directly.
+
+[下载 0.7.2 · Download 0.7.2](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.2)
+
 ## 0.7.1 · build105
 
 在 **AI → 安装或导出 Skill…** 选择 Codex、Claude Code、Antigravity 或 DeepSeek Harness。四个客户端共用一份本地 Skill，其他客户端也可复制连接说明或导出文件夹。彩色 AI 按钮直接打开使用指引。

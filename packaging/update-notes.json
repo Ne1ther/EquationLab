@@ -1,5 +1,5 @@
 {
-  "version": "0.7.1",
-  "zh": "在工具栏的 AI → 安装或导出 Skill… 选择 Codex、Claude Code、Antigravity 或 DeepSeek Harness。四个客户端共用一份本地 Skill，其他客户端也可以复制连接说明。AI 按钮直接打开指引。",
-  "en": "Choose Codex, Claude Code, Antigravity, or DeepSeek Harness under AI → Install or Export Skill…. The four clients can share one local Skill. Copy setup instructions for other clients. The AI button opens the guide directly."
+  "version": "0.7.2",
+  "zh": "修复「适合窗口」模式下公式和标尺闪动、空闲时 CPU 占用偏高的问题。修改单条 Word 公式的编号格式后，侧栏会保留公式列表和缩略图，可直接点回刚编辑的公式。",
+  "en": "Fixes equation and ruler flicker and high idle CPU usage in Fit to Window. After changing a Word equation's numbering format, the sidebar keeps the equation list and thumbnails so you can reopen the edited equation directly."
 }

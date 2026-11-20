@@ -487,6 +487,14 @@ window.nativeCommitWordSession=()=>{
  if(numberFormatChanged&&source.numberingRefreshNeeded)throw Error('Word 中的编号已变化。当前草稿已保留，请刷新后再修改编号。');
  const destination=source.insertion||!numberFormatChanged&&selected.index===(source.activeIndex??selected.index)?undefined:{index:selected.index,expectedNativeSha256:selected.nativeSha256,documentIdentity:source.documentIdentity};
  const numbering=numberFormatChanged?{format:$('layout-format').value,side:selected.layout?.mode==='numbered-left'?'left':'right',...counterContext?{context:counterContext}:{}}:undefined;
+ const sidebarNumbering=numbering?{...numbering}:undefined;
+ const layout=selected?.layout;
+ if(sidebarNumbering&&!counterContext&&layout?.numberText&&layout.equation>0){
+  // Calculate the provisional label alongside the write. The sidebar can
+  // keep its previous label if this optional preview has not arrived yet.
+  void native('numberingPreview',{pattern:numbering.format,values:{chapter:layout.chapter||1,section:layout.section||1,equation:layout.equation}})
+   .then(({text})=>{sidebarNumbering.previewText=text;}).catch(()=>{});
+ }
  window.wordSaveInFlight=true;
  await window.nativeFlushDraft?.();
  let result,confirmation;
@@ -498,20 +506,20 @@ window.nativeCommitWordSession=()=>{
   // the original ticket's receipt; never turn a missing reply into a retry.
   wordSaveQueued=true;mf.readOnly=true;$('latex').readOnly=true;
   const outcome=await waitForWordSave();if(outcome==='unconfirmed')return false;
-  if(current())await finishWordSave(timing,outcome,numberFormatChanged);return;
+  if(current())await finishWordSave(timing,outcome,sidebarNumbering);return;
  }
  if(!current())return false;
  if(result.acknowledgement){wordSaveQueued=true;mf.readOnly=true;$('latex').readOnly=true;for(const input of $('character-editor').querySelectorAll('input'))input.disabled=true;confirmation=await waitForWordSave();if(confirmation==='unconfirmed')return false;}
  if(!current())return false;
- await finishWordSave(timing,confirmation,numberFormatChanged);
+ await finishWordSave(timing,confirmation,sidebarNumbering);
  });
  })().catch(error=>{if(commitGeneration===(window.wordSessionGeneration??0))message(error.message,true);return false;});
  return wordCommitRunning.finally(()=>{window.wordSaveInFlight=false;wordCommitRunning=null;});
 };
-async function finishWordSave(timing,confirmation,numberingChanged){
+async function finishWordSave(timing,confirmation,numbering){
  const confirmed=wordSaveQueued?performance.now():null;
  const workspace=window.wordDocumentWorkspace;
- workspace?.rememberAfterSave?.(source,selected?.index,confirmation?.change,mf.value,numberingChanged);
+ workspace?.rememberAfterSave?.(source,selected?.index,confirmation?.change,mf.value,numbering);
  const endedTicket=wordTicket;wordTicket=null;wordSaveQueued=false;wordOutcomeUnknown=false;
  await syncSidebar(true,false,false,endedTicket);if(wordTicket)return;
  let draftCleared=true;try{await window.clearSavedDrafts?.();}catch{draftCleared=false;}if(wordTicket)return;

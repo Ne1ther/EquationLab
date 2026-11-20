@@ -32,6 +32,12 @@ Private mKnownDocumentIds As Collection
 Private mBoundDocuments As Collection
 Private mBoundRanges As Collection
 Private mBoundTokens As Collection
+Private mNumberedSaveDocument As Document
+Private mNumberedSaveSnapshot As Long
+Private mNumberedSaveIndex As Long
+Private mNumberedSaveRevision As Long
+Private mNumberedSaveEnd As Long
+Private mNumberedSaveShapes As Long
 Private mInsertionDocument As Document
 Private mInsertionRange As Range
 Private mInsertionToken As Long
@@ -248,6 +254,9 @@ End Sub
 Public Sub ELCloseDocumentContext(ByVal Doc As Document)
     On Error Resume Next
     Dim i As Long, closeIdentity As Long, directory As String, preserveOtherActivation As Boolean
+    If Not mNumberedSaveDocument Is Nothing Then
+        If mNumberedSaveDocument Is Doc Then Set mNumberedSaveDocument = Nothing
+    End If
     preserveOtherActivation = ELHasPreparedActivationForOtherDocument(Doc)
     If Not mActivationDocument Is Nothing Then
         If mActivationDocument Is Doc Then ELClearActivationAnchor
@@ -1387,7 +1396,7 @@ End Sub
 
 Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     On Error GoTo Failed
-    Dim failureNumber As Long, failureDescription As String
+    Dim failureNumber As Long, failureDescription As String, stage As String
     Dim directory As String, path As String, fileNumber As Integer, content As String, fields As Variant
     Dim requestId As String, identity As String, snapshot As Long, targetIndex As Long, identityToken As Long
     Dim digest As String, separator As Long, Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape
@@ -1477,6 +1486,7 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
             Exit Sub
         End If
     ElseIf fields(3) = "1" Then
+        stage = "validate-target"
         identity = CStr(fields(4)): digest = CStr(fields(7))
         If Len(digest) <> 64 Or Not ELIsRequestId(digest) Then GoTo Failed
         If Not ELIsUnsignedInteger(CStr(fields(5))) Or Not ELIsUnsignedInteger(CStr(fields(6))) Then GoTo Failed
@@ -1487,18 +1497,31 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
         If Not ELIsUnsignedInteger(Mid$(identity, separator + 1)) Then GoTo Failed
         identityToken = CLng(Mid$(identity, separator + 1))
         If identityToken <= 0 Then GoTo Failed
-        If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
-        Set Doc = mBoundDocuments(CStr(snapshot))
+        stage = "find-document"
+        If insertionMode = "" And snapshot = mNumberedSaveSnapshot And targetIndex + 1 = mNumberedSaveIndex Then
+            Set Doc = mNumberedSaveDocument
+            If Not Doc Is Nothing Then
+                If KnownDocumentIdentity(Doc) <> identityToken Or Doc.Content.End <> mNumberedSaveEnd Or Doc.InlineShapes.Count <> mNumberedSaveShapes Or EquationLabRibbon.ELNumberingRevision(Doc) <> mNumberedSaveRevision Then Set Doc = Nothing
+            End If
+            If Not Doc Is Nothing Then Set shape = ELNumberedSaveEquation(Doc, targetIndex + 1)
+        End If
+        If shape Is Nothing Then
+            If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Then GoTo Failed
+            Set Doc = mBoundDocuments(CStr(snapshot))
+        End If
         If KnownDocumentIdentity(Doc) <> identityToken Then GoTo Failed
         For Each candidate In Application.Documents
             If candidate Is Doc Then isOpen = True: Exit For
         Next
         If Not isOpen Or Doc.ReadOnly Then GoTo Failed
-        Set anchors = mBoundRanges(CStr(snapshot))
-        If targetIndex + 1 > anchors.Count Then GoTo Failed
-        Set anchor = anchors(targetIndex + 1)
-        Set shape = ResolveBoundEquation(Doc, anchor, targetIndex + 1)
-        If shape Is Nothing Then GoTo Failed
+        If shape Is Nothing Then
+            stage = "resolve-anchor"
+            Set anchors = mBoundRanges(CStr(snapshot))
+            If targetIndex + 1 > anchors.Count Then GoTo Failed
+            Set anchor = anchors(targetIndex + 1)
+            Set shape = ResolveBoundEquation(Doc, anchor, targetIndex + 1)
+            If shape Is Nothing Then GoTo Failed
+        End If
     Else
         GoTo Failed
     End If
@@ -1523,6 +1546,7 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     End If
     If EquationLabNativeCommand("MathTypeBridgeWordDocumentRequestCurrent") = 0 Then GoTo Cancelled
     If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Cancelled
+    stage = "open-equation"
     ELOpenEquation shape
     ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestOpened"
     Exit Sub
@@ -1557,7 +1581,7 @@ Failed:
     On Error Resume Next
     Set mRequestedInsertionAfter = Nothing
     If fileNumber <> 0 Then Close #fileNumber
-    Debug.Print "Equation Lab document request failed: "; failureNumber; failureDescription
+    Debug.Print "Equation Lab document request failed at "; stage; ": "; failureNumber; failureDescription
     If insertionCall And failureNumber <> 0 And failureDescription = "Another reference bookmark overlaps the number." Then
         ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestBookmarkConflict"
     Else
@@ -1898,6 +1922,7 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
         expectedChapter = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedChapter")
         expectedSection = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExpectedSection")
         EquationLabRibbon.NumberSelectedEquation Doc, shape, (side = 2), numberFormat, True, chapter, section, expectedChapter, expectedSection
+        ELRememberNumberedSave Doc, token, index
         stage = "finish-numbering"
         result = EquationLabNativeCommand("MathTypeBridgeFinishBackgroundNumbering")
         If result <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Word did not confirm the numbering update."
@@ -1915,3 +1940,33 @@ Failed:
     ' Only our own fixed validation messages are safe to expose as diagnostics.
     If failureNumber >= vbObjectError + 7360 And failureNumber <= vbObjectError + 7363 Then Debug.Print "Equation Lab numbering validation: "; failureDescription
 End Sub
+
+Private Sub ELRememberNumberedSave(ByVal Doc As Document, ByVal snapshot As Long, ByVal index As Long)
+    On Error GoTo Missing
+    Set mNumberedSaveDocument = Nothing
+    mNumberedSaveEnd = Doc.Content.End
+    mNumberedSaveShapes = Doc.InlineShapes.Count
+    mNumberedSaveRevision = EquationLabRibbon.ELNumberingRevision(Doc)
+    mNumberedSaveSnapshot = snapshot
+    mNumberedSaveIndex = index
+    Set mNumberedSaveDocument = Doc
+Missing:
+End Sub
+
+Private Function ELNumberedSaveEquation(ByVal Doc As Document, ByVal expectedIndex As Long) As InlineShape
+    On Error GoTo Missing
+    ' Word can move a retained OLE Range when it replaces the adjacent number.
+    ' Use the saved document and ordinal only for the just-committed target.
+    ' The App still checks the returned document, ordinal, and Native hash.
+    Dim shape As InlineShape, index As Long
+    For Each shape In Doc.InlineShapes
+        If Supported(shape) Then
+            index = index + 1
+            If index = expectedIndex Then
+                If shape.Range.StoryType = wdMainTextStory Then Set ELNumberedSaveEquation = shape
+                Exit Function
+            End If
+        End If
+    Next
+Missing:
+End Function

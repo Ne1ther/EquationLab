@@ -4,21 +4,35 @@ import vm from 'node:vm';
 import {readFile} from 'node:fs/promises';
 
 const source=await readFile(new URL('../desktop/editor-viewport.js',import.meta.url),'utf8');
-function viewport(){
- let width=100,height=40,font=29,selected=0,mutation;
+function viewport({canvasHeight=250,verticalPadding=0}={}){
+ let width=100,height=40,font=29,selected=0,mutation,changes=0,inlineSize='';
  const frames=[],events=()=>({handlers:{},addEventListener(name,fn){this.handlers[name]=fn;}});
  const pageEvents=events(),documentEvents=events();
  const rail={...events(),hidden:true,clientWidth:576,scrollLeft:0,firstElementChild:{style:{}}};
  const content={...events(),clientWidth:600,scrollLeft:0,get scrollWidth(){return Math.max(600,width*font/29);},querySelector:()=>({getBoundingClientRect:()=>({width:width*font/29,height:height*font/29})})};
- const wrap={...events(),clientHeight:250,parentElement:{querySelector:()=>rail}};
- const field={value:'x',closest:()=>wrap,shadowRoot:{querySelector:()=>content},style:{setProperty(_key,value){font=parseFloat(value);}}};
+ const wrap={...events(),clientHeight:canvasHeight,parentElement:{querySelector:()=>rail}};
+ const field={value:'x',closest:()=>wrap,shadowRoot:{querySelector:()=>content},style:{
+  setProperty(_key,value){inlineSize=value;font=parseFloat(value);},
+  getPropertyValue(){return inlineSize;},
+  removeProperty(){inlineSize='';font=29;}
+ }};
  const document=Object.assign(documentEvents,{hidden:false,fonts:{ready:Promise.resolve()}});
- const context=vm.createContext({window:pageEvents,getComputedStyle:()=>({paddingTop:'0',paddingBottom:'0',paddingLeft:'0',paddingRight:'0'}),requestAnimationFrame:fn=>frames.push(fn),ResizeObserver:class{observe(){}},MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},document});
+ const context=vm.createContext({window:pageEvents,getComputedStyle:element=>({paddingTop:element===content?String(verticalPadding*font/29):'0',paddingBottom:'0',paddingLeft:'0',paddingRight:'0'}),requestAnimationFrame:fn=>frames.push(fn),ResizeObserver:class{observe(){}},MutationObserver:class{constructor(fn){mutation=fn;}observe(){}},document});
  vm.runInContext(source,context);
- const controller=context.window.createEquationViewport(field,{getZoom:()=>selected,onScaleChange(){}});
+ const controller=context.window.createEquationViewport(field,{getZoom:()=>selected,onScaleChange(){changes++;}});
  function flush(){let count=0;while(frames.length){assert.ok(++count<10,'sizing must settle without a continuous frame loop');frames.shift()();}}
- return {rail,content,controller,field,document,window:pageEvents,flush,get zoom(){return controller.effectiveZoom;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
+ return {rail,content,controller,field,document,window:pageEvents,flush,get zoom(){return controller.effectiveZoom;},get changes(){return changes;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
 }
+
+test('Re-measuring tall content with em padding preserves the displayed scale',()=>{
+ const v=viewport({canvasHeight:109,verticalPadding:15});
+ v.render(220,175.35);
+ assert.equal(v.zoom,50);
+ for(let i=0;i<25;i++)v.render(220,175.35);
+ assert.equal(v.changes,1,'MathLive redraws must not move the formula or ruler');
+ v.render(220,160);
+ assert.equal(v.zoom,55,'later rendered content can still choose a new fit');
+});
 
 test('Fit sizing responds to MathLive content rendered after the input frame, then restores short formulas',()=>{
  const v=viewport();v.controller.refresh();v.flush();assert.equal(v.zoom,100);

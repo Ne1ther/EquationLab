@@ -33,8 +33,25 @@
     const selected=getZoom();if(selected){apply(selected);syncRail();return;}
     const base=content?.querySelector('.ML__base');
     if(!content||!base||!field.value.trim()){apply(maximum);syncRail();return;}
-    const box=base.getBoundingClientRect(),width=Math.max(1,content.clientWidth-padding(content,'x')-12),height=Math.max(1,wrap.clientHeight-padding(wrap,'y')-padding(field,'y')-padding(content,'y')-12);
-    apply(fittedZoom(width,height,box.width,box.height,effectiveZoom));
+    // Measure at a fixed font size so em padding and subpixel rounding
+    // cannot feed the last applied zoom back into the next fit.
+    const adjusted=effectiveZoom!==maximum,property='--formula-size';
+    const previous=adjusted?field.style.getPropertyValue(property):'';
+    if(adjusted)field.style.setProperty(property,maximum*pixelsPerPercent+'px');
+    let zoom;
+    try{
+     const box=base.getBoundingClientRect();
+     const width=Math.max(1,content.clientWidth-12);
+     const height=Math.max(1,wrap.clientHeight-padding(wrap,'y')-padding(field,'y')-12);
+     zoom=fittedZoom(width,height,box.width+padding(content,'x'),box.height+padding(content,'y'),maximum);
+    }finally{
+     // Restore before the frame is drawn, even if measurement fails.
+     if(adjusted){
+      if(previous)field.style.setProperty(property,previous);
+      else field.style.removeProperty(property);
+     }
+    }
+    apply(zoom);
     syncRail();
    });
   }

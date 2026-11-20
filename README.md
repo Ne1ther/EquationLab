@@ -5,7 +5,7 @@
 
 [English](README.en.md)
 
-**[下载 0.7.1 安装包（build105）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.1/Equation-Lab-0.7.1.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
+**[下载 0.7.2 安装包（build106）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.2/Equation-Lab-0.7.2.pkg)** · [版本记录](https://github.com/Ne1ther/EquationLab/releases) · [使用说明](docs/install.md)
 
 **用 AI 处理 Word 公式**。在工具栏点 **AI → 安装或导出 Skill…**，安装共享 Skill。Codex 和 DSH 默认读取共享目录，Claude Code 和 Antigravity 也可以链接同一份 Skill。在 AI 会话里试一句：`请用 equation-lab 检查这份 Word 的公式、编号和交叉引用。`
 
