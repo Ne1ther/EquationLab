@@ -127,8 +127,10 @@ try {
   await writeFile(join(engine,'src','version.mjs'),`// Generated from the application release version.\nexport const APP_VERSION=${JSON.stringify(version)};\n`);
   await mkdir(join(resources,'web','vendor'),{recursive:true});
   for(const file of await readdir(join(root,'desktop')))if(/\.(html|css|js)$/.test(file))await copyFile(join(root,'desktop',file),join(resources,'web',file));
-  report.mathliveEditor=await buildMathLiveEditor({root,mathliveDirectory:join(engine,'node_modules','mathlive'),output:join(resources,'web','vendor','mathlive.min.js')});
-  await cp(join(engine,'node_modules','mathlive','fonts'),join(resources,'web','vendor','fonts'),{recursive:true});
+  const mathliveDirectory=join(root,'node_modules','mathlive');
+  report.mathliveEditor=await buildMathLiveEditor({root,mathliveDirectory,output:join(resources,'web','vendor','mathlive.min.js')});
+  await cp(join(mathliveDirectory,'fonts'),join(resources,'web','vendor','fonts'),{recursive:true});
+  await copyFile(join(mathliveDirectory,'LICENSE.txt'),join(resources,'licenses','MathLive-LICENSE.txt'));
   const {buildTemplatePreviews}=await import('../scripts/build/build-template-previews.mjs');
   report.templatePreviews=await buildTemplatePreviews(join(resources,'template-previews'));
   report.templatePreviews={count:report.templatePreviews.count,factory:'Times+Symbol 12.eqp',format:'vector PDF'};
@@ -185,7 +187,7 @@ try {
   await writeFile(join(contents,'Info.plist'),plist);
   run('/usr/bin/plutil',['-lint',join(contents,'Info.plist')]);
 
-  const notices=['Equation Lab third-party notices','',`Node.js ${nodeVersion}: see licenses/Node-LICENSE.txt.`, 'JavaScript dependencies and fonts retain their distributed licenses in engine/node_modules.', 'STIX Two Math: SIL Open Font License 1.1; see engine/fonts/OFL-STIX.txt and engine/fonts/source.json.',''];
+  const notices=['Equation Lab third-party notices','',`Node.js ${nodeVersion}: see licenses/Node-LICENSE.txt.`, `MathLive ${report.mathliveEditor.version}: see licenses/MathLive-LICENSE.txt.`, 'JavaScript dependencies and fonts retain their distributed licenses in engine/node_modules.', 'STIX Two Math: SIL Open Font License 1.1; see engine/fonts/OFL-STIX.txt and engine/fonts/source.json.',''];
   for(const file of await walk(join(engine,'node_modules')))if(file.endsWith('/package.json'))try{const p=JSON.parse(await readFile(file,'utf8'));if(p.name&&p.version)notices.push(`${p.name} ${p.version} — ${typeof p.license==='string'?p.license:JSON.stringify(p.license||'See package license')}`);}catch{}
   await writeFile(join(resources,'THIRD_PARTY_NOTICES.txt'),[...new Set(notices)].join('\n')+'\n');
 

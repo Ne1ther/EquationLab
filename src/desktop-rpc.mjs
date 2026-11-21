@@ -39,6 +39,28 @@ const documentCache=createDocumentSnapshotCache({
 async function readDocument(path){return (await documentCache.get(path)).document;}
 // Content-free diagnostics for offline benchmarks, not a product RPC action.
 export function documentSnapshotCacheStats(){return documentCache.stats();}
+// Track Word tickets whose edit session ended in this worker so queued
+// low-priority thumbnail jobs can abort before calling CoreText.
+const endedWordTickets=new Set();
+function markWordTicketEnded(ticket){
+ if(typeof ticket!=='string'||!ticket)return;
+ endedWordTickets.delete(ticket);endedWordTickets.add(ticket);
+ while(endedWordTickets.size>256)endedWordTickets.delete(endedWordTickets.keys().next().value);
+}
+function abortedThumbnailError(message='Word thumbnail snapshot is no longer current'){
+ return Object.assign(Error(message),{thumbnailAborted:true});
+}
+async function verifyWordThumbnailSession(payload,expected=null){
+ if(endedWordTickets.has(payload.ticket))throw abortedThumbnailError();
+ let session;
+ try{session=await wordSession('native-read',{ticket:payload.ticket});}
+ catch(error){throw expected?abortedThumbnailError(error.message):error;}
+ const identity=session.document?.identity,snapshot=session.document?.snapshot,path=session.document?.path??session.path;
+ if(payload.documentIdentity!==undefined&&payload.documentIdentity!==identity||payload.documentSnapshot!==undefined&&payload.documentSnapshot!==snapshot)throw abortedThumbnailError();
+ if(expected&&(identity!==expected.identity||snapshot!==expected.snapshot||path!==expected.path))throw abortedThumbnailError();
+ return {session,identity,snapshot,path};
+}
+
 // A thumbnail is identified by ALL native bytes, including fonts, sizes,
 // spacing and rulers. Never reuse Word's stale image or cache document paths.
 const thumbnailCache=new Map();let thumbnailBytes=0;
@@ -132,6 +154,7 @@ async function insertWordEquation(payload){
   const pdf=await nativePdf(ole);
   docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:changedContext,numberingFamily:'mathtype',insertionBody:true});
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:native.toString('base64'),...pdf,docx:docx.toString('base64')});
+  markWordTicketEnded(payload.ticket);
   return {...result,insertion:true,acknowledgement:session.acknowledgement===true};
  }finally{native?.fill(0);docx?.fill(0);ole.fill(0);if(ole!==base)base.fill(0);}
 }
@@ -228,15 +251,33 @@ export async function desktopRequest(request,execution={}) {
   return {characters:object.characters,typography:object.typography,ruler:object.ruler??[]};
  }
  if(action==='wordSessionInsert')return insertWordEquation(payload);
- if(action==='wordSessionNavigate')return wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});
+ if(action==='wordSessionNavigate'){const result=await wordSession('native-navigate',{ticket:payload.ticket,index:payload.index});markWordTicketEnded(payload.ticket);return result;}
  if(action==='wordSessionThumbnails'){
   if(!Array.isArray(payload.indices)||payload.indices.length>4||payload.indices.some(i=>!Number.isInteger(i)||i<0))throw Error('Invalid thumbnail batch');
-  const session=await wordSession('native-read',{ticket:payload.ticket});
-  if(payload.documentIdentity!==undefined&&payload.documentIdentity!==session.document?.identity||payload.documentSnapshot!==undefined&&payload.documentSnapshot!==session.document?.snapshot)throw Error('Word thumbnail snapshot is no longer current');
-  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnailIndices:payload.indices,onlyIndices:payload.indices}},{wordMainStoryOnly:true});
+  const initial=await verifyWordThumbnailSession(payload);
+  let scheduled=0;
+  const renderThumbnail=async o=>{
+   if(endedWordTickets.has(payload.ticket))throw abortedThumbnailError();
+   if(scheduled>0){
+    // Yield between thumbnails so pending writes/previews enter the scheduler,
+    // and re-verify the live snapshot off-scheduler before drawing the next row.
+    await new Promise(resolve=>setImmediate(resolve));
+    await verifyWordThumbnailSession(payload,initial);
+   }
+   scheduled++;
+   const run=async()=>{
+    if(endedWordTickets.has(payload.ticket))throw abortedThumbnailError();
+    if(thumbnailCache.has(o.nativeSha256))return thumbnailCache.get(o.nativeSha256);
+    const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
+    return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
+   };
+   return execution.scheduleThumbnail?execution.scheduleThumbnail(run):run();
+  };
+  const result=await desktopRequest({action:'inspect',payload:{path:initial.path,thumbnailIndices:payload.indices,onlyIndices:payload.indices}},{wordMainStoryOnly:true,snapshotCheckpoint:execution.snapshotCheckpoint,renderThumbnail});
+  if(scheduled>0)await verifyWordThumbnailSession(payload,initial);
   return {images:result.objects.map(o=>({index:o.index,image:o.image}))};
  }
- if(action==='wordSessionCancel')return wordSession('native-cancel',{ticket:payload.ticket});
+ if(action==='wordSessionCancel'){const result=await wordSession('native-cancel',{ticket:payload.ticket});markWordTicketEnded(payload.ticket);return result;}
  if(action==='wordSessionStatus')return wordSession('native-status',{ticket:payload.ticket});
  if(action==='wordSessionSave'){
   const session=await wordSession('native-read',{ticket:payload.ticket});
@@ -281,6 +322,7 @@ export async function desktopRequest(request,execution={}) {
   if(existingNumberOnly&&submittedNative!==session.native)throw Error('仅改编号时不能修改公式内容');
   const p=await nativePdf(existingNumberOnly?owner.ole:ole);
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:submittedNative,...p,...target?{target}:{},...numbering?{numbering}:{}});
+  markWordTicketEnded(payload.ticket);
   return {...result,...session.acknowledgement?{acknowledgement:true}:{}};
  }
  if(action==='validate') {
@@ -293,16 +335,16 @@ export async function desktopRequest(request,execution={}) {
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
-  const thumbnails=new Map();let thumbnailQueue=Promise.resolve();
-  const thumbnail=o=>{
-   if(thumbnailCache.has(o.nativeSha256))return Promise.resolve(thumbnailCache.get(o.nativeSha256));
-   if(thumbnails.has(o.nativeSha256))return thumbnails.get(o.nativeSha256);
-   const pending=thumbnailQueue.then(async()=>{
-    const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
-    const png=rendered.png;
-    return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+png.toString('base64'));
-   });
-   thumbnailQueue=pending.catch(()=>{});thumbnails.set(o.nativeSha256,pending);return pending;
+  const failedThumbnails=new Set();
+  const render=execution.renderThumbnail??(async o=>{
+   const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
+   return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
+  });
+  const thumbnail=async o=>{
+   if(thumbnailCache.has(o.nativeSha256))return thumbnailCache.get(o.nativeSha256);
+   if(failedThumbnails.has(o.nativeSha256))throw Error('Thumbnail render previously failed in this scan');
+   try{return await render(o);}
+   catch(error){if(!error?.thumbnailAborted)failedThumbnails.add(o.nativeSha256);throw error;}
   };
   const mainStoryOnly=execution.wordMainStoryOnly===true;
   let chosen=mainStoryOnly?objects.filter(object=>object.mainDocument):objects;
@@ -310,19 +352,22 @@ export async function desktopRequest(request,execution={}) {
    if(!Array.isArray(payload.onlyIndices)||payload.onlyIndices.length>4||payload.onlyIndices.some(i=>!Number.isInteger(i)||i<0||!objects[i]||mainStoryOnly&&!objects[i].mainDocument))throw Error('Invalid thumbnail indices');
    chosen=[...new Set(payload.onlyIndices)].map(index=>objects[index]);
   }
-  const storedPaths=new Map();
-  const entries=await Promise.all(chosen.map(async o=>{
+  const storedPaths=new Map(),entries=[];
+  for(const o of chosen){
    let image=null,preserveStored=true;
    // Word's cached OLE image can be tiny or retain an old layout. Supported
    // formulas get a fresh native thumbnail; defer that work on session open.
    if(!o.parseError&&!o.previewError&&o.nativeSha256){
     if(payload.thumbnails===false){image=thumbnailCache.get(o.nativeSha256)??null;preserveStored=false;}
-    else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){try{image=await thumbnail(o);preserveStored=false;}catch{/* Lazily preserve the stored preview when rendering fails. */}}
+    else if(!payload.thumbnailIndices||payload.thumbnailIndices.includes(o.index)){
+     try{image=await thumbnail(o);preserveStored=false;}
+     catch(error){if(error?.thumbnailAborted)throw error;/* Lazily preserve the stored preview when rendering fails. */}
+    }
    }
    if(preserveStored&&o.imagePath&&/\.(png|jpe?g|gif)$/i.test(o.imagePath))storedPaths.set(o.index,o.imagePath);
    const detailsLoaded=execution.wordActiveIndex===undefined||o.index===execution.wordActiveIndex;
-   return {index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,layout:o.layout,image,...detailsLoaded?{characters:o.characters,typography:o.typography,ruler:o.ruler??[]}:{editorDetailsLoaded:false}};
-  }));
+   entries.push({index:o.index,part:o.part,mainDocument:o.mainDocument===true,path:o.path,progId:o.progId,latex:o.latex??null,error:o.parseError||o.previewError||null,nativeSha256:o.nativeSha256,application:o.application,layout:o.layout,image,...detailsLoaded?{characters:o.characters,typography:o.typography,ruler:o.ruler??[]}:{editorDetailsLoaded:false}});
+  }
   if(storedPaths.size){
    const paths=[...new Set(storedPaths.values())].sort(),images=await documentCache.getStoredPreviews(payload.path,contentHash,paths);
    for(const entry of entries)if(storedPaths.has(entry.index))entry.image=images[storedPaths.get(entry.index)]??null;
@@ -391,9 +436,19 @@ if(await isMainModule(import.meta.url)){
    // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
    // Rendering and filesystem mutations retain their original serial order.
    const isPreview=['validate','editPreview'].includes(request.action);
+   const isThumbnailBatch=request.action==='wordSessionThumbnails';
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;
-   const execution=control.has(request.action)?(async()=>{const before=performance.now();let lastYield=-Infinity;const checkpoint=async()=>{if(performance.now()-lastYield>=8){await new Promise(resolve=>setImmediate(resolve));lastYield=performance.now();}};const result=await run(request.action==='wordSessionDocument'?{snapshotCheckpoint:checkpoint}:undefined);timing={queuedMs:0,executionMs:performance.now()-before,elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};return result;})():rendering.enqueue(run,{priority:request.action==='wordSessionThumbnails'?2:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
+   const execution=control.has(request.action)||isThumbnailBatch?(async()=>{
+    const before=performance.now();let lastYield=-Infinity,queuedMs=0;
+    const checkpoint=async()=>{if(performance.now()-lastYield>=8){await new Promise(resolve=>setImmediate(resolve));lastYield=performance.now();}};
+    const scheduleThumbnail=isThumbnailBatch?task=>rendering.enqueue(task,{priority:2,onTiming:value=>{queuedMs+=value.queuedMs;}}):undefined;
+    const context=request.action==='wordSessionDocument'?{snapshotCheckpoint:checkpoint}:isThumbnailBatch?{snapshotCheckpoint:checkpoint,scheduleThumbnail}:undefined;
+    const result=await run(context);
+    const totalMs=performance.now()-before;
+    timing={queuedMs,executionMs:Math.max(0,totalMs-queuedMs),elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};
+    return result;
+   })():rendering.enqueue(run,{priority:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
    const task=execution.then(result=>{if(result.superseded)result={ok:false,cancelled:true,superseded:true};process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start,timing})+'\n');});
    inflight.add(task);task.finally(()=>inflight.delete(task));
   }

@@ -106,3 +106,147 @@ test('A segmented snapshot retains Word’s numbering revision when the package 
   await op('native-poll',{ticket});
  }
 });
+test('unanimous context-free shared parts are deduplicated once with clean relationships and content types',async()=>{
+ const combined=await combineWordSnapshotParts(parts);
+ const zip=await JSZip.loadAsync(combined);
+ const names=Object.keys(zip.files).filter(name=>!zip.files[name].dir);
+ const canonicalShared=['word/styles.xml','word/settings.xml','word/fontTable.xml','word/webSettings.xml','word/theme/theme1.xml','docProps/core.xml','docProps/app.xml'];
+ for(const part of canonicalShared){
+  assert.ok(zip.file(part),`Expected canonical shared part ${part}`);
+  assert.deepEqual(names.filter(name=>name.endsWith('/'+part)),[],`Expected no per-range duplicate for ${part}`);
+ }
+ const mainRels=new DOMParser().parseFromString(await zip.file('word/_rels/document.xml.rels').async('string'),'application/xml');
+ const mainLinks=Array.from(mainRels.getElementsByTagNameNS(NS.rels,'Relationship'));
+ for(const [relType,target] of [
+  [NS.r+'/styles','styles.xml'],
+  [NS.r+'/settings','settings.xml'],
+  [NS.r+'/fontTable','fontTable.xml'],
+  [NS.r+'/webSettings','webSettings.xml'],
+  [NS.r+'/theme','theme/theme1.xml']
+ ]){
+  assert.deepEqual(mainLinks.filter(node=>node.getAttribute('Type')===relType).map(node=>node.getAttribute('Target')),[target]);
+ }
+ const rootRels=new DOMParser().parseFromString(await zip.file('_rels/.rels').async('string'),'application/xml');
+ const rootLinks=Array.from(rootRels.getElementsByTagNameNS(NS.rels,'Relationship'));
+ assert.deepEqual(rootLinks.map(node=>[node.getAttribute('Id'),node.getAttribute('Target')]).sort(),[
+  ['rApp','docProps/app.xml'],
+  ['rCore','docProps/core.xml'],
+  ['rDocument','word/document.xml']
+ ]);
+ const types=new DOMParser().parseFromString(await zip.file('[Content_Types].xml').async('string'),'application/xml');
+ const overrides=Array.from(types.getElementsByTagName('Override')).map(node=>node.getAttribute('PartName').slice(1));
+ assert.equal(new Set(overrides).size,overrides.length,'[Content_Types].xml must not contain duplicate overrides');
+ assert.deepEqual([...overrides].sort(),names.filter(name=>name!=='[Content_Types].xml').sort());
+});
+test('conflicting or context-bound shared parts stay isolated per segment without breaking relationships',async()=>{
+ const conflictingStyles=editPart(parts[1],'/word/styles.xml',part=>{
+  const styles=part.getElementsByTagNameNS(NS.w,'styles')[0];
+  const extra=part.ownerDocument.createElementNS(NS.w,'w:style');
+  extra.setAttributeNS(NS.w,'w:type','paragraph');
+  extra.setAttributeNS(NS.w,'w:styleId','SegmentOnlyStyle');
+  styles.appendChild(extra);
+ });
+ const conflictDoc=await inspectDocx(await combineWordSnapshotParts([parts[0],conflictingStyles,...parts.slice(2)]));
+ assert.equal(conflictDoc.zip.file('word/styles.xml'),null);
+ assert.equal(conflictDoc.objects.length,30);
+ for(let i=0;i<parts.length;i++)assert.ok(conflictDoc.zip.file(`ranges/${i}/word/styles.xml`));
+ // Other unanimous shared parts (e.g. settings, theme) still deduplicate cleanly.
+ assert.ok(conflictDoc.zip.file('word/settings.xml'));
+ assert.ok(conflictDoc.zip.file('word/theme/theme1.xml'));
+ const conflictRels=new DOMParser().parseFromString(await conflictDoc.zip.file('word/_rels/document.xml.rels').async('string'),'application/xml');
+ const styleLinks=Array.from(conflictRels.getElementsByTagNameNS(NS.rels,'Relationship')).filter(node=>node.getAttribute('Type')===NS.r+'/styles');
+ assert.equal(styleLinks.length,parts.length);
+ // A shared part with its own .rels is context-bound and must not be deduplicated.
+ const withStyleRels=parts[1].replace('</pkg:package>',`<pkg:part pkg:name="/word/_rels/styles.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml"><pkg:xmlData><Relationships xmlns="${NS.rels}"/></pkg:xmlData></pkg:part></pkg:package>`);
+ const styleRelsZip=await JSZip.loadAsync(await combineWordSnapshotParts([parts[0],withStyleRels,...parts.slice(2)]));
+ assert.equal(styleRelsZip.file('word/styles.xml'),null);
+ assert.ok(styleRelsZip.file('ranges/1/word/_rels/styles.xml.rels'));
+ for(let i=0;i<parts.length;i++)assert.ok(styleRelsZip.file(`ranges/${i}/word/styles.xml`));
+ // A shared part containing an r: relationship attribute is context-bound.
+ const withRelAttr=editPart(parts[1],'/word/styles.xml',part=>{
+  const styles=part.getElementsByTagNameNS(NS.w,'styles')[0];
+  styles.setAttributeNS(NS.r,'r:id','rLocal');
+ });
+ const relAttrZip=await JSZip.loadAsync(await combineWordSnapshotParts([parts[0],withRelAttr,...parts.slice(2)]));
+ assert.equal(relAttrZip.file('word/styles.xml'),null);
+ for(let i=0;i<parts.length;i++)assert.ok(relAttrZip.file(`ranges/${i}/word/styles.xml`));
+ // A shared part referenced by another part's .rels must remain per-segment.
+ const withHeaderRef=parts[1].replace('</pkg:package>',`<pkg:part pkg:name="/word/header1.xml" pkg:contentType="application/vnd.openxmlformats-officedocument.wordprocessingml.header+xml"><pkg:xmlData><w:hdr xmlns:w="${NS.w}"/></pkg:xmlData></pkg:part><pkg:part pkg:name="/word/_rels/header1.xml.rels" pkg:contentType="application/vnd.openxmlformats-package.relationships+xml"><pkg:xmlData><Relationships xmlns="${NS.rels}"><Relationship Id="rHdrStyles" Type="${NS.r}/styles" Target="styles.xml"/></Relationships></pkg:xmlData></pkg:part></pkg:package>`);
+ const headerRefZip=await JSZip.loadAsync(await combineWordSnapshotParts([parts[0],withHeaderRef,...parts.slice(2)]));
+ assert.equal(headerRefZip.file('word/styles.xml'),null);
+ assert.ok(headerRefZip.file('ranges/1/word/styles.xml'));
+ const hdrRels=await headerRefZip.file('ranges/1/word/_rels/header1.xml.rels').async('string');
+ assert.match(hdrRels,/Target="styles\.xml"/);
+ // A shared part whose relationship Id is referenced directly in <w:body> must keep its prefixed relationship.
+ const stylesRelId=(()=>{
+  const doc=new DOMParser().parseFromString(parts[1],'application/xml');
+  const relPart=Array.from(doc.getElementsByTagNameNS(NS.pkg,'part')).find(n=>n.getAttributeNS(NS.pkg,'name')==='/word/_rels/document.xml.rels');
+  const rel=Array.from(relPart.getElementsByTagNameNS(NS.rels,'Relationship')).find(n=>n.getAttribute('Type')===NS.r+'/styles');
+  assert.ok(rel);
+  return rel.getAttribute('Id');
+ })();
+ const withBodyRef=editPart(parts[1],'/word/document.xml',part=>{
+  const p=part.getElementsByTagNameNS(NS.w,'p')[0];
+  p.setAttributeNS(NS.r,'r:id',stylesRelId);
+ });
+ const bodyRefZip=await JSZip.loadAsync(await combineWordSnapshotParts([parts[0],withBodyRef,...parts.slice(2)]));
+ assert.equal(bodyRefZip.file('word/styles.xml'),null);
+ assert.ok(bodyRefZip.file('ranges/1/word/styles.xml'));
+ const bodyRefRels=await bodyRefZip.file('word/_rels/document.xml.rels').async('string');
+ assert.match(bodyRefRels,new RegExp(`Id="p1_${stylesRelId}"`));
+});
+test('shared-part reuse fast path rejects later-segment malformed XML and package namespace mismatches',async()=>{
+ const malformedLater=editPart(parts[1],'/word/styles.xml',part=>{
+  const payload=part.getElementsByTagNameNS(NS.pkg,'xmlData')[0];
+  payload.appendChild(part.ownerDocument.createTextNode('corrupted'));
+ });
+ await assert.rejects(combineWordSnapshotParts([parts[0],malformedLater,...parts.slice(2)]),/Invalid Word snapshot XML payload/);
+ const differentPkgOpen=parts[1].replace(`<pkg:package xmlns:pkg="${NS.pkg}">`,`<pkg:package xmlns:pkg="${NS.pkg}" xml:space="preserve">`);
+ const merged=await inspectDocx(await combineWordSnapshotParts([parts[0],differentPkgOpen,...parts.slice(2)]));
+ assert.equal(merged.objects.length,30);
+ assert.ok(merged.zip.file('word/styles.xml'));
+});
+test('adaptive chunking logic fits long documents within fixed budget and preserves paragraph boundaries',()=>{
+ // Mirror ELNextDocumentChunkEnd to verify boundary invariants across sizes.
+ const CHUNK_PART_BUDGET=64,CHUNK_MIN_CHARS=7500,CHUNK_BYTE_BUDGET=100663296;
+ function simulateChunks(totalChars,paragraphSize,bytesPerChunk){
+  let start=0,part=0,xmlBytes=0;const chunks=[];
+  while(start<totalChars){
+   const remaining=totalChars-start;
+   let remainingParts=Math.max(1,CHUNK_PART_BUDGET-part);
+   if(part>0&&xmlBytes>0){
+    if(xmlBytes>=CHUNK_BYTE_BUDGET)remainingParts=1;
+    else{
+     const avgBytes=Math.max(1,Math.floor(xmlBytes/part));
+     const byteRemaining=Math.max(1,Math.floor((CHUNK_BYTE_BUDGET-xmlBytes)/avgBytes));
+     if(byteRemaining<remainingParts)remainingParts=byteRemaining;
+    }
+   }
+   let last;
+   if(remainingParts<=1)last=totalChars;
+   else{
+    const step=Math.max(CHUNK_MIN_CHARS,Math.floor((remaining+remainingParts-1)/remainingParts));
+    last=Math.min(totalChars,start+step);
+    if(last<totalChars){
+     const paraStart=Math.floor((last-1)/paragraphSize)*paragraphSize;
+     if(paraStart>start&&paraStart<last)last=paraStart;
+    }
+   }
+   assert.ok(last>start,'each adaptive chunk must make strict forward progress');
+   chunks.push([start,last]);
+   xmlBytes=Math.min(134217728,xmlBytes+bytesPerChunk);
+   start=last;part++;
+  }
+  return chunks;
+ }
+ for(const [len,para,bytes] of [[25_000,400,120_000],[200_000,500,250_000],[1_000_000,1_200,300_000],[2_000_000,20_000,300_000],[500_000,500,3_000_000]]){
+  const result=simulateChunks(len,para,bytes);
+  assert.ok(result.length<=CHUNK_PART_BUDGET,`expected <= ${CHUNK_PART_BUDGET} parts for len=${len}, got ${result.length}`);
+  assert.equal(result[0][0],0);
+  assert.equal(result.at(-1)[1],len);
+  for(let i=1;i<result.length;i++)assert.equal(result[i][0],result[i-1][1]);
+ }
+ // Heavy boilerplate (~3 MiB/part) adapts to stay under the 128 MiB native limit.
+ const heavy=simulateChunks(500_000,500,3_000_000);
+ assert.ok(heavy.length<=35,`expected byte-budget adaptation, got ${heavy.length}`);
+});

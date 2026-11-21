@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 struct WorkbenchView: View {
     @ObservedObject var bridge: DesktopBridge
@@ -136,7 +137,26 @@ struct WorkbenchView: View {
 }
 
 struct WorkbenchStatusBar: View {
+    private static let copiedLatexMessage = "已复制 LaTeX"
+    private static let copiedPNGMessage = "已复制当前原生偏好的预览图片；提交可编辑公式请使用“导出 MathType Word”。"
+
+    private enum CopyKind {
+        case latex
+        case png
+    }
+
+    private struct PendingCopy {
+        let kind: CopyKind
+        let pasteboardChangeCount: Int
+        var sawBusy = false
+    }
+
     @ObservedObject var bridge: DesktopBridge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var pendingCopy: PendingCopy?
+    @State private var latexCopySuccess = 0
+    @State private var pngCopySuccess = 0
+
     var body: some View {
         HStack(spacing: 8) {
             Image(systemName: bridge.state.statusError || bridge.state.statusWarning || bridge.state.messageError ? "exclamationmark.triangle" : bridge.state.valid ? "checkmark.circle" : "clock")
@@ -146,13 +166,39 @@ struct WorkbenchStatusBar: View {
                 .foregroundStyle(bridge.state.messageError || bridge.state.statusError || bridge.state.statusWarning ? .orange : .secondary)
                 .help(bridge.t(bridge.state.statusDetail))
             Spacer(minLength: 8)
-            Button { bridge.action("click", ["id": "copy-latex"]) } label: {
-                Label("LaTeX", systemImage: "doc.on.doc").font(.system(size: 11))
+            Button {
+                if !bridge.state.busy,
+                   !bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                    pendingCopy = PendingCopy(kind: .latex, pasteboardChangeCount: NSPasteboard.general.changeCount)
+                }
+                bridge.action("click", ["id": "copy-latex"])
+            } label: {
+                HStack(spacing: 4) {
+                    Image(systemName: "doc.on.doc")
+                        .symbolEffect(.bounce, options: .speed(1.5), value: reduceMotion ? 0 : latexCopySuccess)
+                        .symbolEffectsRemoved(reduceMotion)
+                    Text("LaTeX")
+                }
+                .font(.system(size: 11))
             }
-            .buttonStyle(WorkbenchButtonStyle()).fixedSize().disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
+            .buttonStyle(WorkbenchButtonStyle())
+            .workbenchConfirmationFlash(trigger: latexCopySuccess, tint: .green)
+            .fixedSize().disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
             .help(bridge.t("复制 LaTeX")).accessibilityLabel(bridge.t("复制 LaTeX"))
-            Button { bridge.action("click", ["id": "copy-png"]) } label: { Image(systemName: "photo").frame(width: 18) }
-                .buttonStyle(WorkbenchButtonStyle()).disabled(bridge.state.busy || !bridge.state.canExport)
+            Button {
+                if !bridge.state.busy && bridge.state.canExport {
+                    pendingCopy = PendingCopy(kind: .png, pasteboardChangeCount: NSPasteboard.general.changeCount)
+                }
+                bridge.action("click", ["id": "copy-png"])
+            } label: {
+                Image(systemName: "photo")
+                    .frame(width: 18)
+                    .symbolEffect(.bounce, options: .speed(1.5), value: reduceMotion ? 0 : pngCopySuccess)
+                    .symbolEffectsRemoved(reduceMotion)
+            }
+                .buttonStyle(WorkbenchButtonStyle())
+                .workbenchConfirmationFlash(trigger: pngCopySuccess, tint: .green)
+                .disabled(bridge.state.busy || !bridge.state.canExport)
                 .help(bridge.t("复制公式图片")).accessibilityLabel(bridge.t("复制公式图片"))
             Button { bridge.action("click", ["id": "keyboard"]) } label: { Image(systemName: "keyboard").frame(width: 18) }
                 .buttonStyle(WorkbenchButtonStyle(selected: bridge.state.keyboardVisible))
@@ -162,5 +208,43 @@ struct WorkbenchStatusBar: View {
         }
         .padding(.horizontal, 16)
         .modifier(WorkbenchFooter())
+        .onChange(of: bridge.state.selected) { _, _ in
+            pendingCopy = nil
+        }
+        .onChange(of: bridge.state.documentPath) { _, _ in
+            pendingCopy = nil
+        }
+        .onChange(of: bridge.state.wordDocumentIdentity) { _, _ in
+            pendingCopy = nil
+        }
+        .onReceive(bridge.$state) { state in
+            guard var pending = pendingCopy else { return }
+            if state.busy {
+                pending.sawBusy = true
+                pendingCopy = pending
+                return
+            }
+            let pasteboard = NSPasteboard.general
+            let pasteboardUpdated = pasteboard.changeCount != pending.pasteboardChangeCount
+            if !state.messageError && pasteboardUpdated {
+                switch pending.kind {
+                case .latex where state.message == Self.copiedLatexMessage
+                    && pasteboard.types?.contains(.string) == true:
+                    pendingCopy = nil
+                    latexCopySuccess += 1
+                    return
+                case .png where state.message == Self.copiedPNGMessage
+                    && pasteboard.types?.contains(.png) == true:
+                    pendingCopy = nil
+                    pngCopySuccess += 1
+                    return
+                default:
+                    break
+                }
+            }
+            if state.messageError || pending.sawBusy {
+                pendingCopy = nil
+            }
+        }
     }
 }

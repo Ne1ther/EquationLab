@@ -9,8 +9,8 @@ import {fileURLToPath} from 'node:url';
 // browser distribution. Keep the complete js/TeX implementations unchanged.
 const rules = [
   {name: 'mathjax-full', version: '3.2.2', paths: ['es5', 'ts', 'tsconfig.json', 'tslint.json']},
-  {name: 'mathlive', version: '0.111.1', paths: ['mathlive.js', 'mathlive.mjs', 'types']},
-  {name: 'sharp', version: '0.35.5', paths: ['src', 'install', 'lib']},
+  {name: 'mathlive', version: '0.111.1', optional: true, paths: ['mathlive.js', 'mathlive.mjs', 'types']},
+  {name: 'sharp', version: '0.35.5', optional: true, paths: ['src', 'install', 'lib']},
   {name: 'jszip', version: '3.10.1', paths: ['dist', '.github', 'vendor', 'graph.svg', '.jekyll-metadata', '.codeclimate.yml', '.editorconfig', '.eslintrc.js', '.travis.yml', 'tsconfig.json']},
   {name: 'cfb', version: '1.2.2', paths: ['dist', 'types', 'xlscfb.flow.js']},
   {name: 'pako', version: '1.0.11', paths: ['dist']}
@@ -71,7 +71,7 @@ export async function pruneDependencies(directory) {
   for (const rule of rules) {
     let metadata;
     try { metadata = JSON.parse(await readFile(join(root, rule.name, 'package.json'), 'utf8')); }
-    catch (error) { if (rule.name === 'sharp' && error.code === 'ENOENT') continue; throw error; }
+    catch (error) { if (rule.optional && error.code === 'ENOENT') continue; throw error; }
     if (metadata.name !== rule.name || metadata.version !== rule.version) throw Error(`Unaudited dependency version: ${rule.name} ${metadata.version}`);
   }
   const {files: before, links} = await inventory(root), retained = [];

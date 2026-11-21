@@ -4,9 +4,22 @@ window.createWordDocumentWorkspace = api => {
  let cached=null,pending=null,generation=0,selecting=false,statusFlight=null,refreshFlight=null,observedIdentity=undefined,active=null,wordDocumentUnavailable=false,unavailableIdentity=null,unavailableName='',knownRetired=new Set();
  let documents=[],connected=false,insertionSupported=false,metadataFlight=null,emptyDocument=null,preparedInsertionDraft=null,awaitingPublishedIdentity=null;
  let displayedDuringLoad=null,catalogueDuringDetach=null;
- let failedDocumentIdentity=null;
+ let failedDocumentIdentity=null,autoRecovery=null,lastStatusError=null;
+ const AUTO_RECOVERY_MAX_ATTEMPTS=3,AUTO_RECOVERY_BACKOFF_MS=[4000,10000,20000];
  const changed=()=>api.changed();
- const readStatus=()=>metadataFlight??(metadataFlight=api.native('wordWorkspaceStatus').finally(()=>{metadataFlight=null;}));
+ const readStatus=()=>metadataFlight??(metadataFlight=api.native('wordWorkspaceStatus').then(status=>{lastStatusError=null;return status;}).finally(()=>{metadataFlight=null;}));
+ function reportStatusError(prefix,error,force=false){
+  const text=prefix+error.message;
+  if(force||lastStatusError!==text){lastStatusError=text;api.message(text,true);}
+ }
+ function clearAutoRecovery(){autoRecovery=null;}
+ function armAutoRecovery(identity,attempts=0,lastMessage=null){
+  const state=api.state();
+  if(!identity||wordDocumentUnavailable||knownRetired.has(identity)||state.wordTicket||state.source||state.outcomeUnknown||dirty(state)){autoRecovery=null;return;}
+  if(attempts>=AUTO_RECOVERY_MAX_ATTEMPTS){autoRecovery={identity,attempts,nextRetryAt:Infinity,lastMessage};return;}
+  const delay=AUTO_RECOVERY_BACKOFF_MS[Math.min(attempts,AUTO_RECOVERY_BACKOFF_MS.length-1)];
+  autoRecovery={identity,attempts,nextRetryAt:api.now()+delay,lastMessage};
+ }
  function updateCatalog(status){
   const nextConnected=status?.connected===true;
   const seen=new Set();
@@ -49,7 +62,7 @@ window.createWordDocumentWorkspace = api => {
    }
    return connected;
   }
-  catch(error){api.message('未能读取 Word 文档列表：'+error.message,true);return false;}
+  catch(error){reportStatusError('未能读取 Word 文档列表：',error,false);return false;}
  }
  const validTarget=target=>target&&typeof target.identity==='string'&&target.identity.length>0&&target.snapshot!=null&&Number.isInteger(target.index)&&/^[a-f0-9]{64}$/.test(target.nativeSha256||'');
  const nextNumberingRevision=revision=>revision===2147483646?1:revision+1;
@@ -77,7 +90,7 @@ window.createWordDocumentWorkspace = api => {
   object.layout=document.savedNumberingLayout;
  }
  const clearUnavailable=()=>{if(!wordDocumentUnavailable&&!unavailableIdentity&&!unavailableName)return false;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';changed();return true;};
- const remember=(document,confirmedContentSaveIndex=null,formatSaveRevision=null,formatSaveIndex=null,formatSaveSnapshot=document?.documentSnapshot)=>{
+ const remember=(document,confirmedContentSaveIndex=null,formatSaveRevision=null,formatSaveIndex=null,formatSaveSnapshot=document?.documentSnapshot,hasUnconfirmedSave=false)=>{
   if(!document?.hasDocumentContext||!document.documentIdentity||document.documentLoading||document.documentLoadFailed)return;
   if(knownRetired.has(document.documentIdentity)||wordDocumentUnavailable&&document.documentIdentity===unavailableIdentity)return;
   if(cached?.documentIdentity===document.documentIdentity&&cached.documentSnapshot!==document.documentSnapshot){
@@ -88,7 +101,7 @@ window.createWordDocumentWorkspace = api => {
     if(!object.image&&!object.error&&images.has(object.nativeSha256))object.image=images.get(object.nativeSha256);
    }
   }
-  cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,documentNumberingRevision:document.documentNumberingRevision,numberingRefreshNeeded:!!document.numberingRefreshNeeded,confirmedNumberingChange:!!document.confirmedNumberingChange,confirmedContentSaveIndex,formatSaveRevision,formatSaveIndex,formatSaveSnapshot,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
+  cached={documentName:document.documentName,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot,documentNumberingRevision:document.documentNumberingRevision,numberingRefreshNeeded:!!document.numberingRefreshNeeded,confirmedNumberingChange:!!document.confirmedNumberingChange,confirmedContentSaveIndex,formatSaveRevision,formatSaveIndex,formatSaveSnapshot,hasUnconfirmedSave:!!hasUnconfirmedSave,hasDocumentContext:true,objects:document.objects.map(object=>({...object}))};
  };
  function rememberAfterCancel(document){
   if(!document?.hasDocumentContext||document.insertion||knownRetired.has(document.documentIdentity))return;
@@ -125,13 +138,34 @@ window.createWordDocumentWorkspace = api => {
  function rememberAfterSave(document,index,change,latex,numbering){
   if(!document?.hasDocumentContext||!document.documentIdentity)return;
   const insertion=!!document.insertion;
+  const originalNumberingChanged=change?.numberingChanged===true;
   if(document.documentLoading||document.documentLoadFailed){
    if(cached?.documentIdentity!==document.documentIdentity)return;
    if(rememberScopedNumbering(document,change,numbering))return;
    // No current full snapshot can bind this row. Keep the old context visible
    // but prevent its stale row from being sent as a verified target.
-   index=document.documentPosition;
-   document=cached;change=null;
+   const partial=document,partialIndex=partial.documentPosition;
+   const previous=insertion?null:Number.isInteger(partialIndex)?cached.objects[partialIndex]:null;
+   const objects=cached.objects.slice();
+   if(previous)objects[partialIndex]={...previous,nativeSha256:null,latex:previous.latex,image:null};
+   const matchesRevision=rev=>Number.isSafeInteger(rev)&&(rev===cached.documentNumberingRevision||cached.formatSaveRevision!==null&&rev===cached.formatSaveRevision);
+   const partialOwner=partial.objects?.[partial.activeIndex];
+   const ownerMatches=!!(previous&&/^[a-f0-9]{64}$/.test(partialOwner?.nativeSha256??'')&&partialOwner.nativeSha256===previous.nativeSha256);
+   const revisionDiverged=Number.isSafeInteger(partial.documentNumberingRevision)&&!matchesRevision(partial.documentNumberingRevision)
+    ||Number.isSafeInteger(partial.liveNumberingRevision)&&!matchesRevision(partial.liveNumberingRevision);
+   const preserveConfirmedNumbering=!insertion&&!numbering&&!originalNumberingChanged
+    &&!cached.numberingRefreshNeeded&&!cached.confirmedNumberingChange
+    &&!partial.numberingRefreshNeeded&&!partial.confirmedNumberingChange
+    &&partial.documentTotal===cached.objects.length&&ownerMatches
+    &&matchesRevision(partial.documentNumberingRevision)&&!revisionDiverged;
+   const confirmedNumberingChange=!!(cached.confirmedNumberingChange||partial.confirmedNumberingChange||insertion||numbering||originalNumberingChanged||revisionDiverged);
+   const numberingRefreshNeeded=!preserveConfirmedNumbering||confirmedNumberingChange;
+   const formatSaveRevision=preserveConfirmedNumbering?cached.formatSaveRevision:null;
+   const keepFormatBinding=formatSaveRevision!==null&&cached.formatSaveIndex!==partialIndex;
+   const formatSaveIndex=keepFormatBinding?cached.formatSaveIndex:null;
+   const formatSaveSnapshot=keepFormatBinding?cached.formatSaveSnapshot:cached.documentSnapshot;
+   remember({...cached,objects,confirmedNumberingChange,numberingRefreshNeeded},null,formatSaveRevision,formatSaveIndex,formatSaveSnapshot,true);
+   return;
   }
   if(insertion)index=undefined;
   const previous=document.objects[index];
@@ -158,17 +192,22 @@ window.createWordDocumentWorkspace = api => {
   // Word advances this revision once per confirmed numbering transaction.
   // The previous publication can still be in flight when Dock reveals us.
   const formatSaveRevision=formatOnly?nextNumberingRevision(revision):null;
-  remember({...document,objects,confirmedNumberingChange,numberingRefreshNeeded},confirmedContentSave?index:null,formatSaveRevision,formatOnly?index:null);
+  remember({...document,objects,confirmedNumberingChange,numberingRefreshNeeded},confirmedContentSave?index:null,formatSaveRevision,formatOnly?index:null,document.documentSnapshot,!confirmed);
  }
  async function cancelPending(){
-  const old=pending;pending=null;preparedInsertionDraft=null;generation++;changed();
+  const old=pending;pending=null;preparedInsertionDraft=null;clearAutoRecovery();generation++;changed();
   if(old?.requestId)void api.native('wordDocumentCancel',{requestId:old.requestId}).catch(()=>{});
  }
- function failure(request,text){
+ function failure(request,text,{allowRecovery=true}={}){
   if(pending!==request)return;
   if(request.requestId)void api.native('wordDocumentCancel',{requestId:request.requestId}).catch(()=>{});
   if(!request.insertion&&!request.target&&!request.catalogTarget)failedDocumentIdentity=request.expectedIdentity??active?.identity??null;
-  pending=null;changed();api.message(text,true);
+  const suppressMessage=!!(allowRecovery&&request.autoRefresh&&request.lastMessage===text);
+  pending=null;
+  if(allowRecovery&&request.autoRefresh&&request.expectedIdentity)armAutoRecovery(request.expectedIdentity,request.recoveryAttempt??0,text);
+  else clearAutoRecovery();
+  changed();
+  if(!suppressMessage)api.message(text,true);
  }
  function canRetrySavedTarget(target){
   const state=api.state(),entry=documents.find(item=>item.identity===target.identity);
@@ -178,6 +217,31 @@ window.createWordDocumentWorkspace = api => {
    &&cached?.documentIdentity===target.identity&&cached.documentSnapshot===target.snapshot
    &&!cached.numberingRefreshNeeded&&entry.numberingRevision===cached.documentNumberingRevision
    &&cached.objects[target.index]?.nativeSha256===target.nativeSha256;
+ }
+ async function fallbackToVerifiedDocument(request,identity){
+  const before=api.state();
+  if(pending!==request||request.generation!==generation)return 'handled';
+  if(!identity||selecting||wordDocumentUnavailable||knownRetired.has(identity)
+   ||before.source||before.wordTicket||before.busy||before.outcomeUnknown||dirty(before))return 'stop';
+  let fresh;
+  try{fresh=await readStatus();}catch{return 'retry';}
+  if(pending!==request||request.generation!==generation)return 'handled';
+  updateCatalog(fresh);
+  if(fresh?.connected===true&&Array.isArray(fresh.retiredIdentities)){
+   knownRetired=new Set(fresh.retiredIdentities.filter(item=>typeof item==='string'));
+  }
+  const current=api.state(),entry=documents.find(item=>item.identity===identity);
+  if(!fresh?.connected)return 'retry';
+  if(fresh.active?.identity!==identity||fresh.retiredIdentities?.includes(identity)||knownRetired.has(identity)
+   ||entry?.readOnly!==false||selecting||wordDocumentUnavailable
+   ||current.source||current.wordTicket||current.busy||current.outcomeUnknown||dirty(current)){
+   clearAutoRecovery();
+   return 'stop';
+  }
+  await requestOpen(null,request.discardApproved,identity,true,identity,null,false,null,{
+   autoRefresh:request.autoRefresh,fallbackDocument:false,recoveryAttempt:request.recoveryAttempt??0,lastMessage:request.lastMessage??null
+  });
+  return 'handled';
  }
  async function monitor(request){
   // Match the host's bounded request lifetime. Large WordOpenXML captures
@@ -194,11 +258,11 @@ window.createWordDocumentWorkspace = api => {
       if(pending!==request)return;
       updateCatalog(fresh);
       const matches=request.documentIdentity?result.documentIdentity===request.documentIdentity&&documents.some(item=>item.identity===request.documentIdentity):fresh.active?.identity===request.expectedIdentity;
-      if(!fresh?.connected||!matches||fresh.retiredIdentities?.includes(request.expectedIdentity)){failure(request,'Word 当前文档已变化。草稿仍保留，请重新选择目标文档。');return;}
+      if(!fresh?.connected||!matches||fresh.retiredIdentities?.includes(request.expectedIdentity)){failure(request,'Word 当前文档已变化。草稿仍保留，请重新选择目标文档。',{allowRecovery:false});return;}
       emptyDocument=result.state==='empty'?(request.documentIdentity?documents.find(item=>item.identity===request.documentIdentity):fresh.active):null;
      }else emptyDocument=null;
-     if(request.discardApproved&&!request.clearOnEmpty){observedIdentity=identityOf(cached);failure(request,'Word 当前文档没有可编辑公式。当前草稿仍保留。');return;}
-     cached=null;pending=null;if(!dirty(api.state()))clearUnavailable();if(request.clearOnEmpty)api.empty?.();changed();api.message(result.state==='empty'?'Word 当前文档中还没有 MathType 公式。':'请先打开 Word 文档。');return;
+     if(request.discardApproved&&!request.clearOnEmpty){observedIdentity=identityOf(cached);failure(request,'Word 当前文档没有可编辑公式。当前草稿仍保留。',{allowRecovery:false});return;}
+     clearAutoRecovery();cached=null;pending=null;if(!dirty(api.state()))clearUnavailable();if(request.clearOnEmpty&&!dirty(api.state()))api.empty?.();changed();api.message(result.state==='empty'?'Word 当前文档中还没有 MathType 公式。':'请先打开 Word 文档。');return;
     }
     if(['failed','cancelled','superseded','expired'].includes(result.state)){
      const target=request.target;
@@ -209,18 +273,31 @@ window.createWordDocumentWorkspace = api => {
       // Keep the original row target for prepareIncoming to check again.
       await requestOpen(target,request.discardApproved,target.identity,false,target.identity);return;
      }
-     failure(request,'未能打开 Word 公式。草稿仍保留；'+(result.reason||'请重新选择目标公式。'));return;
+     let fallbackOutcome=null;
+     if(result.state==='failed'&&request.fallbackDocument&&!result.reason&&target&&request.generation===generation
+      &&result.requestId===request.requestId
+      &&(result.identity===undefined||result.identity===target.identity)
+      &&(result.index===undefined||result.index===target.index)
+      &&(result.documentIdentity===undefined||result.documentIdentity===target.identity)){
+      // An automatic refresh whose old ordinal expired falls back once to
+      // refreshing the same verified active document rather than stranding stale rows.
+      fallbackOutcome=await fallbackToVerifiedDocument(request,target.identity);
+      if(fallbackOutcome==='handled')return;
+     }
+     const allowRecovery=fallbackOutcome!=='stop'&&!['cancelled','superseded'].includes(result.state)&&!['document-process-mismatch','invalid-document-identity'].includes(result.reason);
+     failure(request,'未能打开 Word 公式。草稿仍保留；'+(result.reason||'请重新选择目标公式。'),{allowRecovery});return;
     }
    }catch(error){failure(request,'未能读取 Word 文档：'+error.message);return;}
    await api.pause(300);
   }
  }
- async function requestOpen(target=null,discardApproved=false,expectedIdentity=null,clearOnEmpty=false,documentIdentity=null,insertion=null,retrySavedTarget=false,catalogTarget=null){
+ async function requestOpen(target=null,discardApproved=false,expectedIdentity=null,clearOnEmpty=false,documentIdentity=null,insertion=null,retrySavedTarget=false,catalogTarget=null,{autoRefresh=false,fallbackDocument=false,recoveryAttempt=0,lastMessage=null}={}){
   const nextGeneration=generation+1;
   await cancelPending();
   if(target&&documentIdentity&&(generation!==nextGeneration||pending||!canRetrySavedTarget(target)))return false;
   if(!insertion&&!target&&!catalogTarget)failedDocumentIdentity=null;
-  let ready;const request={generation,requestId:null,target,discardApproved,expectedIdentity,clearOnEmpty,documentIdentity,insertion,retrySavedTarget,catalogTarget,catalogue:catalogTarget?catalogueDuringDetach:null,ready:new Promise(resolve=>{ready=resolve;})};pending=request;changed();api.message(insertion?'正在准备 Word 插入位置…':catalogTarget?'正在读取选中的公式…':'正在读取 Word 文档…');
+  let ready;const request={generation,requestId:null,target,discardApproved,expectedIdentity,clearOnEmpty,documentIdentity,insertion,retrySavedTarget,catalogTarget,catalogue:catalogTarget?catalogueDuringDetach:null,autoRefresh,fallbackDocument,recoveryAttempt,lastMessage,ready:new Promise(resolve=>{ready=resolve;})};pending=request;changed();
+  if(!(autoRefresh&&recoveryAttempt>0))api.message(insertion?'正在准备 Word 插入位置…':catalogTarget?'正在读取选中的公式…':'正在读取 Word 文档…');
   try{
    const destination=catalogTarget?{catalogTarget}:documentIdentity?{documentIdentity}:target?{target}:{};
    const result=await api.native('wordDocumentOpen',{...destination,...insertion?{insertionMode:insertion.mode}:{}});
@@ -335,6 +412,18 @@ window.createWordDocumentWorkspace = api => {
     observedIdentity=nextIdentity;cached=null;clearUnavailable();changed();
     return requestOpen(null,!!ticketBefore,nextIdentity,!!ticketBefore);
    }
+   if(autoRecovery){
+    if(state.wordTicket||state.source||dirty(state)||wordDocumentUnavailable||knownRetired.has(autoRecovery.identity)||!target||target.identity!==autoRecovery.identity){
+     clearAutoRecovery();
+    }else if(!force&&!state.busy&&!state.outcomeUnknown&&!pending&&!selecting&&autoRecovery.attempts<AUTO_RECOVERY_MAX_ATTEMPTS&&api.now()>=autoRecovery.nextRetryAt){
+     const entry=documents.find(item=>item.identity===autoRecovery.identity);
+     if(entry?.readOnly===false){
+      const nextAttempt=autoRecovery.attempts+1,priorMessage=autoRecovery.lastMessage,identity=autoRecovery.identity;
+      observedIdentity=identity;
+      return requestOpen(null,true,identity,true,identity,null,false,null,{autoRefresh:true,fallbackDocument:false,recoveryAttempt:nextAttempt,lastMessage:priorMessage});
+     }
+    }
+   }
    if(!force&&nextIdentity===observedIdentity&&!wordDocumentUnavailable)return false;
    const oldIdentity=currentIdentity();
    if(force&&dirty(state)){api.message('刷新已跳过：当前公式有未保存更改，草稿已保留。',true);return false;}
@@ -363,10 +452,11 @@ window.createWordDocumentWorkspace = api => {
    if(identityOf(cached)!==nextIdentity)cached=null;
    changed();
    return requestOpen(null,!!ticketBefore,nextIdentity,!!ticketBefore);
-  })().catch(error=>{api.message('未能检查 Word 当前文档：'+error.message,true);return false;}).finally(()=>{statusFlight=null;if(releaseSelection)selecting=false;if(releaseSelection||activeMetadataChanged)changed();});
+  })().catch(error=>{reportStatusError('未能检查 Word 当前文档：',error,force);return false;}).finally(()=>{statusFlight=null;if(releaseSelection)selecting=false;if(releaseSelection||activeMetadataChanged)changed();});
   return statusFlight;
  }
  async function refreshCurrent(){
+  clearAutoRecovery();
   if(refreshFlight)return refreshFlight;
   refreshFlight=(async()=>{if(statusFlight)await statusFlight;return syncCurrent({force:true});})().finally(()=>{refreshFlight=null;});
   return refreshFlight;
@@ -374,6 +464,7 @@ window.createWordDocumentWorkspace = api => {
  async function switchToCurrent(){
   const target=active,state=api.state();
   if(!target||(!wordDocumentUnavailable&&target.identity===currentIdentity())||state.busy||state.outcomeUnknown||pending||selecting)return false;
+  clearAutoRecovery();
   selecting=true;changed();
   try{
    const answer=await api.native('confirmWordSessionSwitch');if(!answer?.discard)return false;
@@ -390,6 +481,7 @@ window.createWordDocumentWorkspace = api => {
  async function chooseDocument(identity){
   const state=api.state(),beforeGeneration=generation;
   if(typeof identity!=='string'||state.busy||state.outcomeUnknown||pending||selecting)return false;
+  clearAutoRecovery();
   selecting=true;changed();
   try{
    let status=await readStatus();if(generation!==beforeGeneration)return false;updateCatalog(status);
@@ -414,6 +506,7 @@ window.createWordDocumentWorkspace = api => {
  async function insert(mode){
   const before=api.state(),identity=currentIdentity(),beforeGeneration=generation;
   if(!['inline','display','numbered-left','numbered-right'].includes(mode)||!identity||before.busy||before.outcomeUnknown||before.source?.insertion||pending||selecting)return false;
+  clearAutoRecovery();
   selecting=true;changed();
   try{
    const status=await readStatus();if(generation!==beforeGeneration)return false;updateCatalog(status);
@@ -503,9 +596,9 @@ window.createWordDocumentWorkspace = api => {
     // Selecting any row still requires a fresh Word capture with its target.
     const matchingDocument=cached&&active?.identity===cached.documentIdentity&&entry?.readOnly===false&&!wordDocumentUnavailable;
     const contentSave=matchingDocument&&Number.isInteger(cached.confirmedContentSaveIndex)&&!cached.numberingRefreshNeeded&&entry.numberingRevision===cached.documentNumberingRevision;
-    const formatSave=matchingDocument&&!cached.numberingRefreshNeeded&&cached.formatSaveRevision!==null
+    const formatSave=matchingDocument&&!cached.numberingRefreshNeeded&&!cached.hasUnconfirmedSave&&cached.formatSaveRevision!==null
      &&(entry.numberingRevision===cached.documentNumberingRevision||entry.numberingRevision===cached.formatSaveRevision);
-    const cancelledEdit=matchingDocument&&cached.cancelledEdit&&!cached.numberingRefreshNeeded
+    const cancelledEdit=matchingDocument&&cached.cancelledEdit&&!cached.numberingRefreshNeeded&&!cached.hasUnconfirmedSave
      &&Number.isSafeInteger(entry.numberingRevision)&&entry.numberingRevision===cachedNumberingRevision();
     if(contentSave||formatSave||cancelledEdit){
      cached.warmDockVerified=true;
@@ -514,14 +607,16 @@ window.createWordDocumentWorkspace = api => {
    }
    return requestOpen(null,false,status?.connected?active?.identity:null);
   },
-  async select(index,{reload=false}={}){
+  async select(index,{reload=false,fallbackToDocument=false}={}){
    const beforeGeneration=generation,state=api.state(),document=state.source||cached;
    const retryOwner=reload&&state.wordTicket&&document?.documentLoadFailed&&index===document.activeIndex;
+   const fallbackDocument=!!(reload&&fallbackToDocument);
    const object=document?.objects[index];
    if(wordDocumentUnavailable){api.message('文档连接已结束，无法再选择原文档公式。草稿已保留。',true);return false;}
    if(state.wordTicket&&state.source?.catalogProof&&!reload){
     if(state.busy||state.outcomeUnknown||pending||selecting||!Number.isInteger(index)||index<0||index>=document.documentTotal||index===document.documentPosition)return false;
     if(state.draftChanged){api.message('当前公式有修改，请先保存回 Word，再打开其他公式。',true);return false;}
+    clearAutoRecovery();
     const target={identity:document.documentIdentity,snapshot:document.documentSnapshot,index,count:document.documentTotal,proof:document.catalogProof};
     selecting=true;catalogueDuringDetach=document;changed();
     try{
@@ -536,8 +631,29 @@ window.createWordDocumentWorkspace = api => {
    }
    if(state.busy||state.outcomeUnknown||pending||selecting||!object)return false;
    if(reload&&state.draftChanged)return false;
+   if(!fallbackDocument)clearAutoRecovery();
    const target={identity:document.documentIdentity,snapshot:snapshotForRow(document,index),index:retryOwner?document.documentPosition??index:index,nativeSha256:object.nativeSha256};
-   if(!validTarget(target)){api.message('文档信息已失效，请从 Word 重新打开公式。',true);return false;}
+   if(!validTarget(target)){
+    if(fallbackDocument&&typeof document?.documentIdentity==='string'&&document.documentIdentity.length>0&&!knownRetired.has(document.documentIdentity)){
+     selecting=true;changed();
+     try{
+      const identity=document.documentIdentity;
+      const fresh=await readStatus();
+      if(generation!==beforeGeneration)return false;
+      updateCatalog(fresh);
+      const entry=documents.find(item=>item.identity===identity);
+      const current=api.state();
+      if(!fresh?.connected||fresh.active?.identity!==identity||fresh.retiredIdentities?.includes(identity)||entry?.readOnly!==false||current.source!==state.source||current.wordTicket!==state.wordTicket||current.busy||current.outcomeUnknown||current.draftChanged)return false;
+      if(document!==cached||cached.formatSaveRevision===null)remember(document);
+      if(state.wordTicket&&!await api.detach())return false;
+      const detached=api.state();
+      if(generation!==beforeGeneration||detached.wordTicket||detached.busy||detached.outcomeUnknown||dirty(detached))return false;
+      return await requestOpen(null,true,identity,true,identity,null,false,null,{autoRefresh:true,fallbackDocument:false,recoveryAttempt:0});
+     }catch(error){reportStatusError('未能检查 Word 当前文档：',error,false);return false;}
+     finally{selecting=false;changed();}
+    }
+    api.message('文档信息已失效，请从 Word 重新打开公式。',true);return false;
+   }
    const retrySavedTarget=!reload&&document.warmDockVerified&&document.confirmedContentSaveIndex===index&&canRetrySavedTarget(target);
    selecting=true;changed();
    try{
@@ -549,12 +665,13 @@ window.createWordDocumentWorkspace = api => {
     if(state.wordTicket&&!await api.detach())return false;
     current=api.state();
     if(generation!==beforeGeneration||current.wordTicket||current.busy||current.outcomeUnknown||!state.wordTicket&&current.source!==state.source)return false;
-    return await requestOpen(target,approved||reload,retryOwner?target.identity:null,false,null,null,retrySavedTarget);
+    return await requestOpen(target,approved||reload,(retryOwner||fallbackDocument)?target.identity:null,false,null,null,retrySavedTarget,null,{autoRefresh:fallbackDocument,fallbackDocument,recoveryAttempt:0});
    }finally{selecting=false;changed();}
   },
   async newFormula(){
    const before=api.state();
    if(!before.wordTicket||before.busy||before.outcomeUnknown||pending||selecting)return false;
+   clearAutoRecovery();
    const originalTicket=before.wordTicket,originalSource=before.source;
    selecting=true;changed();
    try{
@@ -582,16 +699,23 @@ window.createWordDocumentWorkspace = api => {
    if(!requestId){await cancelPending();restoreSavedNumberingLayout(document);return false;}
    if(request.expectedIdentity&&document.documentIdentity!==request.expectedIdentity){await cancelPending();throw Error('Word 当前文档已变化。草稿仍保留，请重新打开目标文档。');}
    if(request.insertion&&(!document.insertion||document.insertionLayout?.mode!==request.insertion.mode)){await cancelPending();throw Error('Word 返回的插入会话不匹配。草稿仍保留。');}
+   if(!request.insertion&&request.autoRefresh&&document.insertion){await cancelPending();throw Error('Word 返回的会话类型不匹配。草稿仍保留。');}
    const target=request.target,object=document.objects?.[request.insertion?target?.index:document.activeIndex];
    if(request.catalogTarget&&(document.insertion||(document.documentPosition??document.activeIndex)!==request.catalogTarget.index||!/^[0-9a-f]{64}$/.test(object?.nativeSha256||''))){await cancelPending();throw Error('Word 返回的公式与所选目录行不一致。请刷新文档后再选。');}
    const same=target&&document.documentIdentity===target.identity&&(request.insertion?target.index:(document.documentPosition??document.activeIndex))===target.index;
-   if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){await cancelPending();throw Error('Word 中的公式内容或位置已经变化。草稿仍保留，请重新打开文档后再选。');}
+   if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){
+    await cancelPending();
+    if(request.fallbackDocument&&request.autoRefresh&&document.documentIdentity===target.identity&&!document.insertion&&!dirty(api.state())&&!wordDocumentUnavailable&&!knownRetired.has(target.identity)){
+     armAutoRecovery(target.identity,request.recoveryAttempt??0,null);
+    }
+    throw Error('Word 中的公式内容或位置已经变化。草稿仍保留，请重新打开文档后再选。');
+   }
    restoreSavedNumberingLayout(document);
    const approved=request.discardApproved&&(!target||same);
    preparedInsertionDraft=request.insertion?{requestId,draft:request.insertion.draft}:null;
-   pending=null;generation++;changed();return !!approved;
+   pending=null;clearAutoRecovery();generation++;changed();return !!approved;
   },
   clearUnavailable,
-  accepted(document){generation++;emptyDocument=null;failedDocumentIdentity=null;const identity=identityOf(document);awaitingPublishedIdentity=identity;if(identity)knownRetired.delete(identity);else cached=null;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
+  accepted(document){generation++;clearAutoRecovery();lastStatusError=null;emptyDocument=null;failedDocumentIdentity=null;const identity=identityOf(document);awaitingPublishedIdentity=identity;if(identity)knownRetired.delete(identity);else cached=null;wordDocumentUnavailable=false;unavailableIdentity=null;unavailableName='';remember(document);observedIdentity=identity;active=identity?{identity,name:document.documentName||'Word 文档'}:active;changed();}
  };
 };

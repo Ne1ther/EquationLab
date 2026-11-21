@@ -123,7 +123,7 @@ async function inspectReusableApplication(root,config,app,{sourceVersion}={}){
   const lock=await readJson(path.join(resources,'engine/package-lock.json'));
   if(dependencyIdentity(lock)!==dependencyIdentity(await readJson(path.join(root,'package-lock.json'))))throw Error('production dependencies changed; prepare a complete seed matching package-lock.json');
   const runtime=path.join(resources,'runtime/bin/node');if(await command(runtime,['--version'])!==config.nodeVersion)throw Error('bundled Node runtime version differs');
-  for(const file of ['installer/word-native-installer/automatic-install.mjs','engine/src/desktop-rpc.mjs','engine/node_modules/mathlive/package.json','licenses/Node-LICENSE.txt'])if(!(await fs.stat(path.join(resources,file))).isFile())throw Error('missing resource '+file);
+  for(const file of ['installer/word-native-installer/automatic-install.mjs','engine/src/desktop-rpc.mjs','web/vendor/mathlive.min.js','licenses/Node-LICENSE.txt'])if(!(await fs.stat(path.join(resources,file))).isFile())throw Error('missing resource '+file);
   return {app:canonical,info,release,native,runtimeSha256:sha(await fs.readFile(runtime)),lockSha256:sha(await fs.readFile(path.join(resources,'engine/package-lock.json')))};
 }
 async function seedApplication(root,config){
@@ -180,7 +180,7 @@ export async function buildWordTestBundle({root,buildDirectory}){
   await fs.copyFile(path.join(root,'packaging/word-service.mjs'),path.join(resources,'installer/word-service.mjs'));
   await fs.copyFile(path.join(root,'packaging/word-native-installer/installer.mjs'),path.join(resources,'installer/word-native-installer.mjs'));
   for(const file of ['installer.mjs','automatic-install.mjs','build-automatic-pkg.mjs'])await fs.copyFile(path.join(root,'packaging/word-native-installer',file),path.join(resources,'installer/word-native-installer',file));
-  // The release seed deliberately prunes MathLive's unminified build input.
+  // The release seed contains the browser bundle, not MathLive's npm package.
   // Use the existing npm-ci checkout to rebuild the adapter, while retaining
   // the seed's locked production dependencies inside the standalone bundle.
   const [{buildMathLiveEditor},{buildWorkbenchAssets},{buildTemplatePreviews}]=await Promise.all([

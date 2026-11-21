@@ -122,3 +122,15 @@ test('unaudited versions and external symlinks fail before any removal', async t
   await assert.rejects(pruneDependencies(directory), /symlink/);
   await access(join(directory, 'mathjax-full/es5/tex-svg.js'));
 });
+
+test('optional dev-only packages (mathlive and sharp) may be absent in production bundles', async t => {
+  const {directory, put} = await fixture(t);
+  await rm(join(directory, 'mathlive'), {recursive: true, force: true});
+  await rm(join(directory, 'sharp'), {recursive: true, force: true});
+  await put('mathjax-full/js/input/tex/AllPackages.js');
+  await put('mathjax-full/es5/tex-svg.js');
+  const report = await pruneDependencies(directory);
+  assert.equal(report.removedFiles, 1);
+  await access(join(directory, 'mathjax-full/js/input/tex/AllPackages.js'));
+  await assert.rejects(access(join(directory, 'mathjax-full/es5/tex-svg.js')));
+});

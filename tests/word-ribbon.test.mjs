@@ -560,19 +560,55 @@ test('chapter boundary repair is confined to untracked owned reset fields and pr
 
 test('large unsaved enrichment yields between bound main-story ranges and pauses for foreground Word',async()=>{
  const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
- const start=source.indexOf('Private Sub ELContinueDocumentChunks()'),chunk=source.slice(start,source.indexOf('End Sub',start));
+ const block=(name,end='End Sub')=>{const start=source.indexOf(name);assert.ok(start>=0,name);return source.slice(start,source.indexOf(end,start)).split('\n').map(line=>line.split("'")[0]).join('\n');};
+ const chunk=block('Private Sub ELContinueDocumentChunks()');
+ const meta=block('Private Function ELChunkDocumentMetadataMatches()','End Function');
+ const nextEnd=block('Private Function ELNextDocumentChunkEnd(','End Function');
  assert.match(chunk,/ELDocumentChunkRequestToken\(\) <> token/);
- assert.match(chunk,/KnownDocumentIdentity\(mChunkDocument\) <> mChunkIdentity/);
- assert.match(chunk,/mChunkDocument\.Content\.Text <> mChunkText/);
- assert.match(chunk,/mChunkDocument\.Content\.End <> mChunkEnd/);
- assert.match(chunk,/MathTypeBridgeCanReadDocumentChunk"\) = 0 Then SchedulePoll: Exit Sub/);
+ assert.match(chunk,/If Not ELChunkDocumentMetadataMatches\(\) Then GoTo Failed/);
+ assert.match(meta,/ELIsDocumentOpen\(mChunkDocument\)/);
+ assert.match(meta,/KnownDocumentIdentity\(mChunkDocument\) <> mChunkIdentity/);
+ assert.match(meta,/mChunkDocument\.Content\.End <> mChunkEnd Or mChunkDocument\.InlineShapes\.Count <> mChunkShapeCount/);
+ assert.match(meta,/MathTypeBridgeEditGeneration"\) <> mChunkGeneration/);
+ assert.match(meta,/ELNumberingRevision\(mChunkDocument\) <> mChunkNumberingRevision/);
+ assert.match(meta,/mChunkDocument\.Saved <> mChunkSaved Or mChunkDocument\.FullName <> mChunkFullName/);
+ assert.match(chunk,/MathTypeBridgeCanReadDocumentChunk"\) = 0 Then\s+mChunkNeedsFullTextCheck = True\s+SchedulePoll\s+Exit Sub/);
  assert.ok(chunk.indexOf('MathTypeBridgeCanReadDocumentChunk')<chunk.indexOf('mChunkDocument.Content.Text <> mChunkText'));
- assert.match(chunk,/last = mChunkStart \+ 3000/);
- assert.match(chunk,/span\.Paragraphs\.Last\.Range\.Start/);
+ assert.match(chunk,/chunkText = span\.Text/);
+ assert.match(chunk,/Mid\$\(mChunkText, mChunkTextOffset, chunkLen\) = chunkText/);
+ assert.match(chunk,/If final = 1 Then[\s\S]*?If Not ELChunkDocumentMetadataMatches\(\) Then GoTo Failed[\s\S]*?If mChunkDocument\.Content\.Text <> mChunkText Then GoTo Failed/);
+ assert.match(nextEnd,/Const CHUNK_PART_BUDGET As Long = 64/);
+ assert.match(nextEnd,/Const CHUNK_MIN_CHARS As Long = 7500/);
+ assert.match(nextEnd,/Const CHUNK_BYTE_BUDGET As Long = 100663296/);
+ assert.match(nextEnd,/remainingParts = CHUNK_PART_BUDGET - partIndex/);
+ assert.match(nextEnd,/If remainingParts <= 1 Then[\s\S]*?ELNextDocumentChunkEnd = chunkEnd/);
+ assert.match(nextEnd,/stepSize = \(remaining \+ remainingParts - 1\) \\ remainingParts/);
+ assert.match(nextEnd,/span\.Paragraphs\.Last\.Range\.Start/);
+ assert.match(chunk,/last = ELNextDocumentChunkEnd\(mChunkDocument, mChunkStart, mChunkEnd, mChunkPart, mChunkXmlBytes\)/);
  assert.match(chunk,/xml = span\.WordOpenXML/);
  assert.match(chunk,/MathTypeBridgeQueueDocumentChunk/);
- assert.doesNotMatch(chunk,/DoEvents|\.Select\b|ActiveDocument|\.Save\b|\.Content\.WordOpenXML/);
+ assert.doesNotMatch(chunk+meta+nextEnd,/DoEvents|\.Select\b|ActiveDocument|\.Save\b|\.Content\.WordOpenXML/);
  assert.match(source,/If mChunkToken = requestToken Then Exit Sub/);
+});
+
+test('mixed background save relocates post-activation targets only via proven same-object bounds, never ordinal fallback',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const block=(name,end='End Sub')=>{const start=source.indexOf(name);assert.ok(start>=0,name);return source.slice(start,source.indexOf(end,start)).split('\n').map(line=>line.split("'")[0]).join('\n');};
+ const save=block('Private Sub ApplyBackgroundSave(');
+ const resolve=block('Private Function ResolvePostActivationBackgroundEquation(','End Function');
+ const fieldFor=block('Private Function EmbeddedEquationFieldForShape(','End Function');
+ const within=block('Private Function RangeWithinEmbeddedEquationEnvelope(','End Function');
+ assert.ok(save.indexOf('Set liveShape = shape')<save.indexOf('shape.OLEFormat.Activate'));
+ assert.ok(save.indexOf('Set preField = EmbeddedEquationFieldForShape(Doc, shape)')<save.indexOf('shape.OLEFormat.Activate'));
+ assert.ok(save.indexOf('preShapeCount = Doc.InlineShapes.Count')<save.indexOf('shape.OLEFormat.Activate'));
+ assert.ok(save.indexOf('shape.OLEFormat.Activate')<save.indexOf('ResolvePostActivationBackgroundEquation(Doc, anchor, liveShape, preField, index, preShapeCount)'));
+ assert.doesNotMatch(save+resolve,/ELNumberedSaveEquation|ActiveDocument|\bSelection\b|\.Select\b/);
+ assert.match(resolve,/Set resolved = ResolveBoundEquation\(Doc, anchor, expectedIndex\)/);
+ assert.match(resolve,/If Doc\.InlineShapes\.Count <> expectedShapeCount Then Exit Function/);
+ assert.match(resolve,/If anchor\.Paragraphs\.Count = 1 And anchor\.InlineShapes\.Count = 1 Then[\s\S]*?RangeWithinEmbeddedEquationEnvelope\(Doc, anchor, candidate, embedded\)[\s\S]*?ResolveBoundEquation\(Doc, candidate\.Range, expectedIndex\)/);
+ assert.match(resolve,/If Not liveShape Is Nothing And Not preField Is Nothing Then[\s\S]*?RangeWithinEmbeddedEquationEnvelope\(Doc, anchor, liveShape, preField\)[\s\S]*?ResolveBoundEquation\(Doc, liveShape\.Range, expectedIndex\)/);
+ assert.match(fieldFor,/embedded\.Type = wdFieldEmbed[\s\S]*?embedded\.Result\.InlineShapes\.Count = 1[\s\S]*?EmbeddedEquationFieldStart\(embedded, Doc\)/);
+ assert.match(within,/embedded\.Type <> wdFieldEmbed[\s\S]*?embedded\.Result\.InlineShapes\.Count <> 1[\s\S]*?span\.Start >= fieldStart And span\.End <= fieldEnd/);
 });
 
 test('saved snapshot reuse checks native file identity and an exact live anchor before a fresh nonce',async()=>{

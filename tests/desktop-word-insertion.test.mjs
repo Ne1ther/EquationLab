@@ -274,6 +274,58 @@ test('Word renumbering reloads the same clean equation and preserves a dirty dra
  }
 });
 
+test('End-to-end auto-refresh recovers after an earlier equation insertion expires the old ordinal, while explicit stale row clicks do not silently open another equation',async()=>{
+ for(const mode of ['auto','explicit']){
+  const editor=createEditor(),c=editor.context;
+  const initialDoc={...documentSnapshotFor(1),documentNumberingRevision:1};
+  const refreshedDoc={...documentSnapshotFor(2,{snapshot:'word-document-snapshot-N-plus-1',extraObject:true}),documentNumberingRevision:2};
+  let seq=0,firstId=null,fallbackId=null;
+  const fallbackStatus=deferred();
+  let workspaceStatus={connected:true,revision:1,active:{identity:documentIdentity,name:'Word integration fixture'},documents:[{identity:documentIdentity,name:'Word integration fixture',readOnly:false,numberingRevision:1}],retiredIdentities:[]};
+  editor.setNativeBehavior(async(action,payload)=>{
+   if(action==='wordSessionRead')return payload.ticket===ticket?initialDoc:refreshedDoc;
+   if(action==='wordWorkspaceStatus')return workspaceStatus;
+   if(action==='wordDocumentOpen'){
+    const id=(++seq).toString(16).padStart(64,'0');
+    if(payload.documentIdentity)fallbackId=id;else firstId=id;
+    return {requestId:id,state:'queued'};
+   }
+   if(action==='wordDocumentStatus'){
+    if(payload.requestId===firstId)return {requestId:firstId,state:'failed',identity:documentIdentity,index:mode==='auto'?1:2};
+    return fallbackStatus.promise;
+   }
+   return {};
+  });
+  assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+  workspaceStatus={...workspaceStatus,revision:2,documents:[{identity:documentIdentity,name:'Word integration fixture',readOnly:false,numberingRevision:2}]};
+  if(mode==='auto'){
+   await c.window.nativeSyncWordWorkspace();
+   await new Promise(resolve=>setImmediate(resolve));
+   const opens=editor.calls.filter(call=>call.action==='wordDocumentOpen');
+   assert.equal(opens.length,2,'auto-refresh falls back to the verified same document');
+   assert.deepEqual(JSON.parse(JSON.stringify(opens[1].payload)),{documentIdentity});
+   assert.equal(await c.window.nativeOpenWordSession(freshTicket,fallbackId),true);
+   fallbackStatus.resolve({requestId:fallbackId,state:'opened'});
+   assert.equal(c.wordTicket,freshTicket);
+   assert.equal(c.source.numberingRefreshNeeded,undefined);
+   assert.equal(c.source.objects.length,4);
+  }else{
+   await c.window.nativeRefreshWordDocumentList();
+   assert.equal(c.source.numberingRefreshNeeded,true);
+   await c.window.nativeSelectObject(2);
+   await new Promise(resolve=>setImmediate(resolve));
+   const opens=editor.calls.filter(call=>call.action==='wordDocumentOpen');
+   assert.equal(opens.length,1,'explicit row click must not fall back to opening a different equation');
+   assert.equal(opens[0].payload.target.index,2);
+   assert.equal(c.window.wordDocumentWorkspace.pending,false);
+   // Editing after a clean detach turns the retained formula into a protected standalone draft.
+   c.mf.value='user typed after detach';
+   assert.equal(await c.window.nativeOpenWordSession(freshTicket),false);
+   assert.equal(c.mf.value,'user typed after detach');
+  }
+ }
+});
+
 test('Opening a Word insertion session keeps the editor blank and retains the full document sidebar',async()=>{
  const editor=createEditor(),{context:c}=editor;
  assert.equal(await c.window.nativeOpenWordSession(ticket),true,editor.messages.map(item=>item.text).join(' | '));

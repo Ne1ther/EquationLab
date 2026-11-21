@@ -7,6 +7,7 @@ struct SkillInstallationCard: View {
     @State private var feedbackIsError = false
     @State private var showingOtherClients = false
     @State private var copied = false
+    @State private var statusRevision = 0
 
     private enum Client: CaseIterable {
         case codex, antigravity, claude, dsh
@@ -75,6 +76,7 @@ struct SkillInstallationCard: View {
             .padding(10)
         }
         .onAppear {
+            statusRevision += 1
             guard feedback == nil, let installer = EquationLabSkillInstallation.bundled else { return }
             switch installer.existing(at: installer.sharedDestination) {
             case .current, .linked:
@@ -112,7 +114,25 @@ struct SkillInstallationCard: View {
     }
 
     private func clientButton(_ client: Client, installer: EquationLabSkillInstallation) -> some View {
-        let action = client.link == nil ? label("使用共享 Skill", "Use shared Skill") : label("链接共享 Skill", "Link shared Skill")
+        let _ = statusRevision
+        let linkStatus = client.link.map { installer.clientLinkStatus($0) }
+        let action: String = switch linkStatus {
+        case nil: label("使用共享 Skill", "Use shared Skill")
+        case .linked: label("已链接", "Linked")
+        case .conflict: label("已有同名项", "Name conflict")
+        case .notLinked: label("链接共享 Skill", "Link shared Skill")
+        }
+        let symbol: String = switch linkStatus {
+        case nil: "chevron.right"
+        case .linked: "checkmark.circle.fill"
+        case .conflict: "exclamationmark.triangle.fill"
+        case .notLinked: "link"
+        }
+        let symbolColor: Color = switch linkStatus {
+        case .linked: .green
+        case .conflict: .orange
+        case nil, .notLinked: .secondary
+        }
         return Button {
             prepare(installer, for: client)
         } label: {
@@ -130,12 +150,12 @@ struct SkillInstallationCard: View {
                     .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(client.name).font(.callout.weight(.semibold))
-                    Text(action).font(.caption).foregroundStyle(.secondary)
+                    Text(action).font(.caption).foregroundStyle(linkStatus == .conflict ? Color.orange : Color.secondary)
                 }
                 Spacer(minLength: 4)
-                Image(systemName: client.link == nil ? "chevron.right" : "link")
+                Image(systemName: symbol)
                     .font(.system(size: 10, weight: .semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(symbolColor)
                     .accessibilityHidden(true)
             }
             .padding(.vertical, 5)
@@ -254,6 +274,7 @@ struct SkillInstallationCard: View {
     }
 
     private func show(_ message: String, error: Bool = false) {
+        statusRevision += 1
         feedback = message
         feedbackIsError = error
     }

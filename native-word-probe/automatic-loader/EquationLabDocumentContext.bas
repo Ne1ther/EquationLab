@@ -51,6 +51,8 @@ Private mInsertionAfterXml As String
 Private mInsertionIdentity As Long
 Private mInsertionCount As Long
 Private mInsertionEnd As Long
+Private mInsertionSaved As Boolean
+Private mInsertionFullName As String
 Private mInsertionText As String
 Private mCaptureFailureNotified As Long
 Private mActivationDocument As Document
@@ -72,7 +74,12 @@ Private mChunkIdentity As Long
 Private mChunkSnapshot As Long
 Private mChunkSelected As Long
 Private mChunkEquations As Collection
+Private mChunkSaved As Boolean
+Private mChunkFullName As String
 Private mChunkText As String
+Private mChunkTextOffset As Long
+Private mChunkNeedsFullTextCheck As Boolean
+Private mChunkXmlBytes As Long
 Private mChunkInsertion As Boolean
 
 Public Sub ELObserveDocument(ByVal Doc As Document)
@@ -836,7 +843,12 @@ BuildSnapshot:
             mChunkIdentity = mDocumentIdentity
             mChunkSnapshot = mSnapshotToken
             mChunkSelected = selected
+            mChunkSaved = isSaved
+            mChunkFullName = mDocument.FullName
             mChunkText = mDocument.Content.Text
+            mChunkTextOffset = 1
+            mChunkNeedsFullTextCheck = False
+            mChunkXmlBytes = 0
             mSnapshotReady = False
             mCapturing = False
             ELContinueDocumentChunks
@@ -936,6 +948,8 @@ Private Sub ClearInsertion()
     Set mInsertionAfter = Nothing
     mInsertionAfterXml = ""
     mInsertionIdentity = 0
+    mInsertionSaved = False
+    mInsertionFullName = ""
     mInsertionText = ""
     mInsertionToken = 0
     mInsertionLeadingParagraph = False
@@ -1047,6 +1061,8 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
             mInsertionAfterXml = xml
             partialIndex = mInsertionAfterIndex
         End If
+        mInsertionSaved = mInsertionDocument.Saved
+        mInsertionFullName = mInsertionDocument.FullName
         mInsertionText = mInsertionDocument.Content.Text
         If Len(xml) > 134217728 Then GoTo Failed
         ELWriteDocumentCapture directory & "/.EquationLab/ribbon-insertion-context.txt", "ELINS1" & vbLf & CStr(mInsertionIdentity) & vbLf & CStr(mInsertionToken) & vbLf & CStr(mInsertionCount) & vbLf & CStr(partialIndex) & vbLf & Replace(Replace(mInsertionDocument.Name, vbCr, " "), vbLf, " ") & vbLf & xml
@@ -1698,11 +1714,111 @@ Private Function ResolveBoundEquation(ByVal Doc As Document, ByVal anchor As Ran
 Missing:
 End Function
 
+Private Function EmbeddedEquationFieldForShape(ByVal Doc As Document, ByVal target As InlineShape) As Field
+    On Error GoTo Missing
+    If Doc Is Nothing Or target Is Nothing Then Exit Function
+    If Not (target.Range.Document Is Doc) Or target.Range.StoryType <> wdMainTextStory Then Exit Function
+    Dim targetStart As Long, targetEnd As Long, embedded As Field, resultShape As InlineShape, fieldStart As Long
+    targetStart = target.Range.Start
+    targetEnd = target.Range.End
+    For Each embedded In target.Range.Paragraphs(1).Range.Fields
+        If embedded.Type = wdFieldEmbed Then
+            If embedded.Result.InlineShapes.Count = 1 Then
+                Set resultShape = embedded.Result.InlineShapes(1)
+                If resultShape.Range.Start = targetStart And resultShape.Range.End = targetEnd Then
+                    fieldStart = EmbeddedEquationFieldStart(embedded, Doc)
+                    If fieldStart >= 0 And fieldStart <= targetStart And embedded.Result.End + 1 >= targetEnd Then
+                        Set EmbeddedEquationFieldForShape = embedded
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+    Next
+Missing:
+    Err.Clear
+End Function
+
+Private Function RangeWithinEmbeddedEquationEnvelope(ByVal Doc As Document, ByVal span As Range, ByVal target As InlineShape, ByVal embedded As Field) As Boolean
+    On Error GoTo Missing
+    If Doc Is Nothing Or span Is Nothing Or target Is Nothing Or embedded Is Nothing Then Exit Function
+    If Not (span.Document Is Doc) Or span.StoryType <> wdMainTextStory Then Exit Function
+    If Not (target.Range.Document Is Doc) Or target.Range.StoryType <> wdMainTextStory Then Exit Function
+    If embedded.Type <> wdFieldEmbed Then Exit Function
+    If embedded.Result.InlineShapes.Count <> 1 Then Exit Function
+    Dim resultShape As InlineShape, fieldStart As Long, fieldEnd As Long
+    Set resultShape = embedded.Result.InlineShapes(1)
+    If resultShape.Range.Start <> target.Range.Start Or resultShape.Range.End <> target.Range.End Then Exit Function
+    fieldStart = EmbeddedEquationFieldStart(embedded, Doc)
+    If fieldStart < 0 Then Exit Function
+    fieldEnd = embedded.Result.End + 1
+    If fieldStart > target.Range.Start Or fieldEnd < target.Range.End Then Exit Function
+    RangeWithinEmbeddedEquationEnvelope = (span.Start >= fieldStart And span.End <= fieldEnd)
+Missing:
+    Err.Clear
+End Function
+
+Private Function ResolvePostActivationBackgroundEquation(ByVal Doc As Document, ByVal anchor As Range, ByVal liveShape As InlineShape, ByVal preField As Field, ByVal expectedIndex As Long, ByVal expectedShapeCount As Long) As InlineShape
+    On Error GoTo Missing
+    Dim resolved As InlineShape, candidate As InlineShape, embedded As Field
+    ' Path 1: the retained Range anchor still matches the exact inline object.
+    Set resolved = ResolveBoundEquation(Doc, anchor, expectedIndex)
+    If Not resolved Is Nothing Then
+        Set ResolvePostActivationBackgroundEquation = resolved
+        Exit Function
+    End If
+    If Doc Is Nothing Or anchor Is Nothing Then Exit Function
+    If Doc.InlineShapes.Count <> expectedShapeCount Then Exit Function
+    ' Path 2: Word expanded the retained Range to include its own wdFieldEmbed
+    ' delimiters during activation without collapsing or detaching the Range.
+    If anchor.Document Is Doc And anchor.StoryType = wdMainTextStory And anchor.Start < anchor.End Then
+        If anchor.Paragraphs.Count = 1 And anchor.InlineShapes.Count = 1 Then
+            Set candidate = anchor.InlineShapes(1)
+            If Supported(candidate) Then
+                Set embedded = EmbeddedEquationFieldForShape(Doc, candidate)
+                If RangeWithinEmbeddedEquationEnvelope(Doc, anchor, candidate, embedded) Then
+                    If anchor.Start <= candidate.Range.Start And anchor.End >= candidate.Range.End Then
+                        Set resolved = ResolveBoundEquation(Doc, candidate.Range, expectedIndex)
+                        If Not resolved Is Nothing Then
+                            Set ResolvePostActivationBackgroundEquation = resolved
+                            Exit Function
+                        End If
+                    End If
+                End If
+            End If
+        End If
+    End If
+    ' Path 3: the retained Range collapsed during SaveObject, but both the
+    ' activated InlineShape COM object and its enclosing wdFieldEmbed COM object
+    ' survived intact and still bound the retained anchor. Never relocate by
+    ' ordinal alone if Word deleted or replaced the live COM objects.
+    If Not liveShape Is Nothing And Not preField Is Nothing Then
+        If liveShape.Range.Document Is Doc And liveShape.Range.StoryType = wdMainTextStory Then
+            If liveShape.Range.InlineShapes.Count = 1 And Supported(liveShape) Then
+                If RangeWithinEmbeddedEquationEnvelope(Doc, anchor, liveShape, preField) Then
+                    Set resolved = ResolveBoundEquation(Doc, liveShape.Range, expectedIndex)
+                    If Not resolved Is Nothing Then
+                        Set ResolvePostActivationBackgroundEquation = resolved
+                        Exit Function
+                    End If
+                End If
+            End If
+        End If
+    End If
+Missing:
+    Err.Clear
+End Function
+
 Private Sub ELClearDocumentChunks()
     Set mChunkDocument = Nothing
     Set mChunkEquations = Nothing
     mChunkToken = 0
+    mChunkSaved = False
+    mChunkFullName = ""
     mChunkText = ""
+    mChunkTextOffset = 0
+    mChunkNeedsFullTextCheck = False
+    mChunkXmlBytes = 0
     mChunkInsertion = False
     mCapturing = False
 End Sub
@@ -1713,6 +1829,7 @@ Private Sub ELBeginInsertionDocumentChunks(ByVal token As Long)
     If EquationLabNativeCommand("MathTypeBridgeInsertionDocumentRequestToken") <> token Then Exit Sub
     If Not ELIsDocumentOpen(mInsertionDocument) Then GoTo Failed
     If KnownDocumentIdentity(mInsertionDocument) <> mInsertionIdentity Then GoTo Failed
+    If mInsertionDocument.Saved <> mInsertionSaved Or mInsertionDocument.FullName <> mInsertionFullName Then GoTo Failed
     If mInsertionDocument.Content.End <> mInsertionEnd Or mInsertionDocument.Content.Text <> mInsertionText Then GoTo Failed
     Dim equations As Collection, shape As InlineShape, result As Long
     Set equations = New Collection
@@ -1733,7 +1850,12 @@ Private Sub ELBeginInsertionDocumentChunks(ByVal token As Long)
     mChunkIdentity = mInsertionIdentity
     mChunkSnapshot = EquationLabNativeCommand("MathTypeBridgeNewDocumentToken")
     mChunkSelected = 0
+    mChunkSaved = mInsertionSaved
+    mChunkFullName = mInsertionFullName
     mChunkText = mInsertionText
+    mChunkTextOffset = 1
+    mChunkNeedsFullTextCheck = False
+    mChunkXmlBytes = 0
     ELContinueDocumentChunks
     Exit Sub
 Failed:
@@ -1749,43 +1871,142 @@ Private Function ELDocumentChunkRequestToken() As Long
     End If
 End Function
 
+Private Function ELChunkDocumentMetadataMatches() As Boolean
+    On Error GoTo Missing
+    If Not ELIsDocumentOpen(mChunkDocument) Then Exit Function
+    If KnownDocumentIdentity(mChunkDocument) <> mChunkIdentity Then Exit Function
+    If mChunkDocument.Content.End <> mChunkEnd Or mChunkDocument.InlineShapes.Count <> mChunkShapeCount Then Exit Function
+    If EquationLabNativeCommand("MathTypeBridgeEditGeneration") <> mChunkGeneration Then Exit Function
+    If EquationLabRibbon.ELNumberingRevision(mChunkDocument) <> mChunkNumberingRevision Then Exit Function
+    If mChunkDocument.Saved <> mChunkSaved Or mChunkDocument.FullName <> mChunkFullName Then Exit Function
+    ELChunkDocumentMetadataMatches = True
+Missing:
+End Function
+
+Private Function ELNextDocumentChunkEnd(ByVal Doc As Document, ByVal chunkStart As Long, ByVal chunkEnd As Long, ByVal partIndex As Long, ByVal xmlBytesUsed As Long) As Long
+    ' Keep segmented capture within a fixed part budget (64 <= native 256 cap)
+    ' and an adaptive XML byte budget. Larger ranges amortize WordOpenXML setup
+    ' and shared styles; paragraph boundaries keep objects and fields intact.
+    Const CHUNK_PART_BUDGET As Long = 64
+    Const CHUNK_MIN_CHARS As Long = 7500
+    Const CHUNK_BYTE_BUDGET As Long = 100663296
+    Dim remaining As Long, remainingParts As Long, avgBytes As Long, byteRemainingParts As Long
+    Dim stepSize As Long, last As Long, span As Range, paraStart As Long
+    remaining = chunkEnd - chunkStart
+    If remaining <= 0 Then
+        ELNextDocumentChunkEnd = chunkEnd
+        Exit Function
+    End If
+    remainingParts = CHUNK_PART_BUDGET - partIndex
+    If remainingParts < 1 Then remainingParts = 1
+    If partIndex > 0 And xmlBytesUsed > 0 Then
+        If xmlBytesUsed >= CHUNK_BYTE_BUDGET Then
+            remainingParts = 1
+        Else
+            avgBytes = xmlBytesUsed \ partIndex
+            If avgBytes < 1 Then avgBytes = 1
+            byteRemainingParts = (CHUNK_BYTE_BUDGET - xmlBytesUsed) \ avgBytes
+            If byteRemainingParts < 1 Then byteRemainingParts = 1
+            If byteRemainingParts < remainingParts Then remainingParts = byteRemainingParts
+        End If
+    End If
+    If remainingParts <= 1 Then
+        ELNextDocumentChunkEnd = chunkEnd
+        Exit Function
+    End If
+    stepSize = (remaining + remainingParts - 1) \ remainingParts
+    If stepSize < CHUNK_MIN_CHARS Then stepSize = CHUNK_MIN_CHARS
+    last = chunkStart + stepSize
+    If last >= chunkEnd Then
+        ELNextDocumentChunkEnd = chunkEnd
+        Exit Function
+    End If
+    Set span = Doc.Range(chunkStart, last)
+    paraStart = span.Paragraphs.Last.Range.Start
+    If paraStart > chunkStart And paraStart < last Then last = paraStart
+    ELNextDocumentChunkEnd = last
+End Function
+
 Private Sub ELContinueDocumentChunks()
     On Error GoTo Failed
     Dim token As Long, result As Long, last As Long, span As Range, directory As String, xml As String, header As String, final As Long
+    Dim chunkText As String, chunkLen As Long, fullVerified As Boolean
     token = mChunkToken
     If token <= 0 Then Exit Sub
     If ELDocumentChunkRequestToken() <> token Then ELClearDocumentChunks: Exit Sub
-    If Not ELIsDocumentOpen(mChunkDocument) Then GoTo Failed
-    If KnownDocumentIdentity(mChunkDocument) <> mChunkIdentity Then GoTo Failed
-    If mChunkDocument.Content.End <> mChunkEnd Or mChunkDocument.InlineShapes.Count <> mChunkShapeCount Then GoTo Failed
-    If EquationLabNativeCommand("MathTypeBridgeEditGeneration") <> mChunkGeneration Then GoTo Failed
-    If EquationLabRibbon.ELNumberingRevision(mChunkDocument) <> mChunkNumberingRevision Then GoTo Failed
+    If Not ELChunkDocumentMetadataMatches() Then GoTo Failed
     ' Never serialize a range while the user is actively working in Word.
     ' The next host tick resumes the same bound request, without selecting it.
-    If EquationLabNativeCommand("MathTypeBridgeCanReadDocumentChunk") = 0 Then SchedulePoll: Exit Sub
-    If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
-    mCapturing = True
-    last = mChunkStart + 3000
-    If last > mChunkEnd Then last = mChunkEnd
-    Set span = mChunkDocument.Range(mChunkStart, last)
-    If last < mChunkEnd Then
-        If span.Paragraphs.Last.Range.Start > mChunkStart Then last = span.Paragraphs.Last.Range.Start
+    ' Any foreground pause requires a full Content.Text recheck on resume.
+    If EquationLabNativeCommand("MathTypeBridgeCanReadDocumentChunk") = 0 Then
+        mChunkNeedsFullTextCheck = True
+        SchedulePoll
+        Exit Sub
     End If
+    If mChunkNeedsFullTextCheck Then
+        If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+        mChunkNeedsFullTextCheck = False
+        fullVerified = True
+    End If
+    mCapturing = True
+    last = ELNextDocumentChunkEnd(mChunkDocument, mChunkStart, mChunkEnd, mChunkPart, mChunkXmlBytes)
     Set span = mChunkDocument.Range(mChunkStart, last)
+    ' Verify only this chunk's local text slice against mChunkText on ordinary
+    ' background ticks (O(N) total). Any mismatch falls back to a full
+    ' Content.Text check so same-length edits still fail while field-split text
+    ' quirks never false-fail.
+    chunkText = span.Text
+    chunkLen = Len(chunkText)
+    If mChunkTextOffset > 0 Then
+        If chunkLen > 0 Then
+            If mChunkTextOffset + chunkLen - 1 <= Len(mChunkText) Then
+                If Mid$(mChunkText, mChunkTextOffset, chunkLen) = chunkText Then
+                    mChunkTextOffset = mChunkTextOffset + chunkLen
+                Else
+                    If Not fullVerified Then
+                        If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+                        fullVerified = True
+                    End If
+                    mChunkTextOffset = 0
+                End If
+            Else
+                If Not fullVerified Then
+                    If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+                    fullVerified = True
+                End If
+                mChunkTextOffset = 0
+            End If
+        End If
+    ElseIf Not fullVerified Then
+        If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+        fullVerified = True
+    End If
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingStart"
     xml = span.WordOpenXML
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingXMLReady"
     If Len(xml) > 134217728 Then GoTo Failed
     final = 0
     If last = mChunkEnd Then final = 1
+    If final = 1 Then
+        ' Recheck metadata, save identity, and full Content.Text once before
+        ' committing the final segment to catch earlier-range same-length edits.
+        If Not ELChunkDocumentMetadataMatches() Then GoTo Failed
+        If mChunkDocument.Content.Text <> mChunkText Then GoTo Failed
+    End If
     header = "ELPART1" & vbLf & CStr(token) & vbLf & CStr(mChunkIdentity) & vbLf & CStr(mChunkSnapshot) & vbLf & CStr(mChunkSelected) & vbLf & CStr(mChunkEquations.Count) & vbLf & CStr(mChunkPart) & vbLf & CStr(final) & vbLf & Replace(Replace(mChunkDocument.Name, vbCr, " "), vbLf, " ") & vbLf
     If mChunkInsertion Then header = "ELIPART1" & Mid$(header, Len("ELPART1") + 1)
     directory = Options.DefaultFilePath(wdStartupPath)
+    Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     ELWriteDocumentCapture directory & "/.EquationLab/document-context.txt", header & xml
     ELCaptureTimingMarker "MathTypeBridgeCaptureTimingFileReady"
     result = EquationLabNativeCommand("MathTypeBridgeCaptureDocument")
     If final = 0 Then
         If result <> 1 Then GoTo Failed
+        If Len(xml) >= 134217728 - mChunkXmlBytes Then
+            mChunkXmlBytes = 134217728
+        Else
+            mChunkXmlBytes = mChunkXmlBytes + Len(xml)
+        End If
         mChunkStart = last
         mChunkPart = mChunkPart + 1
         mCapturing = False
@@ -1886,7 +2107,7 @@ End Sub
 
 Private Sub ApplyBackgroundSave(ByVal token As Long)
     On Error GoTo Failed
-    Dim Doc As Document, anchors As Collection, anchor As Range, shape As InlineShape, index As Long, result As Long
+    Dim Doc As Document, anchors As Collection, anchor As Range, shape As InlineShape, liveShape As InlineShape, preField As Field, index As Long, preShapeCount As Long, result As Long
     Dim stage As String, failureNumber As Long, failureDescription As String, side As Long, codeUnit As Long, numberFormat As String
     Dim chapter As Long, section As Long, expectedChapter As Long, expectedSection As Long, existingRevision As Long
     Dim displayOnly As Boolean
@@ -1906,6 +2127,9 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
     If Not (shape.Range.Document Is Doc) Then GoTo Failed
     If shape.Range.InlineShapes.Count <> 1 Then GoTo Failed
     If Not Supported(shape) Then GoTo Failed
+    Set liveShape = shape
+    Set preField = EmbeddedEquationFieldForShape(Doc, shape)
+    preShapeCount = Doc.InlineShapes.Count
     existingRevision = -1
     If mNumberingExistingRegistered Then existingRevision = EquationLabNativeCommand("MathTypeBridgeBackgroundNumberingExistingRevision")
     If existingRevision >= 0 Then
@@ -1937,7 +2161,7 @@ Private Sub ApplyBackgroundSave(ByVal token As Long)
             numberFormat = numberFormat & ChrW$(codeUnit)
         Loop
         stage = "resolve-numbering-target"
-        Set shape = ResolveBoundEquation(Doc, anchor, index)
+        Set shape = ResolvePostActivationBackgroundEquation(Doc, anchor, liveShape, preField, index, preShapeCount)
         If shape Is Nothing Then Err.Raise vbObjectError + 7380, "Equation Lab", "The saved equation is no longer available for numbering."
         stage = "apply-numbering"
         If existingRevision >= 0 And EquationLabRibbon.ELNumberingRevision(Doc) <> existingRevision Then GoTo Failed

@@ -6,6 +6,13 @@ enum WorkbenchMetrics {
     static let cornerRadius: CGFloat = 8
 }
 
+enum WorkbenchMotion {
+    static let sheenDuration: TimeInterval = 0.42
+    static let confirmationInDuration: TimeInterval = 0.10
+    static let confirmationHoldDuration: TimeInterval = 0.26
+    static let confirmationOutDuration: TimeInterval = 0.26
+}
+
 /// State changes are local to the hovered/pressed control. No timer, drawing
 /// loop, blur or shadow is needed for the native highlight and short rebound.
 struct WorkbenchButtonStyle: ButtonStyle {
@@ -73,5 +80,87 @@ struct WorkbenchMenuSurface: ViewModifier {
             .overlay { RoundedRectangle(cornerRadius: WorkbenchMetrics.cornerRadius, style: .continuous).strokeBorder(Color.accentColor.opacity(hovering ? 0.22 : 0.08), lineWidth: 0.5) }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: hovering)
             .onHover { hovering = $0 }
+    }
+}
+
+/// One-shot horizontal sheen inspired by the AI entry sweep. Runs only when the
+/// caller's event counter increments, uses no timers, and is omitted under
+/// Reduce Motion.
+private struct WorkbenchOneShotSheen: ViewModifier {
+    let trigger: Int
+    let tint: Color
+    let cornerRadius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        content.overlay {
+            if !reduceMotion {
+                Color.clear
+                    .keyframeAnimator(initialValue: -0.5, trigger: trigger) { _, position in
+                        LinearGradient(
+                            colors: [.clear, tint.opacity(0.24), .clear],
+                            startPoint: UnitPoint(x: position - 0.4, y: 0.5),
+                            endPoint: UnitPoint(x: position + 0.4, y: 0.5)
+                        )
+                    } keyframes: { _ in
+                        MoveKeyframe(-0.5)
+                        CubicKeyframe(1.5, duration: WorkbenchMotion.sheenDuration)
+                    }
+                    .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+}
+
+/// One-shot opacity confirmation highlight for completed actions (e.g. copy or
+/// favorite). Uses keyframeAnimator so it settles back to clear with no timers;
+/// under Reduce Motion it remains a calm, non-moving opacity fade.
+private struct WorkbenchConfirmationFlash: ViewModifier {
+    let trigger: Int
+    let tint: Color
+    let cornerRadius: CGFloat
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    func body(content: Content) -> some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        let peakFill = reduceMotion ? 0.13 : 0.17
+        let peakStroke = reduceMotion ? 0.34 : 0.46
+        return content.overlay {
+            Color.clear
+                .keyframeAnimator(initialValue: 0.0, trigger: trigger) { _, intensity in
+                    shape
+                        .fill(tint.opacity(peakFill * intensity))
+                        .overlay {
+                            shape.strokeBorder(tint.opacity(peakStroke * intensity), lineWidth: 1)
+                        }
+                } keyframes: { _ in
+                    MoveKeyframe(0.0)
+                    CubicKeyframe(1.0, duration: WorkbenchMotion.confirmationInDuration)
+                    LinearKeyframe(1.0, duration: WorkbenchMotion.confirmationHoldDuration)
+                    CubicKeyframe(0.0, duration: WorkbenchMotion.confirmationOutDuration)
+                }
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+}
+
+extension View {
+    func workbenchOneShotSheen(
+        trigger: Int,
+        tint: Color = .white,
+        cornerRadius: CGFloat = WorkbenchMetrics.cornerRadius
+    ) -> some View {
+        modifier(WorkbenchOneShotSheen(trigger: trigger, tint: tint, cornerRadius: cornerRadius))
+    }
+
+    func workbenchConfirmationFlash(
+        trigger: Int,
+        tint: Color = .green,
+        cornerRadius: CGFloat = WorkbenchMetrics.cornerRadius
+    ) -> some View {
+        modifier(WorkbenchConfirmationFlash(trigger: trigger, tint: tint, cornerRadius: cornerRadius))
     }
 }

@@ -64,8 +64,14 @@ enum TemplateShelfOrder {
 }
 
 struct TemplateShelf: View {
+    private static let favoriteAddedMessage = "已收藏当前公式"
+
     @ObservedObject var bridge: DesktopBridge
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var shelf = "模板"
+    @State private var categoryTapCounts: [String: Int] = [:]
+    @State private var pendingFavoriteLatex: String?
+    @State private var favoriteSuccessCount = 0
     private var isWordInlineInsertion: Bool {
         TemplateShelfOrder.isWordInlineInsertion(
             wordSessionActive: bridge.wordSessionActive,
@@ -132,18 +138,36 @@ struct TemplateShelf: View {
 
             Spacer(minLength: density == .tight ? 2 : 4)
 
-            Button { bridge.action("click", ["id": "add-favorite"]) } label: {
+            Button {
+                let currentLatex = bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines)
+                let alreadyTopFavorite = bridge.state.favorites.first?.latex.trimmingCharacters(in: .whitespacesAndNewlines) == currentLatex
+                let hasHistoricalSuccessMessage = !bridge.state.messageError && bridge.state.message == Self.favoriteAddedMessage
+                if !currentLatex.isEmpty && !bridge.state.busy && !(alreadyTopFavorite && hasHistoricalSuccessMessage) {
+                    pendingFavoriteLatex = currentLatex
+                } else {
+                    pendingFavoriteLatex = nil
+                }
+                bridge.action("click", ["id": "add-favorite"])
+            } label: {
                 if showActionLabels {
                     HStack(spacing: 4) {
-                        Image(systemName: "star.fill").foregroundStyle(.orange)
+                        Image(systemName: "star.fill")
+                            .foregroundStyle(.orange)
+                            .symbolEffect(.bounce, options: .speed(1.5), value: reduceMotion ? 0 : favoriteSuccessCount)
+                            .symbolEffectsRemoved(reduceMotion)
                         Text(bridge.t("收藏公式")).lineLimit(1)
                     }
                 } else {
-                    Image(systemName: "star.fill").foregroundStyle(.orange).frame(width: iconWidth)
+                    Image(systemName: "star.fill")
+                        .foregroundStyle(.orange)
+                        .frame(width: iconWidth)
+                        .symbolEffect(.bounce, options: .speed(1.5), value: reduceMotion ? 0 : favoriteSuccessCount)
+                        .symbolEffectsRemoved(reduceMotion)
                 }
             }
             .font(.system(size: 11, weight: .medium))
             .buttonStyle(WorkbenchButtonStyle(tint: .orange, surface: true, horizontalPadding: actionPadding))
+            .workbenchConfirmationFlash(trigger: favoriteSuccessCount, tint: .orange)
             .fixedSize()
             .disabled(bridge.state.latex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || bridge.state.busy)
             .help(bridge.t("收藏公式"))
@@ -256,14 +280,23 @@ struct TemplateShelf: View {
                 HorizontalToolStrip(title: bridge.t("工具分类"), items: visibleCategories.map { ShelfCategory(id: $0) }, height: 30, itemWidth: 90, spacing: 4, revealID: bridge.state.activeCategory,
                                     previousLabel: bridge.t("向左翻页"), nextLabel: bridge.t("向右翻页")) { item in
                             let category = item.id
-                            Button { bridge.action("category", ["name": category]) } label: {
+                            let tapCount = categoryTapCounts[category] ?? 0
+                            Button {
+                                if bridge.state.activeCategory != category {
+                                    categoryTapCounts[category, default: 0] += 1
+                                }
+                                bridge.action("category", ["name": category])
+                            } label: {
                                 HStack(spacing: 5) {
                                     Image(systemName: TemplateArtwork.symbol(category)).symbolRenderingMode(.hierarchical)
                                         .foregroundStyle(bridge.state.activeCategory == category ? .white : Color.accentColor)
+                                        .symbolEffect(.bounce, options: .speed(1.6), value: reduceMotion ? 0 : tapCount)
+                                        .symbolEffectsRemoved(reduceMotion)
                                     Text(bridge.t(category)).lineLimit(1)
                                 }.font(.system(size: 11, weight: .medium)).padding(.horizontal, 4).fixedSize()
                             }
                             .buttonStyle(WorkbenchButtonStyle(selected: bridge.state.activeCategory == category, filledSelection: true))
+                            .workbenchOneShotSheen(trigger: reduceMotion ? 0 : tapCount, tint: .white)
                             .foregroundStyle(bridge.state.activeCategory == category ? .white : .primary)
                             .accessibilityAddTraits(bridge.state.activeCategory == category ? .isSelected : [])
                 }
@@ -311,6 +344,30 @@ struct TemplateShelf: View {
         .padding(.horizontal, 18).padding(.top, 10).padding(.bottom, 10)
         .background(.regularMaterial)
         .overlay(alignment: .bottom) { Divider() }
+        .onChange(of: bridge.state.latex) { _, _ in
+            pendingFavoriteLatex = nil
+        }
+        .onChange(of: bridge.state.selected) { _, _ in
+            pendingFavoriteLatex = nil
+        }
+        .onChange(of: bridge.state.documentPath) { _, _ in
+            pendingFavoriteLatex = nil
+        }
+        .onChange(of: bridge.state.wordDocumentIdentity) { _, _ in
+            pendingFavoriteLatex = nil
+        }
+        .onReceive(bridge.$state) { state in
+            guard let expected = pendingFavoriteLatex else { return }
+            if state.messageError {
+                pendingFavoriteLatex = nil
+                return
+            }
+            if state.message == Self.favoriteAddedMessage,
+               state.favorites.first?.latex.trimmingCharacters(in: .whitespacesAndNewlines) == expected {
+                pendingFavoriteLatex = nil
+                favoriteSuccessCount += 1
+            }
+        }
     }
 }
 

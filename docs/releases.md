@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.7.4 · build108
+
+- 加快未保存的长 Word 文档读取，缩略图后台生成时优先响应公式编辑和写回。
+- 改善公式内容和编号一起更新时的定位，以及编号变更后的自动刷新。
+- 修复标尺拖拽误删和文字输入撤销，优化更新包复用与 AI Skill 链接状态。
+
+- Loads unsaved Word documents faster and prioritizes editing and saving over thumbnails.
+- Improves target selection when saving equation content and numbering together, and automatically refreshes numbering when needed.
+- Fixes ruler drag and text undo, and improves update package reuse and AI Skill link status.
+
+[下载 0.7.4 · Download 0.7.4](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.4)
+
 ## 0.7.3 · build107
 
 - 修改现有单条 Word 公式的编号格式后，列表只更新这一条的编号，保留其余公式和缩略图。取消编辑后重新打开也会沿用已核对的列表，常规流程中无需手动刷新。

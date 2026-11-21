@@ -1,8 +1,89 @@
 import SwiftUI
+import AppKit
+
+enum WorkbenchUndoTarget: Equatable {
+    case nativeText
+    case equation
+    case none
+}
+
+@MainActor
+final class NativeTextInputMonitor: ObservableObject {
+    static let shared = NativeTextInputMonitor()
+    @Published private(set) var isNativeTextFocused = false
+
+    private var keyWindowObservation: NSKeyValueObservation?
+    private var firstResponderObservation: NSKeyValueObservation?
+    private var notificationTokens: [NSObjectProtocol] = []
+
+    init(observeApplication: Bool = true) {
+        guard observeApplication else { return }
+        let center = NotificationCenter.default
+        let names: [Notification.Name] = [
+            NSWindow.didBecomeKeyNotification,
+            NSWindow.didResignKeyNotification,
+            NSText.didBeginEditingNotification,
+            NSText.didEndEditingNotification,
+            NSControl.textDidBeginEditingNotification,
+            NSControl.textDidEndEditingNotification
+        ]
+        notificationTokens = names.map { name in
+            center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                Task { @MainActor in self?.refresh() }
+            }
+        }
+        if let app = NSApp {
+            keyWindowObservation = app.observe(\.keyWindow, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor in self?.attachToKeyWindow() }
+            }
+        }
+        attachToKeyWindow()
+    }
+
+    deinit {
+        for token in notificationTokens {
+            NotificationCenter.default.removeObserver(token)
+        }
+    }
+
+    static func isNativeTextInput(_ responder: NSResponder?) -> Bool {
+        guard let text = responder as? NSText else { return false }
+        return text.isFieldEditor || text.isEditable
+    }
+
+    static func routeUndoRedo(
+        responder: NSResponder?,
+        busy: Bool,
+        canPerformEquationAction: Bool
+    ) -> WorkbenchUndoTarget {
+        if isNativeTextInput(responder) {
+            return .nativeText
+        }
+        return (!busy && canPerformEquationAction) ? .equation : .none
+    }
+
+    private func attachToKeyWindow() {
+        firstResponderObservation = nil
+        if let window = NSApp?.keyWindow {
+            firstResponderObservation = window.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
+                Task { @MainActor in self?.refresh() }
+            }
+        }
+        refresh()
+    }
+
+    func refresh() {
+        let focused = Self.isNativeTextInput(NSApp?.keyWindow?.firstResponder)
+        if isNativeTextFocused != focused {
+            isNativeTextFocused = focused
+        }
+    }
+}
 
 struct WorkbenchCommands: Commands {
     @ObservedObject var bridge: DesktopBridge
     @ObservedObject var updater: AppUpdater
+    @ObservedObject private var textFocus = NativeTextInputMonitor.shared
     private var wordSessionSaveLabel: String {
         bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
     }
@@ -40,10 +121,39 @@ struct WorkbenchCommands: Commands {
         }
     }
 
+    @MainActor
+    private func performUndoRedo(redo: Bool) {
+        let responder = NSApp?.keyWindow?.firstResponder
+        let canPerform = redo ? bridge.state.canRedo : bridge.state.canUndo
+        switch NativeTextInputMonitor.routeUndoRedo(
+            responder: responder,
+            busy: bridge.state.busy,
+            canPerformEquationAction: canPerform
+        ) {
+        case .nativeText:
+            let selector = Selector((redo ? "redo:" : "undo:"))
+            if NSApp?.sendAction(selector, to: nil, from: nil) != true {
+                if redo { responder?.undoManager?.redo() } else { responder?.undoManager?.undo() }
+            }
+        case .equation:
+            bridge.action("editorCommand", ["command": redo ? "redo" : "undo"])
+        case .none:
+            break
+        }
+    }
+
     @CommandsBuilder private var commandsPart2: some Commands {
         CommandGroup(replacing: .undoRedo) {
-            Button(bridge.t("撤销公式编辑")) { bridge.action("editorCommand", ["command": "undo"]) }.keyboardShortcut("z").disabled(bridge.state.busy || !bridge.state.canUndo)
-            Button(bridge.t("重做公式编辑")) { bridge.action("editorCommand", ["command": "redo"]) }.keyboardShortcut("z", modifiers: [.command, .shift]).disabled(bridge.state.busy || !bridge.state.canRedo)
+            Button(bridge.t(textFocus.isNativeTextFocused ? "撤销" : "撤销公式编辑")) {
+                performUndoRedo(redo: false)
+            }
+            .keyboardShortcut("z")
+            .disabled(!textFocus.isNativeTextFocused && (bridge.state.busy || !bridge.state.canUndo))
+            Button(bridge.t(textFocus.isNativeTextFocused ? "重做" : "重做公式编辑")) {
+                performUndoRedo(redo: true)
+            }
+            .keyboardShortcut("z", modifiers: [.command, .shift])
+            .disabled(!textFocus.isNativeTextFocused && (bridge.state.busy || !bridge.state.canRedo))
         }
         CommandGroup(after: .pasteboard) {
             Divider()

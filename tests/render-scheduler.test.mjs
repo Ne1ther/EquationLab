@@ -79,3 +79,42 @@ test('checkpoint yields to the event loop before selecting a pending preview',as
  });
  await preflight;await preview;assert.deepEqual(events,['preview','resumed']);
 });
+
+test('low-priority thumbnail jobs yield between items to writes and previews without reordering writes or admitting writes into checkpoints',async()=>{
+ const scheduler=createRenderScheduler(),events=[];let active=0,maxActive=0;
+ const track=async(label,fn)=>{active++;maxActive=Math.max(maxActive,active);events.push(label+':start');try{return await fn();}finally{events.push(label+':end');active--;}};
+ let releaseFirst,firstStarted;const firstReady=new Promise(r=>firstStarted=r),firstGate=new Promise(r=>releaseFirst=r);
+ const thumb1=scheduler.enqueue(()=>track('thumb1',async()=>{firstStarted();await firstGate;}),{priority:2});
+ const thumb2=scheduler.enqueue(()=>track('thumb2',async()=>{}),{priority:2});
+ await firstReady;
+ // Queue two writes and a live preview while the first thumbnail is running.
+ const write1=scheduler.enqueue(()=>track('write1',async()=>{}));
+ const preview=scheduler.enqueue(()=>track('preview',async()=>{}),{priority:1,key:'editor-preview',checkpointPreview:true});
+ const write2=scheduler.enqueue(()=>track('write2',async()=>{}));
+ releaseFirst();
+ await Promise.all([thumb1,thumb2,write1,preview,write2]);
+ assert.equal(maxActive,1,'never run two renders concurrently');
+ assert.deepEqual(events,[
+  'thumb1:start','thumb1:end',
+  'write1:start','write1:end',
+  'write2:start','write2:end',
+  'preview:start','preview:end',
+  'thumb2:start','thumb2:end'
+ ]);
+
+ // Back-to-back low-priority jobs also yield an event-loop turn so newly
+ // arriving writes/previews can overtake the second queued thumbnail.
+ events.length=0;
+ const queuedA=scheduler.enqueue(()=>track('thumbA',async()=>{
+  setImmediate(()=>{
+   scheduler.enqueue(()=>track('late-write',async()=>{}));
+   scheduler.enqueue(()=>track('late-preview',async()=>{}),{priority:1,checkpointPreview:true});
+  });
+ }),{priority:2});
+ const queuedB=scheduler.enqueue(()=>track('thumbB',async()=>{}),{priority:2});
+ await Promise.all([queuedA,queuedB]);
+ assert.equal(maxActive,1);
+ assert.ok(events.indexOf('late-write:end')<events.indexOf('thumbB:start'),events.join(','));
+ assert.ok(events.indexOf('late-preview:end')<events.indexOf('thumbB:start'),events.join(','));
+ assert.ok(events.indexOf('late-write:end')<events.indexOf('late-preview:start'),events.join(','));
+});

@@ -7,6 +7,10 @@ struct EquationLabSkillInstallation {
         case available, current, linked, relink, upgrade, conflict
     }
 
+    enum ClientLinkStatus: Equatable {
+        case linked, notLinked, conflict
+    }
+
     enum Client: CaseIterable {
         case claude, antigravity
 
@@ -171,6 +175,35 @@ struct EquationLabSkillInstallation {
         return destination
     }
 
+    func clientLinkStatus(_ client: Client) -> ClientLinkStatus {
+        let directory = userHome.appendingPathComponent(client.skillDirectory, isDirectory: true)
+        let destination = directory.appendingPathComponent(folderName, isDirectory: true)
+        if directory.resolvingSymlinksInPath().path == sharedDirectory.resolvingSymlinksInPath().path {
+            switch existing(at: sharedDestination) {
+            case .current, .linked, .relink, .upgrade:
+                return .linked
+            case .available:
+                return .notLinked
+            case .conflict:
+                return .conflict
+            }
+        }
+        if let target = linkTarget(at: destination) {
+            guard target.resolvingSymlinksInPath().path == sharedDestination.resolvingSymlinksInPath().path else {
+                return .conflict
+            }
+            return files.fileExists(atPath: sharedDestination.path) ? .linked : .notLinked
+        }
+        do {
+            _ = try files.attributesOfItem(atPath: destination.path)
+            return .conflict
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile {
+            return .notLinked
+        } catch {
+            return .conflict
+        }
+    }
+
     private func linkTarget(at url: URL) -> URL? {
         guard let path = try? files.destinationOfSymbolicLink(atPath: url.path) else { return nil }
         return URL(fileURLWithPath: path, relativeTo: url.deletingLastPathComponent()).standardizedFileURL
@@ -200,7 +233,7 @@ struct EquationLabSkillInstallation {
             guard path.hasPrefix(prefix), let attributes = try? entry.resourceValues(forKeys: Set(keys)),
                   attributes.isSymbolicLink == false else { return nil }
             let relative = String(path.dropFirst(prefix.count))
-            if relative == appPointer || relative == checksumFile {
+            if relative == appPointer || relative == checksumFile || entry.lastPathComponent == ".DS_Store" {
                 guard attributes.isRegularFile == true else { return nil }
                 continue
             }

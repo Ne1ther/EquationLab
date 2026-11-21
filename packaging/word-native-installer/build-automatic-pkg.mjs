@@ -6,6 +6,7 @@ import {fileURLToPath} from 'node:url';
 import {readArtifacts,requireRibbonVerifiedArtifact,isMainModule} from './installer.mjs';
 
 const source=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const minimumMacOS='14.0';
 const xml=text=>String(text).replaceAll('&','&amp;').replaceAll('<','&lt;').replaceAll('>','&gt;').replaceAll('"','&quot;');
 const run=(binary,args)=>execFileSync(binary,args,{encoding:'utf8',stdio:['ignore','pipe','pipe'],maxBuffer:4000000});
 export async function buildAutomaticPackage({app,artifacts,output,version,kind='full',signIdentity=process.env.EQUATIONLAB_INSTALLER_SIGN_IDENTITY}={}){
@@ -39,7 +40,8 @@ export async function buildAutomaticPackage({app,artifacts,output,version,kind='
    const plist=JSON.parse(run('/usr/bin/plutil',['-convert','json','-o','-',properties]));
    for(const entry of plist){entry.BundleIsRelocatable=false;entry.BundleOverwriteAction='upgrade';}
    const json=path.join(temporary,'components.json');await fs.writeFile(json,JSON.stringify(plist));run('/usr/bin/plutil',['-convert','xml1','-o',properties,json]);
-   payloadArgs.push('--root',payload,'--component-plist',properties,'--install-location','/','--ownership','recommended');
+   payloadArgs.push('--root',payload,'--component-plist',properties,'--install-location','/','--ownership','recommended',
+    '--compression','latest','--min-os-version',minimumMacOS);
   }else payloadArgs.push('--nopayload');
   run('/usr/bin/pkgbuild',[...payloadArgs,'--identifier',identifier,'--version',version,'--scripts',scripts,component]);
   const title=removing?'Equation Lab Word 插件卸载':kind==='full'?'Equation Lab':'Equation Lab Word 插件';
@@ -50,7 +52,7 @@ export async function buildAutomaticPackage({app,artifacts,output,version,kind='
   // Let Installer explain the running-app requirement before privileged scripts
   // start. Keep preinstall's process check as protection against a later launch.
   const mustClose=`<pkg-ref id="${identifier}"><must-close><app id="com.microsoft.Word"/>${kind==='full'?'<app id="app.equationlab.mac"/>':''}</must-close></pkg-ref>`;
-  await fs.writeFile(distribution,`<?xml version="1.0" encoding="utf-8"?><installer-gui-script minSpecVersion="2"><title>${xml(title)}</title><welcome file="welcome.html" mime-type="text/html"/><conclusion file="conclusion.html" mime-type="text/html"/><options customize="never" require-scripts="true" hostArchitectures="arm64"/><domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/><allowed-os-versions><os-version min="14.0"/></allowed-os-versions><choices-outline><line choice="default"/></choices-outline><choice id="default" visible="false" title="${xml(title)}"><pkg-ref id="${identifier}"/></choice><pkg-ref id="${identifier}" version="${version}" onConclusion="none">component.pkg</pkg-ref>${mustClose}</installer-gui-script>`);
+  await fs.writeFile(distribution,`<?xml version="1.0" encoding="utf-8"?><installer-gui-script minSpecVersion="2"><title>${xml(title)}</title><welcome file="welcome.html" mime-type="text/html"/><conclusion file="conclusion.html" mime-type="text/html"/><options customize="never" require-scripts="true" hostArchitectures="arm64"/><domains enable_localSystem="true" enable_currentUserHome="false" enable_anywhere="false"/><allowed-os-versions><os-version min="${minimumMacOS}"/></allowed-os-versions><choices-outline><line choice="default"/></choices-outline><choice id="default" visible="false" title="${xml(title)}"><pkg-ref id="${identifier}"/></choice><pkg-ref id="${identifier}" version="${version}" onConclusion="none">component.pkg</pkg-ref>${mustClose}</installer-gui-script>`);
   const filename=kind==='full'?`Equation-Lab-${version}.pkg`:removing?'EquationLab-Word-Uninstall.pkg':'EquationLab-Word-Plugin.pkg',target=path.join(output,filename);
   await fs.mkdir(output,{recursive:true});try{await fs.lstat(target);throw Error('Refusing to overwrite frozen package: '+target);}catch(error){if(error.code!=='ENOENT')throw error;}
   run('/usr/bin/productbuild',['--distribution',distribution,'--package-path',temporary,'--resources',resources,...(signIdentity?['--sign',signIdentity]:[]),target]);

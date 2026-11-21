@@ -948,3 +948,281 @@ test('Stable catalog polling does not detach or reload a current equation',async
  for(let i=0;i<5;i++)assert.equal(await e.workspace.syncCurrent(),false);
  assert.equal(e.calls.some(x=>x.action==='detach'||x.action==='wordDocumentOpen'),false);assert.equal(e.state.wordTicket,ticket);
 });
+
+test('Automatic reload falls back once to the verified same document when an old ordinal expires',async()=>{
+ const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+ const fallbackId='f'.repeat(64),firstStatus=deferred(),fallbackStatus=deferred();
+ e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+ e.behavior(async(action,payload)=>{
+  if(action==='wordWorkspaceStatus')return {...catalogStatus('word:A'),documents:[{identity:'word:A',name:'Same.docx',readOnly:false,numberingRevision:4},{identity:'word:B',name:'Same.docx',readOnly:false,numberingRevision:1}]};
+  if(action==='wordDocumentOpen')return {requestId:payload.documentIdentity?fallbackId:requestId,state:'queued'};
+  if(action==='wordDocumentStatus')return payload.requestId===requestId?firstStatus.promise:fallbackStatus.promise;
+ });
+ await e.workspace.syncCurrent();
+ assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,true);
+ assert.equal(await e.workspace.select(1,{reload:true,fallbackToDocument:true}),true);
+ assert.equal(e.state.wordTicket,null);
+ firstStatus.resolve({requestId,state:'failed',identity:'word:A',index:1});
+ await new Promise(resolve=>setImmediate(resolve));
+ const opens=e.calls.filter(call=>call.action==='wordDocumentOpen');
+ assert.equal(opens.length,2);
+ assert.equal(opens[0].payload.target.index,1);
+ assert.deepEqual(JSON.parse(JSON.stringify(opens[1].payload)),{documentIdentity:'word:A'});
+ assert.equal(e.workspace.pending,true);
+ const fresh={...old,documentSnapshot:19,documentNumberingRevision:4,activeIndex:2,objects:[{index:0,latex:'inserted',nativeSha256:'e'.repeat(64)},{index:1,latex:'x+1',nativeSha256:digest},{index:2,latex:'y+2',nativeSha256:'d'.repeat(64)}]};
+ assert.equal(await e.workspace.prepareIncoming(fresh,fallbackId),true);
+ e.workspace.accepted(fresh);
+ assert.equal(e.workspace.pending,false);
+ assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,false);
+ assert.equal(e.workspace.visibleSource(null).objects.length,3);
+});
+
+test('Automatic reload fallback rejects a foreign document and never silently opens another formula on explicit click',async()=>{
+ for(const explicitClick of [true,false]){
+  let now=0;
+  const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+  const fallbackId='f'.repeat(64),firstStatus=deferred(),fallbackStatus=deferred();
+  e.api.now=()=>now;
+  e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+  e.behavior(async(action,payload)=>{
+   if(action==='wordWorkspaceStatus')return catalogStatus('word:A');
+   if(action==='wordDocumentOpen')return {requestId:payload.documentIdentity?fallbackId:requestId,state:'queued'};
+   if(action==='wordDocumentStatus')return payload.requestId===requestId?firstStatus.promise:fallbackStatus.promise;
+  });
+  assert.equal(await e.workspace.select(1,explicitClick?{reload:true}:{reload:true,fallbackToDocument:true}),true);
+  firstStatus.resolve({requestId,state:'failed',identity:'word:A',index:1});
+  await new Promise(resolve=>setImmediate(resolve));
+  const opens=e.calls.filter(call=>call.action==='wordDocumentOpen');
+  if(explicitClick){
+   assert.equal(opens.length,1,'explicit row click must not fall back to a document-wide open');
+   assert.equal(e.workspace.pending,false);
+   now=60_000;
+   assert.equal(await e.workspace.syncCurrent(),false);
+   assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,'polling must not silently reopen another row after an explicit click fails');
+  }else{
+   assert.equal(opens.length,2);
+   await assert.rejects(e.workspace.prepareIncoming({...old,documentIdentity:'word:B',documentSnapshot:19,activeIndex:0},fallbackId),/当前文档已变化/);
+   assert.equal(e.workspace.pending,false);
+  }
+ }
+});
+
+test('Temporary Word refusal or timeout recovers with bounded backoff without message spam',async()=>{
+ for(const failureMode of ['failed','timeout']){
+  let now=0,seq=0,wakePause=null;
+  const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+  e.api.now=()=>now;
+  e.api.pause=()=>new Promise(resolve=>{wakePause=resolve;});
+  e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+  const ids=[];
+  e.behavior(async(action,payload)=>{
+   if(action==='wordWorkspaceStatus')return catalogStatus('word:A');
+   if(action==='wordDocumentOpen'){const id=(++seq).toString(16).padStart(64,'0');ids.push({id,payload});return {requestId:id,state:'queued'};}
+   if(action==='wordDocumentStatus'){
+    if(failureMode==='timeout'&&ids.length===2)return {state:'queued'};
+    return {requestId:payload.requestId,state:'failed',identity:'word:A',index:payload.requestId===ids[0]?.id?1:undefined};
+   }
+  });
+  assert.equal(await e.workspace.select(1,{reload:true,fallbackToDocument:true}),true);
+  await new Promise(resolve=>setImmediate(resolve));
+  if(failureMode==='timeout'){
+   assert.equal(ids.length,2);
+   now=60_001;wakePause?.();
+   await new Promise(resolve=>setImmediate(resolve));
+  }
+  assert.equal(e.workspace.pending,false,failureMode);
+  assert.equal(ids.length,2,failureMode);
+  const errorMessagesAfterInitial=e.messages.filter(m=>m.error).length;
+  assert.equal(errorMessagesAfterInitial,1,failureMode);
+  // Cooldown: polling every second before 4s must not interrupt Word.
+  for(const t of [1000,2000,3000]){
+   now+=1000;
+   assert.equal(await e.workspace.syncCurrent(),false,`${failureMode}@${t}`);
+  }
+  assert.equal(ids.length,2,failureMode);
+  // Bounded retries at +4s, +14s, +34s (3 total retries).
+  now+=1000;assert.equal(await e.workspace.syncCurrent(),true,`${failureMode}:retry1`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ids.length,3);
+  now+=9000;assert.equal(await e.workspace.syncCurrent(),false,`${failureMode}:beforeRetry2`);
+  now+=1000;assert.equal(await e.workspace.syncCurrent(),true,`${failureMode}:retry2`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ids.length,4);
+  now+=19000;assert.equal(await e.workspace.syncCurrent(),false,`${failureMode}:beforeRetry3`);
+  now+=1000;assert.equal(await e.workspace.syncCurrent(),true,`${failureMode}:retry3`);
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(ids.length,5);
+  // Exhausted: no further unbounded retries.
+  now+=120_000;assert.equal(await e.workspace.syncCurrent(),false,`${failureMode}:exhausted`);
+  assert.equal(ids.length,5,failureMode);
+  // Duplicate failure messages were suppressed across automatic retries.
+  if(failureMode==='failed')assert.equal(e.messages.filter(m=>m.error).length,1,'must not spam identical error messages');
+ }
+});
+
+test('Auto-recovery stops on cancel, superseded, document switch, retirement, read-only or dirty draft',async()=>{
+ for(const stopCase of ['cancelled','superseded','switched','retired','readOnly','dirty','explicitCancel']){
+  let now=0,seq=0;
+  const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+  e.api.now=()=>now;
+  e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+  let status=catalogStatus('word:A');
+  const firstStatus=deferred(),fallbackStatus=deferred();
+  e.behavior(async(action,payload)=>{
+   if(action==='wordWorkspaceStatus')return status;
+   if(action==='wordDocumentOpen'){const id=(++seq).toString(16).padStart(64,'0');return {requestId:id,state:'queued'};}
+   if(action==='wordDocumentStatus')return seq===1?firstStatus.promise:fallbackStatus.promise;
+  });
+  assert.equal(await e.workspace.select(1,{reload:true,fallbackToDocument:true}),true);
+  if(stopCase==='cancelled'||stopCase==='superseded'){
+   firstStatus.resolve({requestId:'1'.padStart(64,'0'),state:stopCase,identity:'word:A',index:1});
+   await new Promise(resolve=>setImmediate(resolve));
+   assert.equal(seq,1,stopCase);
+   now=10_000;assert.equal(await e.workspace.syncCurrent(),false,stopCase);
+   assert.equal(seq,1,stopCase);
+   continue;
+  }
+  if(stopCase==='switched')status=catalogStatus('word:B');
+  if(stopCase==='retired')status={...catalogStatus('word:B'),retiredIdentities:['word:A']};
+  if(stopCase==='readOnly')status={...catalogStatus('word:A'),documents:[{identity:'word:A',name:'Same.docx',readOnly:true}]};
+  firstStatus.resolve({requestId:'1'.padStart(64,'0'),state:'failed',identity:'word:A',index:1});
+  await new Promise(resolve=>setImmediate(resolve));
+  if(['switched','retired','readOnly'].includes(stopCase)){
+   assert.equal(seq,1,`fallback must not open word:A when ${stopCase}`);
+   if(stopCase==='readOnly'){now=10_000;assert.equal(await e.workspace.syncCurrent(),false);assert.equal(seq,1);}
+   continue;
+  }
+  assert.equal(seq,2,stopCase);
+  fallbackStatus.resolve({requestId:'2'.padStart(64,'0'),state:'failed'});
+  await new Promise(resolve=>setImmediate(resolve));
+  if(stopCase==='dirty')e.state.draftChanged=true;
+  if(stopCase==='explicitCancel')await e.workspace.cancelPending();
+  now=10_000;
+  assert.equal(await e.workspace.syncCurrent(),false,stopCase);
+  assert.equal(seq,2,stopCase);
+ }
+});
+
+test('Automatic reload clears stale cache cleanly when the same verified document becomes empty',async()=>{
+ const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+ let emptyCalls=0,seq=0;e.api.empty=()=>{emptyCalls++;};
+ e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+ e.behavior(async(action,payload)=>{
+  if(action==='wordWorkspaceStatus')return catalogStatus('word:A');
+  if(action==='wordDocumentOpen')return {requestId:(++seq).toString(16).padStart(64,'0'),state:'queued'};
+  if(action==='wordDocumentStatus')return seq===1?{requestId:payload.requestId,state:'failed',identity:'word:A',index:1}:{requestId:payload.requestId,state:'empty',documentIdentity:'word:A'};
+ });
+ assert.equal(await e.workspace.select(1,{reload:true,fallbackToDocument:true}),true);
+ await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(seq,2);assert.equal(e.workspace.pending,false);assert.equal(e.workspace.visibleSource(null),null);
+ assert.equal(e.workspace.documentReadState,'empty');assert.equal(emptyCalls,1);
+});
+
+test('Target position shift rejected by prepareIncoming recovers via controlled same-document refresh',async()=>{
+ let now=0,seq=0;
+ const e=setup(),old={...document(),documentIdentity:'word:A',documentName:'Same.docx',insertion:false,documentNumberingRevision:3};
+ e.api.now=()=>now;
+ e.state.source=old;e.state.wordTicket=ticket;e.workspace.accepted(old);
+ e.behavior(async action=>{
+  if(action==='wordWorkspaceStatus')return catalogStatus('word:A');
+  if(action==='wordDocumentOpen')return {requestId:(++seq).toString(16).padStart(64,'0'),state:'queued'};
+  if(action==='wordDocumentStatus')return {state:'queued'};
+ });
+ assert.equal(await e.workspace.select(1,{reload:true,fallbackToDocument:true}),true);
+ const shifted={...old,documentSnapshot:18,activeIndex:0,documentPosition:2,objects:[old.objects[1]]};
+ await assert.rejects(e.workspace.prepareIncoming(shifted,'1'.padStart(64,'0')),/内容或位置已经变化/);
+ assert.equal(e.workspace.pending,false);
+ now=4000;
+ assert.equal(await e.workspace.syncCurrent(),true);
+ const opens=e.calls.filter(call=>call.action==='wordDocumentOpen');
+ assert.equal(opens.length,2);
+ assert.deepEqual(JSON.parse(JSON.stringify(opens[1].payload)),{documentIdentity:'word:A'});
+});
+
+test('Repeated background status polling failures do not spam the message bar',async()=>{
+ const e=setup();let fail=true;
+ e.behavior(async action=>{if(action==='wordWorkspaceStatus'){if(fail)throw Error('connect ECONNREFUSED');return catalogStatus('word:A');}});
+ assert.equal(await e.workspace.refreshList(),false);
+ assert.equal(await e.workspace.refreshList(),false);
+ assert.equal(await e.workspace.refreshList(),false);
+ assert.equal(e.messages.length,1);
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.equal(e.messages.length,2);
+ // Manual refresh still reports error explicitly.
+ assert.equal(await e.workspace.refreshCurrent(),false);
+ assert.equal(e.messages.length,3);
+ // Recovering resets deduplication so a future failure reports once.
+ fail=false;assert.equal(await e.workspace.refreshList(),true);
+ fail=true;assert.equal(await e.workspace.refreshList(),false);
+ assert.equal(await e.workspace.refreshList(),false);
+ assert.equal(e.messages.length,4);
+});
+
+test('Content-only save during documentLoading after local format save preserves confirmed numbering revision while invalidating the edited row',async()=>{
+ for(const [editedRow,partialRevision] of [[2,4],[5,4],[2,3]]){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3,
+   objects:Array.from({length:112},(_,index)=>({index,nativeSha256:(index+1).toString(16).padStart(64,'0'),latex:`x_${index}`,image:`image-${index}`,
+    layout:{mode:'numbered-right',chapter:2,equation:index+1,numberFormat:'(#C1.#E1)',numberText:`(2.${index+1})`}}))};
+  const row2Digest=source.objects[2].nativeSha256;
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:2,previousNativeSha256:row2Digest,nativeSha256:row2Digest,numberingChanged:true,numberingLocal:true};
+  e.workspace.rememberAfterSave(source,2,ack,'x_2',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)',verifiedStartRevision:3});
+  const partial={...source,documentSnapshot:18,documentLoading:true,activeIndex:0,documentPosition:editedRow,documentTotal:112,
+   documentNumberingRevision:partialRevision,numberingRefreshNeeded:false,objects:[{index:0,nativeSha256:source.objects[editedRow].nativeSha256}]};
+  // Content-only save while background document is still loading: server receipt change is null.
+  e.workspace.rememberAfterSave(partial,0,null,'edited content',undefined);
+  const cached=e.workspace.visibleSource(null);
+  assert.equal(cached.objects[editedRow].nativeSha256,null,`edited row ${editedRow} native identity must be invalidated`);
+  assert.equal(cached.objects[editedRow].image,null,`edited row ${editedRow} preview must be invalidated`);
+  assert.equal(cached.objects[editedRow].latex,`x_${editedRow}`,'unconfirmed latex must not replace cached row');
+  const untouched=editedRow===2?5:2;
+  assert.equal(cached.objects[untouched].nativeSha256,source.objects[untouched].nativeSha256);
+  assert.equal(cached.objects[untouched].image,`image-${untouched}`);
+  assert.equal(cached.objects[2].layout.numberText,'(2-3)');
+  assert.equal(cached.numberingRefreshNeeded,false);
+  // Polling with Word's confirmed revision 4 keeps all 112 rows fresh.
+  let liveRevision=4;
+  e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,active:{identity:source.documentIdentity,name:source.documentName},
+   documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:liveRevision}]}:undefined);
+  assert.equal(await e.workspace.refreshList(),true);
+  assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,false,'confirmed revision 4 must not flip 112 rows stale');
+  // Edited row cannot be opened as a verified target.
+  assert.equal(await e.workspace.select(editedRow),false);
+  // Reopening the edited row during load cannot pretend its unconfirmed row is fresh.
+  assert.equal(e.workspace.visibleSource({...partial,documentNumberingRevision:4}).numberingRefreshNeeded,true);
+  // Reopening an untouched row during load still keeps confirmed numbers fresh.
+  const untouchedPartial={...partial,documentNumberingRevision:4,documentPosition:untouched,objects:[{index:0,nativeSha256:source.objects[untouched].nativeSha256}]};
+  assert.equal(e.workspace.visibleSource(untouchedPartial).numberingRefreshNeeded,false);
+  // Unconfirmed save must NOT be treated as warm-Dock-verified (even after cancelling an untouched row).
+  e.workspace.rememberAfterCancel(untouchedPartial);
+  assert.equal(await e.workspace.resume(),true);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,'Dock must request a fresh capture after an unconfirmed content save');
+  // A newer Word revision 5 still flips the list stale.
+  liveRevision=5;
+  await e.workspace.refreshList();
+  assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,true);
+ }
+});
+
+test('Diverged or unverified partial saves never stay marked fresh and still invalidate the edited row',async()=>{
+ for(const variant of ['differentCount','newerRevision','newerLiveRevision','partialStale','ownerMismatch','numberingRequested','missingRevision']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3,
+   objects:Array.from({length:4},(_,index)=>({index,nativeSha256:(index+1).toString(16).padStart(64,'0'),latex:`x_${index}`,image:`image-${index}`,
+    layout:{mode:'numbered-right',chapter:2,equation:index+1,numberFormat:'(#C1.#E1)',numberText:`(2.${index+1})`}}))};
+  const row0Digest=source.objects[0].nativeSha256;
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,previousNativeSha256:row0Digest,nativeSha256:row0Digest,numberingChanged:true,numberingLocal:true};
+  e.workspace.rememberAfterSave(source,0,ack,'x_0',{format:'(#C1-#E1)',side:'right',previewText:'(2-1)',verifiedStartRevision:3});
+  const partial={...source,documentSnapshot:18,documentLoading:true,activeIndex:0,documentPosition:1,
+   documentTotal:variant==='differentCount'?5:4,
+   documentNumberingRevision:variant==='newerRevision'?5:variant==='missingRevision'?undefined:4,
+   liveNumberingRevision:variant==='newerLiveRevision'?5:undefined,
+   numberingRefreshNeeded:variant==='partialStale',
+   objects:[{index:0,nativeSha256:variant==='ownerMismatch'?'f'.repeat(64):source.objects[1].nativeSha256}]};
+  e.workspace.rememberAfterSave(partial,0,null,'edited',variant==='numberingRequested'?{format:'(#E1)',side:'right'}:undefined);
+  const cached=e.workspace.visibleSource(null);
+  assert.equal(cached.objects[1].nativeSha256,null,variant);
+  assert.equal(cached.objects[1].image,null,variant);
+  assert.equal(cached.numberingRefreshNeeded,true,variant);
+  assert.equal(cached.formatSaveRevision,null,variant);
+ }
+});

@@ -136,7 +136,18 @@ final class AppUpdater: ObservableObject {
                 manifest = update
                 defaults.set(signedData, forKey: "updates.signedManifest")
                 guard try update.supports(os: ProcessInfo.processInfo.operatingSystemVersion) else { throw UpdateError.incompatibleSystem }
-                packageURL = nil; phase = .available; recordSuccess()
+                if let file = cachedPackageURL(for: update), FileManager.default.fileExists(atPath: file.path) {
+                    phase = .verifying
+                    do {
+                        try await Self.verify(update, file: file)
+                        packageURL = file; progress = 1; phase = .ready; recordSuccess()
+                        return
+                    } catch {
+                        if Task.isCancelled { throw error }
+                        try? FileManager.default.removeItem(at: file)
+                    }
+                }
+                packageURL = nil; progress = 0; phase = .available; recordSuccess()
                 if automaticDownloads { beginDownload(update) }
             } catch { handle(error) }
         }
@@ -153,7 +164,7 @@ final class AppUpdater: ObservableObject {
                 try FileManager.default.createDirectory(at: cache, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
                 let destination = cache.appendingPathComponent(update.sha256 + "-" + update.filename)
                 if FileManager.default.fileExists(atPath: destination.path) {
-                    do { try await Self.verify(update, file: destination); packageURL = destination; phase = .ready; return }
+                    do { try await Self.verify(update, file: destination); packageURL = destination; progress = 1; phase = .ready; return }
                     catch { try? FileManager.default.removeItem(at: destination) }
                 }
                 let file = try await fetcher(update.url, update.size, { [weak owner = self] value in
@@ -231,6 +242,10 @@ final class AppUpdater: ObservableObject {
     nonisolated private static func verify(_ update: UpdateManifest, file: URL) async throws {
         try await Task.detached(priority: .utility) { try update.verifyPackage(at: file) }.value
         try Task.checkCancellation()
+    }
+    private func cachedPackageURL(for update: UpdateManifest) -> URL? {
+        guard let cache = try? downloadDirectory ?? Self.cacheDirectory() else { return nil }
+        return cache.appendingPathComponent(update.sha256 + "-" + update.filename)
     }
     nonisolated private static func cacheDirectory() throws -> URL {
         try FileManager.default.url(for: .cachesDirectory, in: .userDomainMask, appropriateFor: nil, create: false)

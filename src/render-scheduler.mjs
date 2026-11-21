@@ -32,7 +32,17 @@ export function createRenderScheduler(ready=Promise.resolve()){
  }
  async function drain(){
   if(running)return;running=true;
-  try{await ready;while(queue.length){queue.sort((a,b)=>a.priority-b.priority||a.order-b.order);await execute(queue.shift());}}
+  try{
+   await ready;
+   while(queue.length){
+    queue.sort((a,b)=>a.priority-b.priority||a.order-b.order);
+    const next=queue.shift();
+    await execute(next);
+    // Let incoming writes or live previews enter the queue between low-priority
+    // thumbnail jobs instead of running back-to-back thumbnails in one turn.
+    if(next.priority>1&&queue.length&&queue.every(pending=>pending.priority>1))await new Promise(resolve=>setImmediate(resolve));
+   }
+  }
   finally{running=false;}
  }
  return {

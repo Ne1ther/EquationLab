@@ -16,6 +16,22 @@ struct EquationRuler: View {
     private func save(_ tabs: [RulerTab]) {
         bridge.action("ruler", ["tabs": tabs.sorted { $0.position < $1.position }.map { ["position": $0.position, "type": $0.type] }])
     }
+    static func tabsAfterDrag(
+        _ current: [RulerTab],
+        dragging tab: RulerTab,
+        location: CGPoint,
+        width: CGFloat,
+        scale: CGFloat
+    ) -> [RulerTab]? {
+        let remaining = current.filter { $0.id != tab.id }
+        let inBounds = location.y >= -12 && location.y <= 52 && location.x >= 0 && location.x <= width
+        guard inBounds else { return remaining }
+        let position = max(0, min(32767, Int((location.x / scale).rounded()) * 32))
+        guard position != tab.position, !remaining.contains(where: { $0.position == position }) else {
+            return nil
+        }
+        return remaining + [RulerTab(position: position, type: tab.type)]
+    }
     private var helpText: String {
         bridge.language.usesEnglish
             ? "Choose an alignment and click the ruler to set a tab stop. Put the cursor in the equation, then choose Insert Tab to jump to the next stop. Use Word Layout Preview to check the alignment."
@@ -68,12 +84,15 @@ struct EquationRuler: View {
                             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("ruler"))
                                 .onChanged { value in dragging = tab.id; dragX = value.location.x }
                                 .onEnded { value in
-                                    var tabs = bridge.state.ruler.filter { $0.id != tab.id }
-                                    if value.location.y >= -12 && value.location.y <= 52 && value.location.x >= 0 && value.location.x <= geometry.size.width {
-                                        let p = min(32767, Int((value.location.x / scale).rounded()) * 32)
-                                        if !tabs.contains(where: { $0.position == p }) { tabs.append(RulerTab(position: p, type: tab.type)) }
-                                    }
-                                    dragging = nil; save(tabs)
+                                    let updated = Self.tabsAfterDrag(
+                                        bridge.state.ruler,
+                                        dragging: tab,
+                                        location: value.location,
+                                        width: geometry.size.width,
+                                        scale: scale
+                                    )
+                                    dragging = nil
+                                    if let updated { save(updated) }
                                 })
                             .contextMenu { Button(bridge.t("删除制表位")) { save(bridge.state.ruler.filter { $0.id != tab.id }) } }
                     }

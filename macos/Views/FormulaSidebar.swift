@@ -1,10 +1,88 @@
 import SwiftUI
 
 struct FormulaSidebar: View {
+    private enum SelectionDocumentKey: Equatable {
+        case word(String)
+        case standalone(String)
+    }
+
+    private struct PendingRowSelection: Equatable {
+        let id: Int
+        let document: SelectionDocumentKey
+    }
+
+    private struct SelectionMarkFrame {
+        var scaleY: CGFloat = 1
+        var opacity: Double = 1
+        var fillBoost: Double = 0
+    }
+
+    private struct ActiveSelectionRowBackground: View {
+        let pulseToken: Int
+        @Binding var consumedPulseToken: Int
+        @State private var trigger = 0
+
+        var body: some View {
+            Color.clear
+                .keyframeAnimator(initialValue: SelectionMarkFrame(), trigger: trigger) { _, frame in
+                    ZStack(alignment: .leading) {
+                        Color.accentColor.opacity(0.16 + frame.fillBoost)
+                        Capsule(style: .continuous)
+                            .fill(Color.accentColor)
+                            .frame(width: 3, height: 24)
+                            .padding(.leading, 3)
+                            .scaleEffect(y: frame.scaleY, anchor: .center)
+                            .opacity(frame.opacity)
+                    }
+                } keyframes: { _ in
+                    KeyframeTrack(\.scaleY) {
+                        MoveKeyframe(0.38)
+                        SpringKeyframe(1.06, duration: 0.13, spring: .snappy(duration: 0.13))
+                        SpringKeyframe(1.0, duration: 0.13, spring: .smooth(duration: 0.13))
+                    }
+                    KeyframeTrack(\.opacity) {
+                        MoveKeyframe(0.25)
+                        LinearKeyframe(1.0, duration: 0.10)
+                    }
+                    KeyframeTrack(\.fillBoost) {
+                        MoveKeyframe(0.08)
+                        CubicKeyframe(0.0, duration: 0.24)
+                    }
+                }
+                .onAppear {
+                    consumePulseIfNeeded(pulseToken)
+                }
+                .onChange(of: pulseToken) { _, newValue in
+                    consumePulseIfNeeded(newValue)
+                }
+        }
+
+        private func consumePulseIfNeeded(_ token: Int) {
+            guard token > 0, token > consumedPulseToken else { return }
+            consumedPulseToken = token
+            trigger = token
+        }
+    }
+
     @ObservedObject var bridge: DesktopBridge
     @Environment(\.colorScheme) private var colorScheme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingFavorites = false
     @State private var query = ""
+    @State private var pendingSelection: PendingRowSelection?
+    @State private var activeSelectionPulseID: Int?
+    @State private var activeSelectionPulseCount = 0
+    @State private var consumedSelectionPulseCount = 0
+
+    private var currentSelectionDocumentKey: SelectionDocumentKey? {
+        if let identity = bridge.state.wordDocumentIdentity, !identity.isEmpty {
+            return .word(identity)
+        }
+        if !bridge.state.documentPath.isEmpty {
+            return .standalone(bridge.state.documentPath)
+        }
+        return nil
+    }
 
     private var english: Bool { bridge.language.usesEnglish }
     private func label(_ zh: String, _ en: String) -> String { english ? en : zh }
@@ -216,6 +294,11 @@ struct FormulaSidebar: View {
                         let catalogPlaceholder = !showingFavorites && bridge.state.wordCatalogAvailable &&
                             item.latex.isEmpty && item.image == nil && item.numberStatus == "pending" && !item.readOnly
                         Button {
+                            if !showingFavorites,
+                               bridge.state.selected != item.id,
+                               let document = currentSelectionDocumentKey {
+                                pendingSelection = PendingRowSelection(id: item.id, document: document)
+                            }
                             bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
                         } label: {
                             HStack(spacing: 12) {
@@ -290,7 +373,7 @@ struct FormulaSidebar: View {
                                 thumbnailVisibility(item.id, document: thumbnailDocument, visible: false)
                             }
                         }
-                        .listRowBackground(!showingFavorites && bridge.state.selected == item.id ? Color.accentColor.opacity(0.16) : Color.clear)
+                        .listRowBackground(rowSelectionBackground(for: item.id))
                         .contextMenu {
                             Button(bridge.t(showingFavorites ? "使用此收藏" : "编辑公式")) {
                                 bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
@@ -311,7 +394,23 @@ struct FormulaSidebar: View {
                 .onAppear {
                     revealSelection(using: scroll)
                 }
-                .onChange(of: bridge.state.selected) { _, _ in
+                .onChange(of: bridge.state.selected) { _, selected in
+                    if !showingFavorites,
+                       let selected,
+                       let pending = pendingSelection,
+                       pending.id == selected,
+                       pending.document == currentSelectionDocumentKey {
+                        pendingSelection = nil
+                        if !reduceMotion {
+                            activeSelectionPulseID = selected
+                            activeSelectionPulseCount += 1
+                        }
+                    } else if let selected, selected != pendingSelection?.id {
+                        pendingSelection = nil
+                        if selected != activeSelectionPulseID {
+                            activeSelectionPulseID = nil
+                        }
+                    }
                     revealSelection(using: scroll)
                 }
                 .onChange(of: items.map(\.id)) { _, _ in
@@ -338,6 +437,25 @@ struct FormulaSidebar: View {
             .font(.system(size: 11))
             .disabled(bridge.state.busy || bridge.state.wordOutcomeUnknown).padding(.horizontal, 12)
             .modifier(WorkbenchFooter())
+        }
+        .onChange(of: showingFavorites) { _, _ in
+            pendingSelection = nil
+        }
+        .onChange(of: currentSelectionDocumentKey) { _, _ in
+            pendingSelection = nil
+            activeSelectionPulseID = nil
+        }
+        .onChange(of: bridge.state.messageError) { _, isError in
+            if isError { pendingSelection = nil }
+        }
+        .onChange(of: bridge.state.wordDocumentUnavailable) { _, unavailable in
+            if unavailable { pendingSelection = nil }
+        }
+        .onChange(of: bridge.state.wordOutcomeUnknown) { _, unknown in
+            if unknown { pendingSelection = nil }
+        }
+        .onChange(of: bridge.wordSessionIsInsertion) { _, isInsertion in
+            if isInsertion { pendingSelection = nil }
         }
     }
 
@@ -427,6 +545,32 @@ struct FormulaSidebar: View {
                 .font(.caption2).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.horizontal, 14).padding(.bottom, 6)
+        }
+    }
+
+    private var staticSelectionBackground: some View {
+        ZStack(alignment: .leading) {
+            Color.accentColor.opacity(0.16)
+            Capsule(style: .continuous)
+                .fill(Color.accentColor)
+                .frame(width: 3, height: 24)
+                .padding(.leading, 3)
+        }
+    }
+
+    @ViewBuilder
+    private func rowSelectionBackground(for itemID: Int) -> some View {
+        if !showingFavorites && bridge.state.selected == itemID {
+            if reduceMotion {
+                staticSelectionBackground
+            } else {
+                ActiveSelectionRowBackground(
+                    pulseToken: activeSelectionPulseID == itemID ? activeSelectionPulseCount : 0,
+                    consumedPulseToken: $consumedSelectionPulseCount
+                )
+            }
+        } else {
+            Color.clear
         }
     }
 

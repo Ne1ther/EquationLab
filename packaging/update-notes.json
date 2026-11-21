@@ -1,5 +1,5 @@
 {
-  "version": "0.7.3",
-  "zh": "• 修改现有单条 Word 公式的编号格式后，列表只更新这一条的编号，保留其余公式和缩略图。取消编辑后重新打开也会沿用已核对的列表，常规流程中无需手动刷新。\n• 标尺支持撤销与重做、还原制表位及就地用法提示。现在可以分别删除旧恢复草稿和取消当前编辑。\n• 减少 Word 读取公式时的界面重绘干扰，并在安装内置更新前更明确地提示需先退出 Word 或结束当前编辑。",
-  "en": "• Changing the numbering format of an existing Word equation updates only that item's number in the list while keeping other rows and thumbnails intact. Reopening after cancelling also reuses the verified list, so routine editing does not require a manual refresh.\n• The equation ruler now supports undo and redo, reverting tab stop changes, and inline help. You can delete an older recovery draft and cancel the current edit separately.\n• Reduces UI redraw interference while reading equations from Word and clarifies pre-install update prompts when Word is running or an edit is in progress."
+  "version": "0.7.4",
+  "zh": "• 加快未保存的长 Word 文档读取，缩略图后台生成时优先响应公式编辑和写回。\n• 改善公式内容和编号一起更新时的定位，以及编号变更后的自动刷新。\n• 修复标尺拖拽误删和文字输入撤销，优化更新包复用与 AI Skill 链接状态。",
+  "en": "• Loads unsaved Word documents faster and prioritizes editing and saving over thumbnails.\n• Improves target selection when saving equation content and numbering together, and automatically refreshes numbering when needed.\n• Fixes ruler drag and text undo, and improves update package reuse and AI Skill link status."
 }

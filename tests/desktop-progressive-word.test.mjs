@@ -118,4 +118,26 @@ test('Favorites reuse an available preview when an earlier document row has the 
  await settle();
  assert.equal(messages[0].payload.favorites[0].image,image);
  assert.deepEqual(nativeCalls,[]);
+
+ assert.ok(Object.hasOwn(messages[0].payload,'templates'));
+ assert.ok(Object.hasOwn(messages[0].payload,'categories'));
+ context.mf.value='x+1';
+ context.publishWorkbenchState();
+ assert.deepEqual(Object.keys(messages[1].payload),['latex']);
+ context.workbenchFavoriteImages.set('x','updated-image');
+ context.publishWorkbenchState();
+ assert.equal(messages[2].payload.favorites[0].image,'updated-image');
+ assert.equal(Object.hasOwn(messages[2].payload,'templates'),false);
+ context.favorites=['y','x'];
+ context.publishWorkbenchState();
+ assert.deepEqual(messages[3].payload.favorites.map(item=>item.latex),['y','x']);
+ context.favorites=[];
+ context.publishWorkbenchState();
+ assert.equal(messages[4].payload.favorites.length,0);
+ // Simulated WebKit reload starts with an empty last-field cache and resends static templates/categories.
+ context.workbenchLastFields.clear();
+ context.publishWorkbenchState();
+ assert.ok(Object.hasOwn(messages[5].payload,'templates'));
+ assert.ok(Object.hasOwn(messages[5].payload,'categories'));
+ assert.ok(Object.hasOwn(messages[5].payload,'favorites'));
 });

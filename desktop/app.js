@@ -95,17 +95,23 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
  },
  empty:()=>{if(!wordTicket)resetNewFormula();},
  captureInsertionDraft:()=>({latex:mf.value,ruler:editingRuler,typography:window.desktopTypographySnapshot?.()??window.desktopTypographyPatch?.()}),
- state:()=>({source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordNumberingSaveWaiting||!!window.wordSaveInFlight||!!window.editorIsComposing?.(),outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'}),
+ state:()=>{
+  const baseline=window.wordDetachedCleanBaseline;
+  const matchesDetachedClean=!!baseline&&mf.value===baseline.latex&&JSON.stringify(window.desktopTypographyPatch?.()??null)===baseline.typography&&JSON.stringify(editingRuler??[])===baseline.ruler;
+  return {source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordNumberingSaveWaiting||!!window.wordSaveInFlight||!!window.editorIsComposing?.(),outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():!matchesDetachedClean&&(!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]')};
+ },
  changed:()=>{renderObjects(false);controls();},
  detach:async({preserveDraft=false}={})=>{
   if(busy||wordSaveQueued||wordOutcomeUnknown||window.wordSaveInFlight||window.editorIsComposing?.())return false;
   const ticket=wordTicket;if(!ticket&&!source)return true;window.wordDocumentWorkspace?.remember(source);
+  const wasClean=!preserveDraft&&!(ticket?wordSessionChanged():(!!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'));
   const generation=window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;
   // Closing the owning Word document can dispose its ticket before the
   // workspace follows another document. Only that terminal reply is harmless.
   if(ticket)await native('wordSessionCancel',{ticket}).catch(error=>{if(error.message!=='Unknown or expired native session')throw error;});
   if(generation!==(window.wordSessionGeneration??0)||wordTicket!==ticket)return false;
   wordTicket=null;source=null;selected=null;mode='rebuild';if(!preserveDraft)editingRuler=undefined;
+  window.wordDetachedCleanBaseline=wasClean?{latex:mf.value,typography:JSON.stringify(window.desktopTypographyPatch?.()??null),ruler:JSON.stringify(editingRuler??[])}:null;
   mf.readOnly=false;$('latex').readOnly=false;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
   $('word-session-actions').hidden=true;$('export').hidden=false;renderModes();
   await syncSidebar(true,false,true,ticket);changed();return true;
@@ -113,25 +119,33 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
 });
 window.nativeResumeWordDocument=wordRunning=>window.wordDocumentWorkspace?.resume(wordRunning!==false);
 window.nativeSyncWordWorkspace=async()=>{
- const followed=await window.wordDocumentWorkspace?.syncCurrent();
- if((source?.numberingRefreshNeeded||source?.documentLoadFailed)&&wordTicket&&!source.insertion&&source.hasDocumentContext&&!source.documentLoading&&!busy&&!wordNavigating&&!wordOutcomeUnknown&&!wordCommitRunning&&!window.wordDocumentWorkspace?.pending&&!wordSessionChanged()){
-  const document=source,index=selected?.index;if(!Number.isInteger(index))return followed;
-  // Preserve the old rows as stale until a verified replacement arrives.
-  // A rejected capture must not cause a new Word request every poll.
-  const position=document.documentPosition??index,revision=document.liveNumberingRevision??document.documentNumberingRevision;
-  const attempted=window.numberingRefreshAttempt;
-  if(attempted?.identity===document.documentIdentity&&attempted.revision===revision&&attempted.position===position)return followed;
-  window.numberingRefreshAttempt={identity:document.documentIdentity,revision,position};
-  const refreshed=await window.wordDocumentWorkspace.select(index,{reload:true});
-  return refreshed||followed;
- }
- return followed;
+ if(window.wordWorkspaceSyncFlight)return window.wordWorkspaceSyncFlight;
+ window.wordWorkspaceSyncFlight=(async()=>{
+  const followed=await window.wordDocumentWorkspace?.syncCurrent();
+  if((source?.numberingRefreshNeeded||source?.documentLoadFailed)&&wordTicket&&!source.insertion&&source.hasDocumentContext&&!source.documentLoading&&!busy&&!wordNavigating&&!wordOutcomeUnknown&&!wordCommitRunning&&!window.wordDocumentWorkspace?.pending&&!wordSessionChanged()){
+   const document=source,index=selected?.index;if(!Number.isInteger(index))return followed;
+   // Preserve the old rows as stale until a verified replacement arrives.
+   // Retry with bounded backoff instead of giving up permanently or polling Word every second.
+   const position=document.documentPosition??index,revision=document.liveNumberingRevision??document.documentNumberingRevision;
+   const now=Date.now(),attempted=window.numberingRefreshAttempt;
+   const sameAttempt=attempted?.identity===document.documentIdentity&&attempted.revision===revision&&attempted.position===position;
+   const count=sameAttempt?(attempted.count??1):0;
+   if(sameAttempt&&(count>=3||now<(attempted.nextRetryAt??Infinity)))return followed;
+   const nextCount=count+1,delays=[5000,15000];
+   window.numberingRefreshAttempt={identity:document.documentIdentity,revision,position,count:nextCount,nextRetryAt:nextCount>=3?Infinity:now+delays[Math.min(nextCount-1,delays.length-1)]};
+   const refreshed=await window.wordDocumentWorkspace.select(index,{reload:true,fallbackToDocument:true});
+   return refreshed||followed;
+  }
+  return followed;
+ })().finally(()=>{window.wordWorkspaceSyncFlight=null;});
+ return window.wordWorkspaceSyncFlight;
 };
 window.nativeRefreshWordWorkspace=()=>{
+ window.numberingRefreshAttempt=null;
  const workspace=window.wordDocumentWorkspace;
  if(wordTicket&&source?.documentLoadFailed&&!source.insertion&&selected){
   if(wordSessionChanged()){message('当前公式有未保存的修改。更新或取消后可重新读取全文编号。',true);return false;}
-  return workspace?.select(selected.index,{reload:true});
+  return workspace?.select(selected.index,{reload:true,fallbackToDocument:true});
  }
  return workspace?.refreshCurrent();
 };
@@ -235,7 +249,7 @@ async function waitForEditorIdle(timeoutMs=25000){
   idleWaiters.add(wake);
  });
 }
-function resetNewFormula(){if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return false;}if(!window.restoringRecoveryDraft){window.draftOutcomeUnknown=false;void window.clearSavedDrafts?.().catch(()=>{});}window.wordDocumentWorkspace?.clearUnavailable();source=null;selected=null;loadObjectLayout({});editingRuler=undefined;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;$('title').textContent='新建公式';$('eyebrow').textContent='FORMULA EDITOR';$('subtitle').textContent='点击模板、输入内容，再导出可编辑的 Word 公式。';mf.readOnly=false;$('latex').readOnly=false;for(const b of $('palette').querySelectorAll('button'))b.disabled=false;mf.value='';window.resetEditorHistory?.();renderObjects();window.desktopTypographyNew?.();changed();}
+function resetNewFormula(){if(wordTicket){message('请先保存或取消当前 Word 编辑会话。',true);return false;}window.wordDetachedCleanBaseline=null;if(!window.restoringRecoveryDraft){window.draftOutcomeUnknown=false;void window.clearSavedDrafts?.().catch(()=>{});}window.wordDocumentWorkspace?.clearUnavailable();source=null;selected=null;loadObjectLayout({});editingRuler=undefined;$('source-panel').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;$('title').textContent='新建公式';$('eyebrow').textContent='FORMULA EDITOR';$('subtitle').textContent='点击模板、输入内容，再导出可编辑的 Word 公式。';mf.readOnly=false;$('latex').readOnly=false;for(const b of $('palette').querySelectorAll('button'))b.disabled=false;mf.value='';window.resetEditorHistory?.();renderObjects();window.desktopTypographyNew?.();changed();}
 window.nativeNew=()=>busy?false:wordTicket?window.wordDocumentWorkspace?.newFormula():resetNewFormula();
 window.nativeInsertWord=mode=>window.wordDocumentWorkspace?.insert(mode);
 window.nativeOpen=()=>perform(async()=>{if(wordTicket)throw Error('请先保存或取消当前 Word 编辑会话');const r=await native('open');if(!r){message('');return;}source=r;message('已读取 '+r.objects.length+' 个 MathType 对象');renderObjects();$('subtitle').textContent=r.path;if(r.objects.length)selectObject(0);else message('这个文档未找到 MathType OLE 公式。Word 自带公式和纯图片不在此列表。');});
@@ -340,7 +354,9 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   const workspaceDiscardApproved=await window.wordDocumentWorkspace?.prepareIncoming(r,documentRequestId);
   const insertionDraft=window.wordDocumentWorkspace?.takeInsertionDraft(documentRequestId);
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
-  const changedDraft=!wordNavigating&&(wordTicket?wordSessionChanged():selected?wordSessionChanged():!!mf.value.trim());
+  const detachedClean=window.wordDetachedCleanBaseline;
+  const matchesDetachedClean=!!detachedClean&&mf.value===detachedClean.latex&&JSON.stringify(window.desktopTypographyPatch?.()??null)===detachedClean.typography&&JSON.stringify(editingRuler??[])===detachedClean.ruler;
+  const changedDraft=!wordNavigating&&(wordTicket?wordSessionChanged():selected?wordSessionChanged():!matchesDetachedClean&&!!mf.value.trim());
   const sameDraftTarget=changedDraft&&wordTicket&&source?.documentIdentity&&r.documentIdentity===source.documentIdentity&&source.documentSnapshot&&r.documentSnapshot===source.documentSnapshot&&r.activeIndex===selected?.index&&/^[a-f0-9]{64}$/.test(selected?.nativeSha256??'')&&r.objects[r.activeIndex]?.nativeSha256===selected.nativeSha256;
   const draft=sameDraftTarget?{latex:mf.value,mode,ruler:editingRuler,numberFormat:$('layout-format').value,numberingRequested:selected.editorNumberingRequested,chapter:$('layout-chapter').value,section:$('layout-section').value,typography:window.desktopTypographyPatch?.(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:null;
   if(changedDraft&&!sameDraftTarget&&!workspaceDiscardApproved){const answer=await native('confirmWordSessionSwitch');if(!answer.discard){await native('wordSessionCancel',{ticket});message('已保留当前编辑；刚才打开的 Word 公式未修改。');return false;}}
@@ -348,7 +364,8 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   if(wordTicket&&wordTicket!==ticket&&!wordNavigating)await native('wordSessionCancel',{ticket:wordTicket}).catch(error=>{if(!/Unknown or expired native session/.test(error.message))throw error;});
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   clearTimeout(timer);revision++;validationRequested=false;clearTimeout(wordNavigationTimer);
-  wordNavigating=false;wordSaveQueued=false;wordOutcomeUnknown=false;window.draftOutcomeUnknown=false;wordTicket=ticket;source=r;window.wordDocumentWorkspace?.accepted(r);
+  wordNavigating=false;wordSaveQueued=false;wordOutcomeUnknown=false;window.draftOutcomeUnknown=false;window.wordDetachedCleanBaseline=null;wordTicket=ticket;source=r;window.wordDocumentWorkspace?.accepted(r);
+  if(!r.documentLoading&&!r.documentLoadFailed&&!r.numberingRefreshNeeded)window.numberingRefreshAttempt=null;
   if(changedDraft&&!sameDraftTarget&&!insertionDraft)void window.clearSavedDrafts?.().catch(()=>{});
   let sidebarSync;
   if(r.insertion){
@@ -411,7 +428,7 @@ async function loadWordDocument(ticket,initial){
       loadObjectLayout(old);
       if(pendingFormat!==null)$('layout-format').value=pendingFormat;
      }
-     window.wordDocumentWorkspace?.remember(full);await renderObjects();controls();
+     window.numberingRefreshAttempt=null;window.wordDocumentWorkspace?.remember(full);await renderObjects();controls();
      if($('message').textContent==='当前公式已就绪，正在加载文档中的其他公式…')message('已载入 Word 文档中的 '+full.objects.length+' 个公式。');
      setTimeout(()=>loadWordThumbnails(ticket,full),0);return;
     }
@@ -733,8 +750,6 @@ function publishWorkbenchState(){
   wordDocumentReadState:window.wordDocumentWorkspace?.documentReadState??null,
   wordCatalogAvailable:!!source?.catalogProof,
 
-  favorites:favorites.map((latex,id)=>({id,label:'收藏 '+(id+1),detail:'收藏公式',latex,image:workbenchFavoriteImages.get(latex)||sourceImages?.get(latex)||null,readOnly:false})),
-  categories:Object.keys(groups),templates:Object.entries(groups).flatMap(([category,items])=>items.map(([label,latex,hint],index)=>({id:category+':'+index,category,label,latex,hint:hint||''}))),
   activeCategory:[...$('categories').children].find(b=>b.classList.contains('selected'))?.textContent||'常用结构',
   fonts:workbenchFields('desktop-fonts','font'),sizes:workbenchFields('desktop-sizes','sizes'),extraSizes:workbenchFields('desktop-extra-sizes','extraSizes'),spaces:workbenchFields('desktop-spaces','spaces'),layout,
   numbering:selected?{hasDocumentContext:!!source.hasDocumentContext||!wordTicket,actualNumber:selected.layout?.numberText||null,chapter:selected.layout?.chapter??null,section:selected.layout?.section??null,equation:selected.layout?.equation??null,bookmark:selected.layout?.bookmarkName??null,referenceCount:selected.layout?.referenceCount??null,position:(source.documentPosition??selected.index)+1,total:source.documentTotal??source.objects.length,format:selected.layout?.numberFormat??null,mode:selected.layout?.mode??'unknown'}:null,
@@ -743,6 +758,19 @@ function publishWorkbenchState(){
   canSaveEdit:!$('save-edit').hidden,canArrange:!$('arrange-source').hidden,canFactoryReset:!$('desktop-factory-fonts').disabled,arrangeAll:$('arrange-all').checked,zoom:workbenchZoom,effectiveZoom:editorViewport.effectiveZoom,keyboardVisible:!!window.mathVirtualKeyboard?.visible,ruler:editingRuler??[],rulerChanged:JSON.stringify(editingRuler??[])!==JSON.stringify(selected?.ruler??[]),canUndo:canMoveEditorHistory(),canRedo:canMoveEditorHistory(true)
  };
  const delta={};for(const [key,value]of Object.entries(state)){const encoded=JSON.stringify(value);if(encoded!==workbenchLastFields.get(key)){workbenchLastFields.set(key,encoded);delta[key]=value;}}
+ if(!workbenchLastFields.has('templates')){
+  // Groups are built once per web editor load, including after a WebKit restart.
+  delta.categories=Object.keys(groups);
+  delta.templates=Object.entries(groups).flatMap(([category,items])=>items.map(([label,latex,hint],index)=>({id:category+':'+index,category,label,latex,hint:hint||''})));
+  workbenchLastFields.set('templates',true);
+ }
+ const previousFavorites=workbenchLastFields.get('favorites');
+ const favoriteImage=latex=>workbenchFavoriteImages.get(latex)||sourceImages?.get(latex)||null;
+ // Compare favorite images directly instead of serializing their base64 on every keypress.
+ if(!previousFavorites||previousFavorites.length!==favorites.length||favorites.some((latex,index)=>previousFavorites[index].latex!==latex||previousFavorites[index].image!==favoriteImage(latex))){
+  delta.favorites=favorites.map((latex,id)=>({id,label:'收藏 '+(id+1),detail:'收藏公式',latex,image:favoriteImage(latex),readOnly:false}));
+  workbenchLastFields.set('favorites',delta.favorites);
+ }
  if(sidebar.delta)delta.objectsDelta=sidebar.delta;else if(!window.sidebarPublisher)delta.objects=sidebar.objects;
  if(Object.keys(delta).length)window.webkit.messageHandlers.native.postMessage({action:'workbenchState',payload:delta});
  document.body.classList.toggle('character-mode',!!selected&&mode==='characters');

@@ -104,13 +104,22 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var wordWorkspaceTimer: Timer?
     func startWordWorkspaceObservation() {
         guard wordWorkspaceTimer == nil else { return }
-        wordWorkspaceTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+        let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.syncActiveWordWorkspace() }
         }
+        timer.tolerance = 0.2
+        wordWorkspaceTimer = timer
+    }
+    func shouldPollWordWorkspace(wordRunning: Bool) -> Bool {
+        hasWordSessionOrRequest || state.wordWorkspaceConnected || !state.openWordDocuments.isEmpty || wordRunning
     }
     func syncActiveWordWorkspace() {
         guard editorReady, let webView, editorWindow?.isVisible == true,
               deliveringWordTicket == nil, pendingWordTickets.isEmpty, !wordDocumentRequestPending, !filePanelPending else { return }
+        // Standalone editing has no Word state to poll. Keep syncing when a
+        // session or catalog is still present so Word exit can be reconciled.
+        let wordRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty
+        guard shouldPollWordWorkspace(wordRunning: wordRunning) else { return }
         // Keep the picker current while the window is visible behind Word.
         // Only a foreground editor may follow another document into an edit.
         let editorIsFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier

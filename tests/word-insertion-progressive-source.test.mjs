@@ -17,6 +17,7 @@ test('Progressive insertion opens before full serialization with an exact retain
 
 test('Insertion enrichment shares the bounded chunk reader without blocking completion or changing Selection',()=>{
  const begin=sub('Private Sub ELBeginInsertionDocumentChunks('),chunk=sub('Private Sub ELContinueDocumentChunks()'),poll=sub('Public Sub ELPollNavigation()');
+ assert.match(begin,/Saved <> mInsertionSaved Or mInsertionDocument\.FullName <> mInsertionFullName/);
  assert.match(begin,/Content\.Text <> mInsertionText/);assert.match(begin,/equations.Count <> mInsertionCount/);assert.match(begin,/KnownDocumentIdentity\(mInsertionDocument\) <> mInsertionIdentity/);
  assert.match(chunk,/ELDocumentChunkRequestToken\(\) <> token/);assert.match(chunk,/ELIPART1/);assert.match(chunk,/MathTypeBridgeQueueInsertionDocumentChunk/);assert.match(chunk,/MathTypeBridgeFailInsertionDocumentCapture/);
  assert.doesNotMatch(begin+chunk,/\.Select\b|\.Activate\b|\.Save\b|\.Content\.WordOpenXML/);

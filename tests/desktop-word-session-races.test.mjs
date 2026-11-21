@@ -73,7 +73,7 @@ test('A failed full list retries the same owner once after the draft is clean',a
  const calls=[];
  let dirty=true;
  const context=vm.createContext({window:{wordDocumentWorkspace:{
-  syncCurrent:async()=>false,select:async(index,options)=>{calls.push([index,options.reload]);return true;}
+  syncCurrent:async()=>false,select:async(index,options)=>{calls.push([index,options.reload,options.fallbackToDocument]);return true;}
  }},source:{documentIdentity:'word:1',hasDocumentContext:true,documentLoadFailed:true,documentPosition:2,documentNumberingRevision:4},
  selected:{index:0},wordTicket:'owner',busy:false,wordNavigating:false,wordOutcomeUnknown:false,wordCommitRunning:null,wordSessionChanged:()=>dirty});
  vm.runInContext(code,context);
@@ -82,7 +82,41 @@ test('A failed full list retries the same owner once after the draft is clean',a
  dirty=false;
  assert.equal(await context.window.nativeSyncWordWorkspace(),true);
  assert.equal(await context.window.nativeSyncWordWorkspace(),false);
- assert.deepEqual(calls,[[0,true]]);
+ assert.deepEqual(calls,[[0,true,true]]);
+});
+
+test('nativeSyncWordWorkspace guards against re-entrancy and retries with bounded backoff',async()=>{
+ const code=appSource.slice(appSource.indexOf('window.nativeSyncWordWorkspace=async'),appSource.indexOf('window.nativeRetryWordDocumentRead='));
+ let now=1000,releaseSync,syncCalls=0;
+ const calls=[];
+ const syncGate=new Promise(resolve=>{releaseSync=resolve;});
+ let blockSync=true;
+ const context=vm.createContext({Date:{now:()=>now},window:{wordDocumentWorkspace:{
+  syncCurrent:async()=>{syncCalls++;if(blockSync){blockSync=false;await syncGate;}return false;},
+  select:async(index,options)=>{calls.push({index,reload:options.reload,fallbackToDocument:options.fallbackToDocument,at:now});return true;},
+  refreshCurrent:async()=>true
+ }},source:{documentIdentity:'word:1',hasDocumentContext:true,documentLoadFailed:true,documentPosition:2,documentNumberingRevision:4},
+ selected:{index:0},wordTicket:'owner',busy:false,wordNavigating:false,wordOutcomeUnknown:false,wordCommitRunning:null,wordSessionChanged:()=>false});
+ vm.runInContext(code,context);
+ const first=context.window.nativeSyncWordWorkspace();
+ const concurrent=context.window.nativeSyncWordWorkspace();
+ releaseSync();
+ assert.deepEqual(await Promise.all([first,concurrent]),[true,true]);
+ assert.equal(syncCalls,1,'concurrent polls must share one in-flight sync');
+ assert.equal(calls.length,1);
+ // Still in cooldown (< 5s).
+ now=5999;assert.equal(await context.window.nativeSyncWordWorkspace(),false);assert.equal(calls.length,1);
+ // Second attempt at +5s.
+ now=6000;assert.equal(await context.window.nativeSyncWordWorkspace(),true);assert.equal(calls.length,2);
+ // Third attempt at +15s.
+ now=20999;assert.equal(await context.window.nativeSyncWordWorkspace(),false);assert.equal(calls.length,2);
+ now=21000;assert.equal(await context.window.nativeSyncWordWorkspace(),true);assert.equal(calls.length,3);
+ // Bounded: no 4th automatic retry for the same revision.
+ now=100000;assert.equal(await context.window.nativeSyncWordWorkspace(),false);assert.equal(calls.length,3);
+ // Manual refresh clears the attempt tracker and requests fallback-enabled reload.
+ assert.equal(await context.window.nativeRefreshWordWorkspace(),true);
+ assert.equal(calls.length,4);
+ assert.equal(calls[3].fallbackToDocument,true);
 });
 
 function installActualWordBrowse(context){

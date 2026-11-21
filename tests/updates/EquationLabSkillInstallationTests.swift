@@ -114,6 +114,61 @@ final class EquationLabSkillInstallationTests: XCTestCase {
         }
     }
 
+    func testIgnoresOnlyRegularDSStoreWhileProtectingHiddenFilesSymlinksAndEdits() throws {
+        try withFixture { installer in
+            let files = FileManager.default
+            let installed = try installer.install(in: installer.sharedDirectory)
+            let rootDS = installed.appendingPathComponent(".DS_Store")
+            let nestedDS = installed.appendingPathComponent("scripts/.DS_Store")
+            try Data([0, 0, 0, 1]).write(to: rootDS)
+            try Data([0, 0, 0, 2]).write(to: nestedDS)
+            XCTAssertEqual(installer.existing(at: installed), .current)
+
+            // Other hidden files must still be treated as user modifications.
+            let hiddenNote = installed.appendingPathComponent(".notes")
+            try "keep me".write(to: hiddenNote, atomically: true, encoding: .utf8)
+            XCTAssertEqual(installer.existing(at: installed), .conflict)
+            try files.removeItem(at: hiddenNote)
+            XCTAssertEqual(installer.existing(at: installed), .current)
+
+            // A symlink named .DS_Store must not be ignored.
+            try files.removeItem(at: rootDS)
+            try files.createSymbolicLink(at: rootDS, withDestinationURL: installed.appendingPathComponent("SKILL.md"))
+            XCTAssertEqual(installer.existing(at: installed), .conflict)
+            try files.removeItem(at: rootDS)
+            XCTAssertEqual(installer.existing(at: installed), .current)
+
+            // A directory named .DS_Store must not be ignored.
+            try files.createDirectory(at: rootDS, withIntermediateDirectories: false)
+            XCTAssertEqual(installer.existing(at: installed), .conflict)
+            try files.removeItem(at: rootDS)
+            XCTAssertEqual(installer.existing(at: installed), .current)
+
+            // Regular .DS_Store still permits an upgrade of an unmodified copy.
+            try Data([0, 0, 0, 3]).write(to: rootDS)
+            let updatedSkill = fixtureSkill + "\nUpgraded\n"
+            try updatedSkill.write(to: installer.source.appendingPathComponent("SKILL.md"), atomically: true, encoding: .utf8)
+            XCTAssertEqual(installer.existing(at: installed), .upgrade)
+        }
+    }
+
+    func testClientLinkStatusIsReadOnlyAndReflectsLinkedAndConflictStates() throws {
+        try withFixture { installer in
+            let files = FileManager.default
+            XCTAssertEqual(installer.clientLinkStatus(.claude), .notLinked)
+            XCTAssertEqual(installer.clientLinkStatus(.antigravity), .notLinked)
+            XCTAssertFalse(files.fileExists(atPath: installer.userHome.path))
+
+            _ = try installer.link(.claude)
+            XCTAssertEqual(installer.clientLinkStatus(.claude), .linked)
+            XCTAssertEqual(installer.clientLinkStatus(.antigravity), .notLinked)
+
+            let antigravityDir = installer.userHome.appendingPathComponent(".gemini/config/skills/equation-lab", isDirectory: true)
+            try files.createDirectory(at: antigravityDir, withIntermediateDirectories: true)
+            XCTAssertEqual(installer.clientLinkStatus(.antigravity), .conflict)
+        }
+    }
+
     private func withFixture(_ work: (EquationLabSkillInstallation) throws -> Void) throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let resources = directory.appendingPathComponent("Equation Lab.app/Contents/Resources", isDirectory: true)

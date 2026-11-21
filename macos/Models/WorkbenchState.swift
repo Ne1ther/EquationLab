@@ -1,5 +1,6 @@
 import Foundation
 import AppKit
+import CryptoKit
 
 enum InspectorTab: String, CaseIterable, Identifiable {
     case style = "样式", spacing = "排版", document = "文档"
@@ -23,18 +24,45 @@ struct SidebarFormula: Identifiable, Decodable {
     var label: String = ""
     var detail: String = ""
     var latex: String = ""
-    var image: String? = nil
+    var image: String? = nil {
+        didSet { imageCacheKey = image.map(FormulaImageCache.cacheKey(for:)) }
+    }
     var readOnly: Bool = false
     var position: Int? = nil
     var numberText: String? = nil
     var numberStatus: String? = nil
+    private var imageCacheKey: NSString? = nil
+
+    private enum CodingKeys: String, CodingKey {
+        case id, label, detail, latex, image, readOnly, position, numberText, numberStatus
+    }
+
+    init(from decoder: Decoder) throws {
+        let values = try decoder.container(keyedBy: CodingKeys.self)
+        id = try values.decode(Int.self, forKey: .id)
+        label = try values.decodeIfPresent(String.self, forKey: .label) ?? ""
+        detail = try values.decodeIfPresent(String.self, forKey: .detail) ?? ""
+        latex = try values.decodeIfPresent(String.self, forKey: .latex) ?? ""
+        let decodedImage = try values.decodeIfPresent(String.self, forKey: .image)
+        image = decodedImage
+        imageCacheKey = decodedImage.map(FormulaImageCache.cacheKey(for:))
+        readOnly = try values.decodeIfPresent(Bool.self, forKey: .readOnly) ?? false
+        position = try values.decodeIfPresent(Int.self, forKey: .position)
+        numberText = try values.decodeIfPresent(String.self, forKey: .numberText)
+        numberStatus = try values.decodeIfPresent(String.self, forKey: .numberStatus)
+    }
+
     func matchesSearch(_ query: String) -> Bool {
         let content = "\(position ?? id + 1) \(numberText ?? "") \(latex) \(label) \(detail)"
         return query.split(whereSeparator: \.isWhitespace).allSatisfy { content.localizedCaseInsensitiveContains(String($0)) }
     }
     var thumbnail: NSImage? {
         guard let image else { return nil }
-        return FormulaImageCache.shared.image(key: image)
+        return FormulaImageCache.shared.image(for: image, cacheKey: imageCacheKey)
+    }
+    fileprivate var prewarmEntry: (dataURI: String, cacheKey: NSString)? {
+        guard let image else { return nil }
+        return (image, imageCacheKey ?? FormulaImageCache.cacheKey(for: image))
     }
 }
 
@@ -59,15 +87,77 @@ private struct SidebarDelta: Decodable {
     let numberFreshness: SidebarNumberFreshness?
 }
 
-private final class FormulaImageCache {
+final class FormulaImageCache {
     static let shared = FormulaImageCache()
+    static let maxPrewarmBatch = 12
+    static let maxPendingPrewarms = 24
     private let cache: NSCache<NSString, NSImage> = { let result = NSCache<NSString, NSImage>(); result.totalCostLimit = 48 * 1024 * 1024; result.countLimit = 128; return result }()
+    private let decodeQueue = DispatchQueue(label: "app.equationlab.formula-image-cache", qos: .utility)
+    private let lock = NSLock()
+    private var pendingKeys = Set<String>()
+
+    // Cryptographic SHA-256 over the full data URI ensures compact cache keys
+    // never cross-contaminate thumbnails that share headers or byte lengths.
+    static func cacheKey(for dataURI: String) -> NSString {
+        let digest = SHA256.hash(data: Data(dataURI.utf8))
+        return Data(digest).base64EncodedString() as NSString
+    }
+
+    private static func decodeImage(from dataURI: String) -> (image: NSImage, bytes: Int)? {
+        guard let comma = dataURI.firstIndex(of: ",") else { return nil }
+        let payload = dataURI[dataURI.index(after: comma)...]
+        guard let data = Data(base64Encoded: Data(payload.utf8)),
+              let image = NSImage(data: data) else { return nil }
+        return (image, data.count)
+    }
+
     func image(key: String) -> NSImage? {
-        if let found = cache.object(forKey: key as NSString) { return found }
-        guard let comma = key.firstIndex(of: ","), let data = Data(base64Encoded: String(key[key.index(after: comma)...])) else { return nil }
-        guard let image = NSImage(data: data) else { return nil }
-        cache.setObject(image, forKey: key as NSString, cost: data.count)
-        return image
+        image(for: key, cacheKey: nil)
+    }
+
+    func image(for dataURI: String, cacheKey: NSString? = nil) -> NSImage? {
+        let resolvedKey = cacheKey ?? Self.cacheKey(for: dataURI)
+        if let found = cache.object(forKey: resolvedKey) { return found }
+        guard let decoded = Self.decodeImage(from: dataURI) else { return nil }
+        cache.setObject(decoded.image, forKey: resolvedKey, cost: decoded.bytes)
+        return decoded.image
+    }
+
+    func cachedImage(for dataURI: String, cacheKey: NSString? = nil) -> NSImage? {
+        cache.object(forKey: cacheKey ?? Self.cacheKey(for: dataURI))
+    }
+
+    func prewarm(_ items: [(dataURI: String, cacheKey: NSString)], limit: Int = maxPrewarmBatch, completion: (() -> Void)? = nil) {
+        guard limit > 0, !items.isEmpty else { completion?(); return }
+        var scheduled: [(dataURI: String, cacheKey: NSString, keyString: String)] = []
+        lock.lock()
+        for item in items {
+            if scheduled.count >= limit || pendingKeys.count >= Self.maxPendingPrewarms { break }
+            if cache.object(forKey: item.cacheKey) != nil { continue }
+            let keyString = item.cacheKey as String
+            if pendingKeys.contains(keyString) { continue }
+            pendingKeys.insert(keyString)
+            scheduled.append((item.dataURI, item.cacheKey, keyString))
+        }
+        lock.unlock()
+        guard !scheduled.isEmpty else { completion?(); return }
+        decodeQueue.async { [weak self] in
+            guard let self else { completion?(); return }
+            for item in scheduled {
+                if self.cache.object(forKey: item.cacheKey) == nil,
+                   let decoded = Self.decodeImage(from: item.dataURI) {
+                    self.cache.setObject(decoded.image, forKey: item.cacheKey, cost: decoded.bytes)
+                }
+                self.lock.lock()
+                self.pendingKeys.remove(item.keyString)
+                self.lock.unlock()
+            }
+            completion?()
+        }
+    }
+
+    func removeAllObjects() {
+        cache.removeAllObjects()
     }
 }
 
@@ -205,17 +295,22 @@ struct WorkbenchState: Decodable {
         if let v = try value("latex", String.self) { latex = v }
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
         if payload["wordInsertionEquation"] is NSNull { wordInsertionEquation = nil } else if let v = try value("wordInsertionEquation", Int.self) { wordInsertionEquation = v }
-        if let v = try value("objects", [SidebarFormula].self) { objects = v }
+        if let v = try value("objects", [SidebarFormula].self) {
+            objects = v
+            FormulaImageCache.shared.prewarm(v.compactMap(\.prewarmEntry))
+        }
         if let change = try value("objectsDelta", SidebarDelta.self) {
             if let reset = change.reset {
                 if change.generation != sidebarGeneration || change.revision > sidebarRevision {
                     guard change.baseRevision == 0, change.revision > 0,
                           Set(reset.map(\.id)).count == reset.count else { throw CocoaError(.coderInvalidValue) }
                     objects = reset; sidebarGeneration = change.generation; sidebarRevision = change.revision
+                    FormulaImageCache.shared.prewarm(reset.compactMap(\.prewarmEntry))
                 }
             } else if change.generation == sidebarGeneration && change.revision > sidebarRevision {
                 guard change.baseRevision == sidebarRevision, change.revision == sidebarRevision + 1 else { throw CocoaError(.coderInvalidValue) }
-                for row in change.upserts ?? [] {
+                let upserts = change.upserts ?? []
+                for row in upserts {
                     guard let index = objects.firstIndex(where: { $0.id == row.id }) else { throw CocoaError(.coderInvalidValue) }
                     objects[index] = row
                 }
@@ -228,6 +323,7 @@ struct WorkbenchState: Decodable {
                     }
                 }
                 sidebarRevision = change.revision
+                FormulaImageCache.shared.prewarm(upserts.compactMap(\.prewarmEntry))
             }
         }
         if let v = try value("wordDocumentLoading", Bool.self) { wordDocumentLoading = v }
@@ -236,7 +332,10 @@ struct WorkbenchState: Decodable {
         else if let v = try value("wordDocumentReadState", WordDocumentReadState.self) { wordDocumentReadState = v }
         if let v = try value("wordCatalogAvailable", Bool.self) { wordCatalogAvailable = v }
         if let v = try value("wordDocumentTotal", Int.self) { wordDocumentTotal = v }
-        if let v = try value("favorites", [SidebarFormula].self) { favorites = v }
+        if let v = try value("favorites", [SidebarFormula].self) {
+            favorites = v
+            FormulaImageCache.shared.prewarm(v.compactMap(\.prewarmEntry))
+        }
         if let v = try value("categories", [String].self) { categories = v }
         if let v = try value("templates", [FormulaTemplate].self) { templates = v }
         if let v = try value("activeCategory", String.self) { activeCategory = v }

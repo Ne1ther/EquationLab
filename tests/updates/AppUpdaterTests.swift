@@ -247,6 +247,63 @@ final class AppUpdaterTests: XCTestCase {
         restored.start();await restored.operation?.value
         XCTAssertEqual(restored.phase,.ready);XCTAssertEqual(restored.packageURL?.lastPathComponent,package.lastPathComponent)
     }
+    func testRecheckingSameSignedReleasePreservesReadyAndRecoversFromCorruptOrMissingCache() async throws {
+        let directory = try makeUpdateCache()
+        let key = Curve25519.Signing.PrivateKey(), preferences = defaults(), bytes = Data("pkg".utf8)
+        preferences.set(false, forKey: "updates.automaticDownloads")
+        let hash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
+        let payload = try JSONSerialization.data(withJSONObject: [
+            "schema": "equationlab.update.v1", "version": "0.5.8", "build": 41,
+            "architecture": "arm64", "minimumMacOS": "14.0", "filename": "Equation-Lab-0.5.8.pkg",
+            "size": bytes.count, "sha256": hash,
+            "url": "https://github.com/Ne1ther/EquationLab/releases/download/v0.5.8/Equation-Lab-0.5.8.pkg",
+            "notesZH": "更新", "notesEN": "Update"
+        ])
+        let signed = try JSONSerialization.data(withJSONObject: [
+            "schema": "equationlab.signed-update.v1",
+            "payload": payload.base64EncodedString(),
+            "signature": try key.signature(for: payload).base64EncodedString()
+        ])
+        let pkgRequests = UpdateRequestCounter()
+        let updater = AppUpdater(defaults: preferences, installed: ("0.5.7", 40), fetcher: { url, _, progress in
+            let file = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            if url.path.hasSuffix(".pkg") {
+                pkgRequests.increment()
+                try bytes.write(to: file)
+                progress(1)
+            } else {
+                try signed.write(to: file)
+            }
+            return file
+        }, verificationKey: key.publicKey.rawRepresentation.base64EncodedString(), downloadDirectory: directory)
+
+        updater.check(); await updater.operation?.value
+        XCTAssertEqual(updater.phase, .available)
+        updater.download(); await updater.operation?.value
+        XCTAssertEqual(updater.phase, .ready)
+        XCTAssertEqual(pkgRequests.count, 1)
+        let package = try XCTUnwrap(updater.packageURL)
+
+        // Rechecking the same signed release re-verifies the binary and preserves .ready without re-downloading.
+        updater.check(); await updater.operation?.value
+        XCTAssertEqual(updater.phase, .ready)
+        XCTAssertEqual(updater.packageURL, package)
+        XCTAssertEqual(updater.progress, 1)
+        XCTAssertEqual(pkgRequests.count, 1)
+
+        // Tampering with the cached package must fail re-verification, drop the bad file, and return to .available.
+        try Data("bad".utf8).write(to: package)
+        updater.check(); await updater.operation?.value
+        XCTAssertEqual(updater.phase, .available)
+        XCTAssertNil(updater.packageURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: package.path))
+        XCTAssertEqual(pkgRequests.count, 1)
+
+        // Missing cache also stays .available on recheck.
+        updater.check(); await updater.operation?.value
+        XCTAssertEqual(updater.phase, .available)
+        XCTAssertNil(updater.packageURL)
+    }
     func testLiveGitHubDownloadAndRedirects() async throws {
         guard ProcessInfo.processInfo.environment["EQUATIONLAB_LIVE_UPDATE_TEST"] == "1" else { throw XCTSkip("Opt-in live network test") }
         let package=try await AppUpdater.fetch(URL(string:"https://github.com/Ne1ther/EquationLab/releases/download/v0.5.7/Equation-Lab-0.5.7.pkg")!,limit:80_025_826)
