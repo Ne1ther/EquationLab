@@ -20,6 +20,7 @@ import {createDocumentSnapshotCache} from './document-snapshot-cache.mjs';
 import JSZip from 'jszip';
 
 const drafts=createDraftStore(),draftBases=new Map();
+const thumbnailSize={maxWidth:640,maxHeight:240};
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
 // Word stages immutable snapshots. Parse each snapshot once, including while
@@ -268,7 +269,7 @@ export async function desktopRequest(request,execution={}) {
    const run=async()=>{
     if(endedWordTickets.has(payload.ticket))throw abortedThumbnailError();
     if(thumbnailCache.has(o.nativeSha256))return thumbnailCache.get(o.nativeSha256);
-    const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
+    const rendered=await renderNative(o.ole,thumbnailSize);
     return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
    };
    return execution.scheduleThumbnail?execution.scheduleThumbnail(run):run();
@@ -337,7 +338,7 @@ export async function desktopRequest(request,execution={}) {
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
   const failedThumbnails=new Set();
   const render=execution.renderThumbnail??(async o=>{
-   const rendered=await renderNative(o.ole,{maxWidth:640,maxHeight:240});
+   const rendered=await renderNative(o.ole,thumbnailSize);
    return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
   });
   const thumbnail=async o=>{
@@ -415,7 +416,9 @@ export async function desktopRequest(request,execution={}) {
   let ole;
   if(payload.source){const {objects}=await inspectDocx(await readFile(payload.source.path)),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
   else ole=makeNewOle(payload.latex,payload.typography);
-  ole=applyRuler(ole,payload);const p=await renderNative(ole);return {svg:p.svg,png:p.png.toString('base64'),nativeSha256:hash(inspectOle(ole).native)};
+  ole=applyRuler(ole,payload);
+  if(payload.favoriteThumbnail===true){const p=await renderNative(ole,thumbnailSize);return {png:p.png.toString('base64')};}
+  const p=await renderNative(ole);return {svg:p.svg,png:p.png.toString('base64'),nativeSha256:hash(inspectOle(ole).native)};
  }
  throw Error('未知操作：'+action);
 }
@@ -437,6 +440,7 @@ if(await isMainModule(import.meta.url)){
    // Rendering and filesystem mutations retain their original serial order.
    const isPreview=['validate','editPreview'].includes(request.action);
    const isThumbnailBatch=request.action==='wordSessionThumbnails';
+   const isFavoriteThumbnail=request.action==='preview'&&request.payload?.favoriteThumbnail===true;
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;
    const execution=control.has(request.action)||isThumbnailBatch?(async()=>{
@@ -448,7 +452,7 @@ if(await isMainModule(import.meta.url)){
     const totalMs=performance.now()-before;
     timing={queuedMs,executionMs:Math.max(0,totalMs-queuedMs),elapsedMs:performance.now()-start,outcome:result.ok?'fulfilled':'rejected'};
     return result;
-   })():rendering.enqueue(run,{priority:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
+   })():rendering.enqueue(run,{priority:isFavoriteThumbnail?2:isPreview?1:0,key,checkpointPreview:isPreview,onTiming:value=>{timing=value;}});
    const task=execution.then(result=>{if(result.superseded)result={ok:false,cancelled:true,superseded:true};process.stdout.write(JSON.stringify({id,...result,elapsedMs:performance.now()-start,timing})+'\n');});
    inflight.add(task);task.finally(()=>inflight.delete(task));
   }

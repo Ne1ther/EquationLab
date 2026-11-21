@@ -145,7 +145,7 @@ test('production worker serves a preview inside readonly preflight while copy wr
  assert.deepEqual(await readFile(join(dir,'first.eqp')),await readFile(join(dir,'last.eqp')));
 });
 
-test('thumbnail batch yields between thumbnails to two FIFO writes and a live preview without concurrent renders',async t=>{
+test('sidebar and favorite thumbnails yield to two FIFO writes and a live preview without concurrent renders',async t=>{
  const dir=await mkdtemp(join(tmpdir(),'equationlab-worker-thumb-yield-'));t.after(()=>rm(dir,{recursive:true,force:true}));
  const file=join(dir,'snapshot.docx'),bytes=await createDocx([{latex:'a^2+b^2=c^2'},{latex:'\\frac{x+1}{y+2}'},{latex:'\\sqrt{z^3+1}'}],{fragment:true});
  await writeFile(file,bytes);
@@ -186,16 +186,20 @@ test('thumbnail batch yields between thumbnails to two FIFO writes and a live pr
  assert.equal((await worker.send({id:'warm',action:'validate',payload:{latex:'x+1'}})).ok,true);
  const thumbs=worker.send({id:'thumbs',action:'wordSessionThumbnails',payload:{ticket,indices:[0,1,2],documentIdentity:'test:yield',documentSnapshot:7}});
  await worker.marker('EVENT:thumb-0:start:active=1');
+ const favorite=worker.send({id:'favorite',action:'preview',payload:{latex:'x+1',favoriteThumbnail:true}});
  const write1=worker.send({id:'write-1',action:'preferencesExport',payload:{output:join(dir,'w1.eqp'),typography:factoryTypography()}});
  const preview=worker.send({id:'live-preview',action:'validate',coalescePreview:true,payload:{previewOnly:true,latex:'\\alpha+\\beta'}});
  const write2=worker.send({id:'write-2',action:'preferencesExport',payload:{output:join(dir,'w2.eqp'),typography:factoryTypography()}});
- const [w1,p,w2,th]=await Promise.all([write1,preview,write2,thumbs]);
- for(const reply of [w1,p,w2,th])assert.equal(reply.ok,true,reply.error);
+ const [w1,p,w2,th,fav]=await Promise.all([write1,preview,write2,thumbs,favorite]);
+ for(const reply of [w1,p,w2,th,fav])assert.equal(reply.ok,true,reply.error);
  assert.equal(th.data.images.length,3);
  assert.ok(th.data.images.every(item=>typeof item.image==='string'&&item.image.startsWith('data:image/png;base64,')));
+ assert.deepEqual(Object.keys(fav.data),['png']);
+ assert.ok(fav.data.png);
  // Writes stay FIFO and both writes + live preview finish before the thumbnail batch finishes.
  assert.ok(worker.order.indexOf('write-1')<worker.order.indexOf('write-2'),worker.order.join(','));
  assert.ok(worker.order.indexOf('write-2')<worker.order.indexOf('live-preview'),worker.order.join(','));
+ assert.ok(worker.order.indexOf('live-preview')<worker.order.indexOf('favorite'),worker.order.join(','));
  assert.ok(worker.order.indexOf('live-preview')<worker.order.indexOf('thumbs'),worker.order.join(','));
  // Verify preview ran strictly between thumb-0 and thumb-1, with max concurrency 1.
  await worker.marker('EVENT:thumb-2:end:maxActive=1');

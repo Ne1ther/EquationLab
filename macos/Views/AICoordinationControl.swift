@@ -1,6 +1,93 @@
 import SwiftUI
 import AppKit
 
+/// Defers a follow-up presentation (sheet or open panel) until after a popover
+/// closes so macOS AppKit does not start `beginSheet` or modal panel setup in
+/// the same transaction as `NSPopover` dismissal.
+@MainActor
+final class PopoverActionHandoff: ObservableObject {
+    typealias Scheduler = @MainActor (_ delayNanoseconds: UInt64, _ work: @escaping @MainActor () -> Void) -> () -> Void
+
+    private let postDismissDelayNanoseconds: UInt64
+    private let fallbackDelayNanoseconds: UInt64
+    private let schedule: Scheduler
+    private var pendingAction: (() -> Void)?
+    private var cancelFallback: (() -> Void)?
+    private var cancelDelivery: (() -> Void)?
+
+    init(
+        postDismissDelayNanoseconds: UInt64 = 50_000_000,
+        fallbackDelayNanoseconds: UInt64 = 350_000_000,
+        schedule: @escaping Scheduler = PopoverActionHandoff.defaultSchedule
+    ) {
+        self.postDismissDelayNanoseconds = postDismissDelayNanoseconds
+        self.fallbackDelayNanoseconds = fallbackDelayNanoseconds
+        self.schedule = schedule
+    }
+
+    var hasPendingAction: Bool { pendingAction != nil }
+
+    func trigger(dismissPopover: () -> Void, action: @escaping () -> Void) {
+        guard pendingAction == nil else {
+            dismissPopover()
+            return
+        }
+        pendingAction = action
+        cancelDelivery?()
+        cancelDelivery = nil
+        cancelFallback?()
+        cancelFallback = schedule(fallbackDelayNanoseconds) { [weak self] in
+            self?.deliverIfPending()
+        }
+        dismissPopover()
+    }
+
+    func popoverDidAppear() {
+        cancel()
+    }
+
+    func popoverDidDisappear() {
+        guard pendingAction != nil else { return }
+        cancelFallback?()
+        cancelFallback = nil
+        cancelDelivery?()
+        cancelDelivery = schedule(postDismissDelayNanoseconds) { [weak self] in
+            self?.deliverIfPending()
+        }
+    }
+
+    func cancel() {
+        pendingAction = nil
+        cancelFallback?()
+        cancelFallback = nil
+        cancelDelivery?()
+        cancelDelivery = nil
+    }
+
+    private func deliverIfPending() {
+        cancelFallback?()
+        cancelFallback = nil
+        cancelDelivery?()
+        cancelDelivery = nil
+        guard let action = pendingAction else { return }
+        pendingAction = nil
+        action()
+    }
+
+    static func defaultSchedule(delayNanoseconds: UInt64, work: @escaping @MainActor () -> Void) -> () -> Void {
+        let task = Task { @MainActor in
+            if delayNanoseconds > 0 {
+                try? await Task.sleep(nanoseconds: delayNanoseconds)
+            } else {
+                await Task.yield()
+            }
+            guard !Task.isCancelled else { return }
+            work()
+        }
+        return { task.cancel() }
+    }
+}
+
 struct AICoordinationControl: View {
     let english: Bool
     let openSkillSetup: () -> Void
@@ -8,12 +95,14 @@ struct AICoordinationControl: View {
     @State private var showingPanel = false
     @State private var copied = false
     @State private var sweep = 0
+    @StateObject private var handoff = PopoverActionHandoff()
 
     private var spectrum: [Color] { [.cyan, .blue, .purple, .pink, .orange] }
 
     var body: some View {
         Button {
             copied = false
+            if !showingPanel { handoff.cancel() }
             showingPanel.toggle()
             if showingPanel && !reduceMotion { sweep += 1 }
         } label: {
@@ -30,6 +119,7 @@ struct AICoordinationControl: View {
         .help(label("使用 Equation Lab Skill", "Use Equation Lab Skill"))
         .accessibilityLabel(label("AI 技能", "AI Skills"))
         .popover(isPresented: $showingPanel, arrowEdge: .bottom) { panel }
+        .onDisappear { handoff.cancel() }
         .task {
             if !reduceMotion && sweep == 0 { sweep += 1 }
         }
@@ -75,13 +165,16 @@ struct AICoordinationControl: View {
                 }
                 Spacer(minLength: 4)
                 Button(label("安装或导出 Skill…", "Install or Export Skill…")) {
-                    showingPanel = false
-                    openSkillSetup()
+                    handoff.trigger(dismissPopover: { showingPanel = false }) {
+                        openSkillSetup()
+                    }
                 }
             }
         }
         .padding(16)
         .frame(width: 330, alignment: .leading)
+        .onAppear { handoff.popoverDidAppear() }
+        .onDisappear { handoff.popoverDidDisappear() }
     }
 
     private func label(_ zh: String, _ en: String) -> String { english ? en : zh }

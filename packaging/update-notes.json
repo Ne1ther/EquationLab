@@ -1,5 +1,5 @@
 {
-  "version": "0.7.4",
-  "zh": "• 加快未保存的长 Word 文档读取，缩略图后台生成时优先响应公式编辑和写回。\n• 改善公式内容和编号一起更新时的定位，以及编号变更后的自动刷新。\n• 修复标尺拖拽误删和文字输入撤销，优化更新包复用与 AI Skill 链接状态。",
-  "en": "• Loads unsaved Word documents faster and prioritizes editing and saving over thumbnails.\n• Improves target selection when saving equation content and numbering together, and automatically refreshes numbering when needed.\n• Fixes ruler drag and text undo, and improves update package reuse and AI Skill link status."
+  "version": "0.7.5",
+  "zh": "• 修复 Word 保存后重新打开公式时偶尔出现的旧编号，结束编辑后会自动刷新。\n• 修复 AI Skill 面板卡顿。手工添加的链接会显示为「待核验」，连接说明和导出可直接打开。\n• 减少空闲查询和收藏缩略图的开销，改善部分 Word 文档的编号与排版设置读取。",
+  "en": "• Fixes stale equation numbers when reopening a formula after saving in Word. Numbering refreshes automatically when editing ends.\n• Fixes stalls in the AI Skill panel. Manual links are shown as unverified, and setup instructions and export remain available.\n• Reduces idle polling and favorite thumbnail overhead, and improves how numbering and layout settings are read in some Word documents."
 }

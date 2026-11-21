@@ -616,3 +616,40 @@ test('A full Word snapshot cannot clear a newer observed numbering revision',asy
  assert.equal(context.source.numberingRefreshNeeded,true);
  assert.equal(context.window.wordDocumentWorkspace.visibleSource(null).numberingRefreshNeeded,true);
 });
+
+test('A lagging saved package retains the acknowledged number through list hydration and metadata polling',async()=>{
+ const workspaceCode=await readFile(new URL('../desktop/word-document-workspace.js',import.meta.url),'utf8');
+ const wiring=appSource.slice(appSource.indexOf('window.wordDocumentWorkspace=window.createWordDocumentWorkspace'),appSource.indexOf('window.nativeResumeWordDocument='));
+ const ticket='c'.repeat(64),identity='word:1:5',nativeSha256='d'.repeat(64),oldLayout={mode:'numbered-right',numberFormat:'(#C1.#E1)',numberText:'(2.3)',chapter:2,equation:3};
+ const rows=Array.from({length:112},(_,index)=>({index,latex:'x',nativeSha256}));
+ rows[2].layout=oldLayout;
+ const source={hasDocumentContext:true,documentIdentity:identity,documentName:'QA.docx',documentSnapshot:7,activeIndex:2,documentNumberingRevision:3,objects:rows};
+ const owner={...rows[2],index:0,editorBaseline:'x',editorNumberFormatBaseline:'(#C1-#E1)'};
+ const initial={...source,documentSnapshot:8,documentNumberingRevision:4,documentLoading:true,documentPosition:2,documentTotal:112,activeIndex:0,wordNumberingSupported:true,objects:[owner]};
+ const full={...source,wordTicket:ticket,documentSnapshot:9,documentNumberingRevision:4,documentContext:{count:112},objects:rows.map(row=>({...row}))};
+ const {context}=createEditor(async action=>{
+  if(action==='wordSessionDocument')return {state:'available',document:full};
+  if(action==='wordWorkspaceStatus')return {connected:true,active:{identity,name:'QA.docx'},documents:[{identity,name:'QA.docx',numberingRevision:4}]};
+  return {};
+ });
+ let displayedNumber;
+ Object.assign(context,{wordTicket:ticket,source:initial,selected:owner,validationRunning:null,valid:false,loadObjectLayout:row=>{displayedNumber=row.layout.numberText;}});
+ context.mf.value='x';
+ context.$('layout-format').value='(#C1-#E1)';
+ vm.runInContext(workspaceCode+'\n'+wiring,context);
+ const workspace=context.window.wordDocumentWorkspace;
+ workspace.rememberAfterSave(source,2,{documentIdentity:identity,documentSnapshot:7,index:2,previousNativeSha256:nativeSha256,nativeSha256,numberingChanged:true,numberingLocal:true},'x',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)'});
+ await workspace.prepareIncoming(initial);
+ workspace.accepted(initial);
+ const attempt={identity,revision:4,position:2,count:1};
+ context.window.numberingRefreshAttempt=attempt;
+ await context.loadWordDocument(ticket,initial);
+ await workspace.refreshList();
+ assert.equal(context.source,full);
+ assert.equal(context.source.objects.length,112);
+ assert.equal(displayedNumber,'(2-3)');
+ assert.equal(workspace.visibleSource(null).objects[2].layout.numberText,'(2-3)');
+ assert.equal(context.source.numberingRefreshNeeded,true);
+ assert.equal(workspace.visibleSource(null).numberingRefreshNeeded,true);
+ assert.equal(context.window.numberingRefreshAttempt,attempt);
+});

@@ -252,6 +252,38 @@ test('Direct Word opens reuse a confirmed format only for the same live owner',a
  }
 });
 
+test('A full snapshot taken while Word is saving cannot roll back a confirmed number',()=>{
+ for(const variant of ['pre-save package','lagging revision','confirmed package','external revision','another digest','changed counters','different number','expired']){
+  const e=setup();let now=0;e.api.now=()=>now;
+  const source={...document(),insertion:false,documentNumberingRevision:3};
+  const oldLayout={mode:'numbered-right',numberFormat:'(#C1.#E1)',numberText:'(2.1)',chapter:2,equation:1};
+  source.objects[0].layout=oldLayout;
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:17,index:0,previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true,numberingLocal:true};
+  e.workspace.rememberAfterSave(source,0,ack,'x+1',{format:'(#C1-#E1)',side:'right',previewText:'(2-1)'});
+  now=variant==='expired'?20000:1000;
+  const fresh={...source,documentSnapshot:18,activeIndex:0,documentNumberingRevision:variant==='external revision'?5:variant==='lagging revision'?3:4,
+   objects:source.objects.map(row=>({...row,layout:row.layout&&{...row.layout}}))};
+  const row=fresh.objects[0];
+  if(variant==='confirmed package')Object.assign(row.layout,{numberFormat:'(#C1-#E1)',numberText:'(2-1)'});
+  if(variant==='another digest')row.nativeSha256='e'.repeat(64);
+  if(variant==='changed counters')row.layout.chapter=3;
+  if(variant==='different number')row.layout.numberText='[2.1]';
+  const isStale=variant==='pre-save package'||variant==='lagging revision';
+  const incomingText=row.layout.numberText;
+  e.workspace.accepted(fresh);
+  assert.equal(row.layout.numberText,isStale?'(2-1)':incomingText,variant);
+  assert.equal(!!fresh.numberingReadbackPending,isStale,variant);
+  assert.equal(!!e.workspace.visibleSource(null).numberingRefreshNeeded,isStale,variant);
+  assert.equal(fresh.objects[1].layout,undefined,variant);
+  if(!isStale)continue;
+  const corrected={...source,documentSnapshot:19,activeIndex:0,documentNumberingRevision:4,
+   objects:[{...source.objects[0],layout:{...oldLayout,numberFormat:'(#C1-#E1)',numberText:'(2-1)'}},source.objects[1]]};
+  e.workspace.accepted(corrected);
+  assert.ok(!corrected.numberingReadbackPending&&!corrected.numberingRefreshNeeded,variant);
+  assert.equal(e.workspace.visibleSource(null).objects[0].layout.numberText,'(2-1)',variant);
+ }
+});
+
 test('A scoped numbering receipt rebinds only the same cached row with unchanged Native',async()=>{
  for(const variant of ['verified','success published before receipt','wrong snapshot','wrong ordinal','changed bytes','another revision']){
   const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
@@ -620,6 +652,27 @@ test('A Word draft stays visible and offers a confirmed switch to the other docu
  discard=true;assert.equal(await e.workspace.switchToCurrent(),true);assert.equal(e.calls.filter(c=>c.action==='confirmWordSessionSwitch').length,2);
  const request=e.calls.find(c=>c.action==='wordDocumentOpen');assert.deepEqual(JSON.parse(JSON.stringify(request.payload)),{});
  assert.equal(await e.workspace.prepareIncoming({...old,documentIdentity:'B',documentName:'B.docx',insertion:false},requestId),true);
+});
+
+test('An old switch confirmation cannot detach a newer Word edit or erase its cache',async()=>{
+ const e=setup(),old={...document(),documentIdentity:'A',insertion:false},newer={...document(),documentIdentity:'B',documentSnapshot:18,insertion:false};
+ const confirmation=deferred(),started=deferred();
+ e.state.source=old;e.state.wordTicket=ticket;e.state.draftChanged=true;e.workspace.accepted(old);
+ await confirmPublished(e,old);
+ e.behavior(async action=>{
+  if(action==='wordWorkspaceStatus')return workspaceStatus(2,'B','B.docx');
+  if(action==='confirmWordSessionSwitch'){started.resolve();return confirmation.promise;}
+ });
+ assert.equal(await e.workspace.syncCurrent(),false);
+ const switching=e.workspace.switchToCurrent();await started.promise;
+ const newerTicket='f'.repeat(64);
+ e.state.source=newer;e.state.wordTicket=newerTicket;e.workspace.accepted(newer);
+ confirmation.resolve({discard:true});
+ assert.equal(await switching,false);
+ assert.equal(e.state.source,newer);
+ assert.equal(e.state.wordTicket,newerTicket);
+ assert.equal(e.workspace.visibleSource(null).documentSnapshot,18);
+ assert.equal(e.calls.some(({action})=>action==='detach'||action==='wordDocumentOpen'),false);
 });
 
 test('Standalone drafts are not taken over automatically by another open Word document',async()=>{

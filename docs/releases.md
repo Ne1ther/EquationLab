@@ -1,5 +1,17 @@
 # 版本记录
 
+## 0.7.5 · build109
+
+- 修复 Word 保存后重新打开公式时偶尔出现的旧编号，结束编辑后会自动刷新。
+- 修复 AI Skill 面板卡顿。手工添加的链接会显示为「待核验」，连接说明和导出可直接打开。
+- 减少空闲查询和收藏缩略图的开销，改善部分 Word 文档的编号与排版设置读取。
+
+- Fixes stale equation numbers when reopening a formula after saving in Word. Numbering refreshes automatically when editing ends.
+- Fixes stalls in the AI Skill panel. Manual links are shown as unverified, and setup instructions and export remain available.
+- Reduces idle polling and favorite thumbnail overhead, and improves how numbering and layout settings are read in some Word documents.
+
+[下载 0.7.5 · Download 0.7.5](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.5)
+
 ## 0.7.4 · build108
 
 - 加快未保存的长 Word 文档读取，缩略图后台生成时优先响应公式编辑和写回。

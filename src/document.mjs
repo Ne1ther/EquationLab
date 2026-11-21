@@ -13,7 +13,7 @@ import {makeNewOle} from './new-formula.mjs';
 import {equationLayout, equationReference, chapterBreak, standaloneNumber,previewNumberFormat} from './layout.mjs';
 import {readTypography,patchTypography} from './typography-native.mjs';
 import {renderNative,rasterizeNativeSvg} from './font-renderer.mjs';
-import {scanWordNumberingPart} from './document-audit.mjs';
+import {resolveDocxPart,scanWordNumberingPart} from './document-audit.mjs';
 import {documentGeometry} from './document-geometry.mjs';
 
 let genericPreviewContext;
@@ -137,6 +137,13 @@ function parseXml(text) {
   if(errors.length) throw Error(errors.join('; ')); return doc;
 }
 function partPath(target, source='word/document.xml') { const p = new URL(target,'https://local/'+source).pathname.slice(1); if(p.includes('..')) throw Error('Invalid relationship'); return p; }
+function relatedMetadataPart(zip,rels,owner,type,fallback){
+ const links=Array.from(rels?.getElementsByTagNameNS(NS.rels,'Relationship')??[]).filter(node=>node.getAttribute('Type')===NS.r+'/'+type);
+ if(!links.length)return zip.file(fallback);
+ if(links.length!==1||links[0].getAttribute('TargetMode')==='External')return null;
+ try{return zip.file(resolveDocxPart(links[0].getAttribute('Target'),owner));}
+ catch{return null;}
+}
 function fieldCodes(paragraph){
   const result=Array.from(paragraph.getElementsByTagNameNS(NS.w,'fldSimple')).map(f=>f.getAttributeNS(NS.w,'instr'));
   let code='',open=false;
@@ -245,12 +252,14 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   const doc=parseXml(await zip.file(mainPart).async('string'));
   if(checkpoint)await checkpoint();
   const objects = [];
+  let mainRelationships=null;
   const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
   for (const part of parts) {
   const partDoc=part===mainPart?doc:parseXml(await zip.file(part).async('string'));
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
   if(!zip.file(relPart)) continue;
   const rels = parseXml(await zip.file(relPart).async('string'));
+  if(part===mainPart)mainRelationships=rels;
   const numberingScan=nativeIndexOnly?null:scanWordNumberingPart(partDoc,part);
   if(checkpoint)await checkpoint();
   const references=new Map();if(!nativeIndexOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
@@ -293,8 +302,9 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   }
   }
   let numberFormat=null,numberingRevision=0;
-  if(zip.file('word/settings.xml')){
-    const settings=parseXml(await zip.file('word/settings.xml').async('string'));
+  const settingsEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'settings','word/settings.xml');
+  if(settingsEntry){
+    const settings=parseXml(await settingsEntry.async('string'));
     const variables=Array.from(settings.getElementsByTagNameNS(NS.w,'docVar'));
     const revision=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberingRevision')?.getAttributeNS(NS.w,'val');
     if(revision&&/^\d+$/.test(revision)&&Number(revision)<=2147483646)numberingRevision=Number(revision);
@@ -302,9 +312,10 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
     if(variable){const value=variable.getAttributeNS(NS.w,'val');try{previewNumberFormat(value);numberFormat=value;}catch{/* Unknown document settings never become a write instruction. */}}
   }
   const legacyNumbers=objects.some(object=>object.layout?.bookmarkName&&object.layout.numberingFamily!=='mathtype');
-  if((numberFormat===null||!legacyNumbers)&&zip.file('docProps/custom.xml')){
+  const customEntry=relatedMetadataPart(zip,root,'_root.xml','custom-properties','docProps/custom.xml');
+  if((numberFormat===null||!legacyNumbers)&&customEntry){
    let custom;
-   try{custom=parseXml(await zip.file('docProps/custom.xml').async('string'));}
+   try{custom=parseXml(await customEntry.async('string'));}
    catch(error){
     // The full inspector may legitimately ignore this part when an Equation
     // Lab numbering default is already authoritative. Preserve that exact
@@ -380,15 +391,18 @@ export function sharedNumberRangeNodes(object,paragraph,scan){
  * range operation and are rejected here rather than discarded. */
 export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFamily='equationlab'}={}) {
   if(!['equationlab','mathtype'].includes(defaultNumberingFamily))throw Error('Invalid numbering family');
-  const {zip,objects}=await inspectDocx(buffer),targets=indices??objects.map(o=>o.index);
+  const {zip,objects,mainPart}=await inspectDocx(buffer),targets=indices??objects.map(o=>o.index);
   const documentFamily=objects.some(o=>o.layout.bookmarkName&&o.layout.numberingFamily!=='mathtype')?'equationlab':objects.some(o=>o.layout.numberingFamily==='mathtype')?'mathtype':defaultNumberingFamily;
   if(!Array.isArray(targets)||!targets.length||new Set(targets).size!==targets.length)throw Error('请选择互不重复的公式');
   const serializer=new XMLSerializer(),changedParts=new Map();
   const existingBookmarks=new Set(),existingBookmarkIds=new Set();
   for(const o of objects)for(const b of Array.from(o.partDoc.getElementsByTagNameNS(NS.w,'bookmarkStart'))){existingBookmarks.add(b.getAttributeNS(NS.w,'name'));existingBookmarkIds.add(b.getAttributeNS(NS.w,'id'));}
   const numberingScans=new WeakMap();
-  const styles=zip.file('word/styles.xml')?parseXml(await zip.file('word/styles.xml').async('string')):null;
-  const settings=zip.file('word/settings.xml')?parseXml(await zip.file('word/settings.xml').async('string')):null;
+  const mainRelationships=objects.find(o=>o.mainDocument)?.rels;
+  const stylesEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'styles','word/styles.xml');
+  const settingsEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'settings','word/settings.xml');
+  const styles=stylesEntry?parseXml(await stylesEntry.async('string')):null;
+  const settings=settingsEntry?parseXml(await settingsEntry.async('string')):null;
   const geometries=new WeakMap();
   let first=true;
   for(const index of [...targets].sort((a,b)=>a-b)) {
@@ -442,8 +456,10 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
   }
   for(const [name,doc]of changedParts)zip.file(name,serializer.serializeToString(doc));
   // Ensure the style exists without replacing any of the user's other styles.
-  const stylePath='word/styles.xml';
-  if(zip.file(stylePath)){const styles=parseXml(await zip.file(stylePath).async('string'));if(!Array.from(styles.getElementsByTagNameNS(NS.w,'style')).some(n=>n.getAttributeNS(NS.w,'styleId')==='EquationLab')){styles.documentElement.appendChild(styles.importNode(parseXml(`<root xmlns:w="${NS.w}">${equationStyle}</root>`).documentElement.firstChild,true));zip.file(stylePath,serializer.serializeToString(styles));}}
+  if(styles&&!Array.from(styles.getElementsByTagNameNS(NS.w,'style')).some(n=>n.getAttributeNS(NS.w,'styleId')==='EquationLab')){
+    styles.documentElement.appendChild(styles.importNode(parseXml(`<root xmlns:w="${NS.w}">${equationStyle}</root>`).documentElement.firstChild,true));
+    zip.file(stylesEntry.name,serializer.serializeToString(styles));
+  }
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 

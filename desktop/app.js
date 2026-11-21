@@ -75,7 +75,7 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
   const document=documents.find(item=>item.identity===source.documentIdentity);
   if(!document)return;
   if(Number.isSafeInteger(document.numberingRevision)&&Number.isSafeInteger(source.documentNumberingRevision)){
-   const stale=document.numberingRevision!==source.documentNumberingRevision;
+   const stale=!!source.numberingReadbackPending||document.numberingRevision!==source.documentNumberingRevision;
    if(stale!==!!source.numberingRefreshNeeded){
     source.numberingRefreshNeeded=stale;
     if(stale&&!source.insertion&&wordSessionChanged())message('Word 中的编号已更新；当前草稿已保留。结束当前编辑后会重新读取编号。');
@@ -422,13 +422,16 @@ async function loadWordDocument(ticket,initial){
      if(!current()||wordOutcomeUnknown)return;
      const savedLayout=initial.savedNumberingLayout;
      const pendingFormat=savedLayout&&$('layout-format').value!==old.editorNumberFormatBaseline?$('layout-format').value:null;
+     carryWordNumberingRevision(initial,full);
+     window.wordDocumentWorkspace?.reconcileNumberingReadback?.(full);
      const baseline=old.editorBaseline;Object.assign(old,owner,{editorBaseline:baseline});full.objects[full.activeIndex]=old;
-     carryWordNumberingRevision(initial,full);source=full;selected=old;if(valid)validatedFormulaKey=formulaKey();
+     source=full;selected=old;if(valid)validatedFormulaKey=formulaKey();
      if(savedLayout||initial.layoutBaseline!==undefined&&initial.layoutBaseline===JSON.stringify(wordLayout())){
       loadObjectLayout(old);
       if(pendingFormat!==null)$('layout-format').value=pendingFormat;
      }
-     window.numberingRefreshAttempt=null;window.wordDocumentWorkspace?.remember(full);await renderObjects();controls();
+     if(!full.numberingRefreshNeeded)window.numberingRefreshAttempt=null;
+     window.wordDocumentWorkspace?.remember(full);await renderObjects();controls();
      if($('message').textContent==='当前公式已就绪，正在加载文档中的其他公式…')message('已载入 Word 文档中的 '+full.objects.length+' 个公式。');
      setTimeout(()=>loadWordThumbnails(ticket,full),0);return;
     }
@@ -768,6 +771,7 @@ function publishWorkbenchState(){
  const favoriteImage=latex=>workbenchFavoriteImages.get(latex)||sourceImages?.get(latex)||null;
  // Compare favorite images directly instead of serializing their base64 on every keypress.
  if(!previousFavorites||previousFavorites.length!==favorites.length||favorites.some((latex,index)=>previousFavorites[index].latex!==latex||previousFavorites[index].image!==favoriteImage(latex))){
+  for(const latex of workbenchFavoriteImages.keys())if(!favorites.includes(latex))workbenchFavoriteImages.delete(latex);
   delta.favorites=favorites.map((latex,id)=>({id,label:'收藏 '+(id+1),detail:'收藏公式',latex,image:favoriteImage(latex),readOnly:false}));
   workbenchLastFields.set('favorites',delta.favorites);
  }
@@ -787,7 +791,7 @@ function favoriteSourceImages(){
 }
 async function refreshFavoriteThumbnails(sourceImages){
  if(workbenchFavoriteRenderRunning)return;
- const missing=favorites.filter(latex=>!workbenchFavoriteImages.has(latex)&&!sourceImages?.has(latex));
+ const currentFavorites=favorites,missing=currentFavorites.filter(latex=>!workbenchFavoriteImages.has(latex)&&!sourceImages?.has(latex));
  if(!missing.length)return;
  workbenchFavoriteRenderRunning=true;
  try{
@@ -795,12 +799,16 @@ async function refreshFavoriteThumbnails(sourceImages){
    if(validationPending||validationRunning)break;
    await new Promise(resolve=>setTimeout(resolve,24));
    if(validationPending||validationRunning)break;
+   if(!favorites.includes(latex))continue;
    // One preview process at a time; unsupported favorites get a stable fallback.
-   try{const result=await native('preview',{latex});workbenchFavoriteImages.set(latex,result.png?'data:image/png;base64,'+result.png:'');}
-   catch{workbenchFavoriteImages.set(latex,'');}
+   let image='';
+   try{const result=await native('preview',{latex,favoriteThumbnail:true});if(result?.png)image='data:image/png;base64,'+result.png;}
+   catch{}
+   if(!favorites.includes(latex))continue;
+   workbenchFavoriteImages.set(latex,image);
    requestWorkbenchSync();
   }
- }finally{workbenchFavoriteRenderRunning=false;}
+ }finally{workbenchFavoriteRenderRunning=false;if(favorites!==currentFavorites)requestWorkbenchSync();}
 }
 function workbenchField(id){
  if(id.startsWith('layout-'))return $(id);

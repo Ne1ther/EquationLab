@@ -50,6 +50,37 @@ for(const [settings,expected]of [['<w:mirrorMargins/>',8546],['<w:gutterAtTop/>'
  assert.deepEqual(tabs(result.objects[0]),[['center',Math.floor(expected/2)],['right',expected]]);
 });
 
+test('copy arrangement uses the related styles and settings when they have relocated',async()=>{
+ const source=await fixture(async({zip,paragraphs,body,insert})=>{
+  body.replaceChild(insert(body.ownerDocument.createDocumentFragment(),section(11906,1800,1200,360)),finalSection(body));
+  const props=first(paragraphs[0],'pPr');props.removeChild(first(props,'ind'));
+  const styles=parse(await zip.file('word/styles.xml').async('string'));
+  first(first(styles,'style'),'basedOn').setAttributeNS(NS.w,'w:val','Normal');
+  const inherited=parse(`<w:style xmlns:w="${NS.w}" w:type="paragraph" w:default="1" w:styleId="Normal"><w:pPr><w:ind w:left="600" w:right="120"/></w:pPr></w:style>`);
+  styles.documentElement.appendChild(styles.importNode(inherited.documentElement,true));
+  const settings=(await zip.file('word/settings.xml').async('string')).replace('<w:updateFields','<w:gutterAtTop/><w:updateFields');
+  const relPath='word/_rels/document.xml.rels',rels=await zip.file(relPath).async('string');
+  zip.file(relPath,rels.replace('Target="styles.xml"','Target="prefs/body-styles.xml"').replace('Target="settings.xml"','Target="prefs/body-settings.xml"'));
+  const types=await zip.file('[Content_Types].xml').async('string');
+  zip.file('[Content_Types].xml',types.replace('/word/styles.xml','/word/prefs/body-styles.xml').replace('/word/settings.xml','/word/prefs/body-settings.xml'));
+  zip.remove('word/styles.xml');zip.remove('word/settings.xml');
+  zip.file('word/prefs/body-styles.xml',serialize(styles));zip.file('word/prefs/body-settings.xml',settings);
+ });
+ const before=await inspectDocx(source);
+ const result=await inspectDocx(await arrangeDocx(source,{indices:[0],layout:{mode:'numbered-right'}}));
+ assert.deepEqual(tabs(result.objects[0]),[['center',4693],['right',8786]]);
+ const indent=first(paragraph(result.objects[0].element),'ind');
+ assert.equal(indent.getAttributeNS(NS.w,'left'),'600');
+ assert.equal(indent.getAttributeNS(NS.w,'right'),'120');
+ assert.deepEqual(result.objects.map(o=>o.nativeSha256),before.objects.map(o=>o.nativeSha256));
+ for(const name of ['body-styles.xml','body-settings.xml']){
+  const path='word/prefs/'+name;
+  assert.equal(await result.zip.file(path).async('string'),await before.zip.file(path).async('string'));
+ }
+ assert.equal(result.zip.file('word/styles.xml'),null);
+ assert.equal(result.zip.file('word/settings.xml'),null);
+});
+
 test('paragraph style defaults and basedOn indents are resolved, direct indents override them and inherited tabs are cleared',async()=>{
  const source=await fixture(async({zip,paragraphs})=>{
   const props=first(paragraphs[0],'pPr');props.removeChild(first(props,'ind'));

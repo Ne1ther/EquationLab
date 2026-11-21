@@ -102,8 +102,24 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     private var deliveringWordTicket: String?
     private(set) var refreshWordDocumentAfterLoad = false
     private var wordWorkspaceTimer: Timer?
+    private var wordLaunchObserver: NSObjectProtocol?
+
     func startWordWorkspaceObservation() {
-        guard wordWorkspaceTimer == nil else { return }
+        if wordLaunchObserver == nil {
+            wordLaunchObserver = NSWorkspace.shared.notificationCenter.addObserver(
+                forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+            ) { [weak self] notification in
+                let application = notification.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication
+                guard application?.bundleIdentifier == "com.microsoft.Word" else { return }
+                Task { @MainActor [weak self] in
+                    self?.startWordWorkspaceObservation()
+                    self?.syncActiveWordWorkspace()
+                }
+            }
+        }
+        // Word can start after Equation Lab. The launch notification starts the
+        // timer then, so standalone editing does not wake up once per second.
+        guard wordWorkspaceTimer == nil, shouldPollWordWorkspace(wordRunning: isWordRunning) else { return }
         let timer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in self?.syncActiveWordWorkspace() }
         }
@@ -113,18 +129,28 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     func shouldPollWordWorkspace(wordRunning: Bool) -> Bool {
         hasWordSessionOrRequest || state.wordWorkspaceConnected || !state.openWordDocuments.isEmpty || wordRunning
     }
+    private var isWordRunning: Bool {
+        !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty
+    }
     func syncActiveWordWorkspace() {
+        guard shouldPollWordWorkspace(wordRunning: isWordRunning) else {
+            wordWorkspaceTimer?.invalidate()
+            wordWorkspaceTimer = nil
+            return
+        }
         guard editorReady, let webView, editorWindow?.isVisible == true,
               deliveringWordTicket == nil, pendingWordTickets.isEmpty, !wordDocumentRequestPending, !filePanelPending else { return }
-        // Standalone editing has no Word state to poll. Keep syncing when a
-        // session or catalog is still present so Word exit can be reconciled.
-        let wordRunning = !NSRunningApplication.runningApplications(withBundleIdentifier: "com.microsoft.Word").isEmpty
-        guard shouldPollWordWorkspace(wordRunning: wordRunning) else { return }
         // Keep the picker current while the window is visible behind Word.
         // Only a foreground editor may follow another document into an edit.
         let editorIsFrontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier == ProcessInfo.processInfo.processIdentifier
         let operation = editorIsFrontmost ? "nativeSyncWordWorkspace" : "nativeRefreshWordDocumentList"
         webView.evaluateJavaScript("window.\(operation)?.()", completionHandler: nil)
+    }
+    deinit {
+        wordWorkspaceTimer?.invalidate()
+        if let wordLaunchObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(wordLaunchObserver)
+        }
     }
     private(set) var pendingEditorReveal: (reason: String, ticket: String?, generation: Int)?
     private(set) var wordPresentationGeneration = 0
@@ -436,15 +462,36 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func prepareDraftToQuit(_ completion: @escaping (Bool) -> Void) {
         guard let webView, editorReady else { completion(true); return }
+        var replied = false
+        let watchdog = DispatchWorkItem { [weak self] in
+            guard !replied else { return }
+            replied = true
+            if let self {
+                self.state.message = self.language.usesEnglish ? "Draft backup timed out. Save the equation before quitting." : "草稿备份超时，已取消退出。请保存公式后重试。"
+                self.state.messageError = true
+            }
+            completion(false)
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 6, execute: watchdog)
         webView.callAsyncJavaScript("return await window.nativeFlushDraft?.() ?? true", arguments: [:], in: nil, in: .page) { [weak self] result in
+            guard !replied else { return }
+            replied = true
+            watchdog.cancel()
             if case .success(let value) = result, value as? Bool == true { completion(self?.hasWordSessionOrRequest != true); return }
             guard let self else { completion(false); return }
+            if self.editorWindow?.attachedSheet != nil {
+                self.state.message = self.language.usesEnglish ? "Draft backup is incomplete. Close the current panel and try again." : "草稿备份尚未完成，请关闭当前面板后重试。"
+                self.state.messageError = true
+                completion(false)
+                return
+            }
             let alert = NSAlert()
             alert.messageText = self.language.usesEnglish ? "Draft backup is incomplete" : "草稿备份尚未完成"
             alert.informativeText = self.language.usesEnglish ? "Finish composing text or save the equation before quitting. You can also quit without this backup." : "可以完成输入、保存或导出公式后再退出，也可以放弃本次备份并退出。"
             alert.addButton(withTitle: self.language.usesEnglish ? "Keep editing" : "继续编辑")
             alert.addButton(withTitle: self.language.usesEnglish ? "Quit without backup" : "放弃备份并退出")
-            completion(alert.runModal() == .alertSecondButtonReturn)
+            let discard = alert.runModal() == .alertSecondButtonReturn
+            completion(discard && !self.hasWordSessionOrRequest)
         }
     }
     func action(_ action: String, _ payload: [String: Any] = [:]) {

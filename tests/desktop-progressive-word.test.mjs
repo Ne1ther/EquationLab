@@ -100,6 +100,24 @@ test('Rapid scrolling coalesces surviving visible rows into bounded thumbnail ba
  assert.equal(source.objects[76].image,'image-76');
 });
 
+test('Favorite thumbnails discard late results for an evicted entry and schedule the new list',async()=>{
+ let start,finish,syncs=0;
+ const started=new Promise(resolve=>{start=resolve;}),result=new Promise(resolve=>{finish=resolve;});
+ const images=new Map(),requests=[];
+ const context=vm.createContext({
+  favorites:['old'],workbenchFavoriteImages:images,workbenchFavoriteRenderRunning:false,validationPending:false,
+  validationRunning:false,setTimeout:queueMicrotask,requestWorkbenchSync(){syncs++;},
+  async native(action,payload){requests.push({action,latex:payload.latex,background:payload.favoriteThumbnail});start();return result;}
+ });
+ vm.runInContext(app.slice(app.indexOf('async function refreshFavoriteThumbnails('),app.indexOf('function workbenchField(')),context);
+ const rendering=context.refreshFavoriteThumbnails(null);
+ await started;context.favorites=['new'];finish({png:'stale-preview'});
+ await rendering;
+ assert.deepEqual(requests,[{action:'preview',latex:'old',background:true}]);
+ assert.equal(images.size,0);
+ assert.equal(syncs,1);
+});
+
 test('Favorites reuse an available preview when an earlier document row has the same LaTeX without an image',async()=>{
  const image='data:image/png;base64,preview',source={objects:[{index:0,latex:'x'},{index:1,latex:'x',image}]};
  const messages=[],nativeCalls=[];
@@ -134,6 +152,7 @@ test('Favorites reuse an available preview when an earlier document row has the 
  context.favorites=[];
  context.publishWorkbenchState();
  assert.equal(messages[4].payload.favorites.length,0);
+ assert.equal(context.workbenchFavoriteImages.size,0);
  // Simulated WebKit reload starts with an empty last-field cache and resends static templates/categories.
  context.workbenchLastFields.clear();
  context.publishWorkbenchState();

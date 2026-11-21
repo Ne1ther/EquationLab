@@ -10,12 +10,13 @@ const customPropsNS='http://schemas.openxmlformats.org/officeDocument/2006/custo
 const corePropsRel='http://schemas.openxmlformats.org/package/2006/relationships/metadata/core-properties';
 const appPropsRel='http://schemas.openxmlformats.org/officeDocument/2006/relationships/extended-properties';
 const reuseNS='urn:equationlab:internal-snapshot-part-reuse';
+const settingsRelation=NS.r+'/settings';
 const sharedPartSpecs=[
  {
   scope:'main',id:'rSettings',name:'word/settings.xml',target:'settings.xml',
   relationships:'word/_rels/settings.xml.rels',
   type:'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml',
-  relation:NS.r+'/settings',root:'settings',namespace:NS.w
+  relation:settingsRelation,root:'settings',namespace:NS.w
  },
  {
   scope:'main',id:'rStyles',name:'word/styles.xml',target:'styles.xml',
@@ -283,7 +284,9 @@ export async function combineWordSnapshotParts(parts){
       if(item.name===mainRels){
        const deferred=deferredMainRelById.get(originalId);
        if(deferred)deferred.mainRelNode=relation;
-       else relationships.documentElement.appendChild(relationships.importNode(relation,true));
+       // Segment-local settings are metadata only. Publish a document-wide
+       // settings link below only after every segment agrees on its contents.
+       else if(relation.getAttribute('Type')!==settingsRelation||bodyRelIds.has(originalId))relationships.documentElement.appendChild(relationships.importNode(relation,true));
       }
      }
      if(item.name===mainRels)continue;
@@ -317,7 +320,7 @@ export async function combineWordSnapshotParts(parts){
     if(segment.status!=='eligible')continue;
     const rangeName=`ranges/${segment.index}/${segment.name}`;
     zip.file(rangeName,segment.payload);addType(rangeName,segment.type);
-    if(segment.mainRelNode)relationships.documentElement.appendChild(relationships.importNode(segment.mainRelNode,true));
+    if(segment.mainRelNode&&spec.relation!==settingsRelation)relationships.documentElement.appendChild(relationships.importNode(segment.mainRelNode,true));
    }
   }
  }

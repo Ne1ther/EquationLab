@@ -43,14 +43,18 @@ test('conflicting or missing settings across segments do not become a document d
   assert.ok(format);
   format.setAttributeNS(NS.w,'w:val','[#E1]');
  });
- const missing=editPart(editPart(parts[1],settingsName,part=>part.parentNode.removeChild(part)),
+ const withoutSettings=range=>editPart(editPart(range,settingsName,part=>part.parentNode.removeChild(part)),
   '/word/_rels/document.xml.rels',part=>{
    const settings=Array.from(part.getElementsByTagNameNS(NS.rels,'Relationship')).find(node=>node.getAttribute('Type')===NS.r+'/settings');
    assert.ok(settings);
    settings.parentNode.removeChild(settings);
   });
- for(const variant of [conflicting,missing]){
-  const document=await inspectDocx(await combineWordSnapshotParts([parts[0],variant,...parts.slice(2)]));
+ for(const ranges of [
+  [parts[0],conflicting,...parts.slice(2)],
+  [parts[0],withoutSettings(parts[1]),...parts.slice(2)],
+  [parts[0],...parts.slice(1).map(withoutSettings)]
+ ]){
+  const document=await inspectDocx(await combineWordSnapshotParts(ranges));
   assert.equal(document.numberFormat,null);
   assert.equal(document.zip.file('word/settings.xml'),null);
   assert.equal(document.objects.length,30);

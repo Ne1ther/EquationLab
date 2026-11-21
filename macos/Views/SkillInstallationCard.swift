@@ -3,11 +3,22 @@ import SwiftUI
 
 struct SkillInstallationCard: View {
     let english: Bool
+
+    private enum LoadState {
+        case loading
+        case unavailable
+        case ready(EquationLabSkillInstallation, EquationLabSkillInstallation.StatusSnapshot)
+    }
+
+    @State private var loadState: LoadState = .loading
     @State private var feedback: String?
     @State private var feedbackIsError = false
     @State private var showingOtherClients = false
     @State private var copied = false
-    @State private var statusRevision = 0
+    @State private var operationInFlight = false
+    @State private var stateGeneration = 0
+    @State private var activeOperation: Task<Void, Never>?
+    @StateObject private var exportHandoff = PopoverActionHandoff()
 
     private enum Client: CaseIterable {
         case codex, antigravity, claude, dsh
@@ -51,11 +62,20 @@ struct SkillInstallationCard: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                if let installer = EquationLabSkillInstallation.bundled {
+                switch loadState {
+                case .loading:
+                    header(nil)
+                    LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
+                        ForEach(Client.allCases, id: \.self) { client in
+                            clientButton(client, installer: nil, snapshot: nil)
+                        }
+                    }
+                    otherClientsButton(nil)
+                case .ready(let installer, let snapshot):
                     header(installer)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         ForEach(Client.allCases, id: \.self) { client in
-                            clientButton(client, installer: installer)
+                            clientButton(client, installer: installer, snapshot: snapshot)
                         }
                     }
                     otherClientsButton(installer)
@@ -66,7 +86,7 @@ struct SkillInstallationCard: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
                     }
-                } else {
+                case .unavailable:
                     Text("Equation Lab Skill").font(.headline)
                     Text(label("这个构建没有随附 Skill 运行环境。", "The Skill runtime is unavailable in this build."))
                         .font(.callout).foregroundStyle(.secondary)
@@ -75,26 +95,17 @@ struct SkillInstallationCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(10)
         }
-        .onAppear {
-            statusRevision += 1
-            guard feedback == nil, let installer = EquationLabSkillInstallation.bundled else { return }
-            switch installer.existing(at: installer.sharedDestination) {
-            case .current, .linked:
-                feedback = label("共享 Skill 已就绪。", "Shared Skill is ready.")
-            case .relink:
-                feedback = label("App 位置已变化。重新安装即可更新连接。", "The app moved. Reinstall the Skill to update its connection.")
-            case .upgrade:
-                feedback = label("共享 Skill 有可用更新。", "A shared Skill update is available.")
-            case .conflict:
-                feedback = label("共享目录已有同名 Skill。可保留现有版本或导出此版本。", "The shared folder already contains a Skill with this name. Keep it or export this version.")
-                feedbackIsError = true
-            case .available:
-                break
-            }
+        .task {
+            await loadInitialStatus()
+        }
+        .onDisappear {
+            exportHandoff.cancel()
+            activeOperation?.cancel()
+            activeOperation = nil
         }
     }
 
-    private func header(_ installer: EquationLabSkillInstallation) -> some View {
+    private func header(_ installer: EquationLabSkillInstallation?) -> some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Label("Equation Lab Skill", systemImage: "sparkles").font(.headline)
@@ -105,36 +116,42 @@ struct SkillInstallationCard: View {
             }
             Spacer(minLength: 8)
             Button(label("安装共享 Skill", "Install Shared Skill")) {
-                prepare(installer)
+                if let installer { prepare(installer) }
             }
             .buttonStyle(.borderedProminent)
             .controlSize(.small)
             .fixedSize()
+            .disabled(installer == nil || operationInFlight)
         }
     }
 
-    private func clientButton(_ client: Client, installer: EquationLabSkillInstallation) -> some View {
-        let _ = statusRevision
-        let linkStatus = client.link.map { installer.clientLinkStatus($0) }
+    private func clientButton(
+        _ client: Client,
+        installer: EquationLabSkillInstallation?,
+        snapshot: EquationLabSkillInstallation.StatusSnapshot?
+    ) -> some View {
+        let linkStatus = client.link.map { snapshot?.linkStatus(for: $0) ?? .notLinked }
         let action: String = switch linkStatus {
         case nil: label("使用共享 Skill", "Use shared Skill")
         case .linked: label("已链接", "Linked")
+        case .unverifiedLink: label("已有链接（待核验）", "Link unverified")
         case .conflict: label("已有同名项", "Name conflict")
         case .notLinked: label("链接共享 Skill", "Link shared Skill")
         }
         let symbol: String = switch linkStatus {
         case nil: "chevron.right"
         case .linked: "checkmark.circle.fill"
+        case .unverifiedLink: "link.circle"
         case .conflict: "exclamationmark.triangle.fill"
         case .notLinked: "link"
         }
         let symbolColor: Color = switch linkStatus {
         case .linked: .green
         case .conflict: .orange
-        case nil, .notLinked: .secondary
+        case nil, .notLinked, .unverifiedLink: .secondary
         }
         return Button {
-            prepare(installer, for: client)
+            if let installer { prepare(installer, for: client) }
         } label: {
             HStack(spacing: 8) {
                 Color.clear
@@ -161,12 +178,14 @@ struct SkillInstallationCard: View {
             .padding(.vertical, 5)
         }
         .buttonStyle(WorkbenchButtonStyle(tint: client.tint, surface: true, horizontalPadding: 8))
+        .disabled(installer == nil || operationInFlight)
         .accessibilityLabel(client.name + ", " + action)
     }
 
-    private func otherClientsButton(_ installer: EquationLabSkillInstallation) -> some View {
+    private func otherClientsButton(_ installer: EquationLabSkillInstallation?) -> some View {
         Button {
             copied = false
+            if !showingOtherClients { exportHandoff.cancel() }
             showingOtherClients.toggle()
         } label: {
             HStack(spacing: 8) {
@@ -185,8 +204,11 @@ struct SkillInstallationCard: View {
             .padding(.vertical, 4)
         }
         .buttonStyle(WorkbenchButtonStyle(tint: .pink, surface: true, horizontalPadding: 8))
+        .disabled(installer == nil || operationInFlight)
         .popover(isPresented: $showingOtherClients, arrowEdge: .bottom) {
-            otherClientsGuide(installer)
+            if let installer {
+                otherClientsGuide(installer)
+            }
         }
     }
 
@@ -209,9 +231,11 @@ struct SkillInstallationCard: View {
                 .textSelection(.enabled)
             HStack {
                 Button(label("导出文件夹…", "Export Folder…")) {
-                    showingOtherClients = false
-                    exportSkill(installer)
+                    exportHandoff.trigger(dismissPopover: { showingOtherClients = false }) {
+                        exportSkill(installer)
+                    }
                 }
+                .disabled(operationInFlight)
                 Spacer(minLength: 8)
                 Button(copied ? label("已复制", "Copied") : label("复制给智能体", "Copy for Agent")) {
                     NSPasteboard.general.clearContents()
@@ -222,36 +246,98 @@ struct SkillInstallationCard: View {
         }
         .padding(16)
         .frame(width: 418)
+        .onAppear { exportHandoff.popoverDidAppear() }
+        .onDisappear { exportHandoff.popoverDidDisappear() }
     }
 
-    private func prepare(_ installer: EquationLabSkillInstallation, for client: Client? = nil) {
-        do {
-            if let link = client?.link {
-                try installer.link(link)
-            } else {
-                try installer.install(in: installer.sharedDirectory)
-            }
-            switch client {
-            case .codex:
-                show(label("Codex 已就绪。请在会话中使用 $equation-lab。", "Ready for Codex. Use $equation-lab in a session."))
-            case .antigravity:
-                show(label("已链接 Antigravity。打开新会话，或在 agy 中运行 /skills reload。", "Linked for Antigravity. Start a new session or run /skills reload in agy."))
-            case .claude:
-                show(label("已链接 Claude Code。请在新会话中使用 /equation-lab。", "Linked for Claude Code. Use /equation-lab in a new session."))
-            case .dsh:
-                show(label("DSH 默认读取共享目录。使用自定义配置时，请将共享目录加入 customSkillDirs。", "DSH reads shared Skills by default. For a custom profile, add the shared Skills folder to customSkillDirs."))
-            case nil:
-                show(label("共享 Skill 已就绪。", "Shared Skill is ready."))
-            }
-        } catch let conflict as EquationLabSkillInstallation.Conflict {
-            show(label("这个位置已有同名 Skill。\n\(conflict.destination.path)",
-                       "A Skill with this name already exists at:\n\(conflict.destination.path)"), error: true)
-        } catch {
-            show(label("无法设置 Skill。请检查目标目录的写入权限。", "Could not set up the Skill. Check write access to the destination."), error: true)
+    @MainActor
+    private func loadInitialStatus() async {
+        let generation = stateGeneration
+        let loaded: (EquationLabSkillInstallation, EquationLabSkillInstallation.StatusSnapshot)? =
+            await Task.detached(priority: .userInitiated) {
+                guard let installer = EquationLabSkillInstallation.bundled else { return nil }
+                return (installer, installer.statusSnapshot())
+            }.value
+        guard !Task.isCancelled, generation == stateGeneration else { return }
+        guard let (installer, snapshot) = loaded else {
+            loadState = .unavailable
+            return
+        }
+        loadState = .ready(installer, snapshot)
+        guard feedback == nil else { return }
+        switch snapshot.shared {
+        case .current, .linked:
+            feedback = label("共享 Skill 已就绪。", "Shared Skill is ready.")
+        case .unverifiedLink:
+            feedback = label(
+                "共享目录已有链接（待核验）。未读取目标内容，也不会自动修改。",
+                "The shared folder already has a link (unverified). Its target was not read and will not be changed automatically."
+            )
+        case .relink:
+            feedback = label("App 位置已变化。重新安装即可更新连接。", "The app moved. Reinstall the Skill to update its connection.")
+        case .upgrade:
+            feedback = label("共享 Skill 有可用更新。", "A shared Skill update is available.")
+        case .conflict:
+            feedback = label("共享目录已有同名 Skill。可保留现有版本或导出此版本。", "The shared folder already contains a Skill with this name. Keep it or export this version.")
+            feedbackIsError = true
+        case .available:
+            break
         }
     }
 
+    @MainActor
+    private func prepare(_ installer: EquationLabSkillInstallation, for client: Client? = nil) {
+        guard !operationInFlight else { return }
+        operationInFlight = true
+        stateGeneration += 1
+        let generation = stateGeneration
+        let linkTarget = client?.link
+        activeOperation = Task { @MainActor in
+            let outcome: (Result<Void, Error>, EquationLabSkillInstallation.StatusSnapshot) =
+                await Task.detached(priority: .userInitiated) {
+                    let result: Result<Void, Error>
+                    do {
+                        if let linkTarget {
+                            try installer.link(linkTarget)
+                        } else {
+                            try installer.install(in: installer.sharedDirectory)
+                        }
+                        result = .success(())
+                    } catch {
+                        result = .failure(error)
+                    }
+                    return (result, installer.statusSnapshot())
+                }.value
+            operationInFlight = false
+            activeOperation = nil
+            guard !Task.isCancelled, generation == stateGeneration else { return }
+            loadState = .ready(installer, outcome.1)
+            switch outcome.0 {
+            case .success:
+                switch client {
+                case .codex:
+                    show(label("Codex 已就绪。请在会话中使用 $equation-lab。", "Ready for Codex. Use $equation-lab in a session."))
+                case .antigravity:
+                    show(label("已链接 Antigravity。打开新会话，或在 agy 中运行 /skills reload。", "Linked for Antigravity. Start a new session or run /skills reload in agy."))
+                case .claude:
+                    show(label("已链接 Claude Code。请在新会话中使用 /equation-lab。", "Linked for Claude Code. Use /equation-lab in a new session."))
+                case .dsh:
+                    show(label("DSH 默认读取共享目录。使用自定义配置时，请将共享目录加入 customSkillDirs。", "DSH reads shared Skills by default. For a custom profile, add the shared Skills folder to customSkillDirs."))
+                case nil:
+                    show(label("共享 Skill 已就绪。", "Shared Skill is ready."))
+                }
+            case .failure(let conflict as EquationLabSkillInstallation.Conflict):
+                show(label("这个位置已有同名 Skill。\n\(conflict.destination.path)",
+                           "A Skill with this name already exists at:\n\(conflict.destination.path)"), error: true)
+            case .failure:
+                show(label("无法设置 Skill。请检查目标目录的写入权限。", "Could not set up the Skill. Check write access to the destination."), error: true)
+            }
+        }
+    }
+
+    @MainActor
     private func exportSkill(_ installer: EquationLabSkillInstallation) {
+        guard !operationInFlight else { return }
         let panel = NSOpenPanel()
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -261,20 +347,41 @@ struct SkillInstallationCard: View {
         panel.message = label("选择存放 equation-lab Skill 文件夹的位置。", "Choose a destination for the equation-lab Skill folder.")
         panel.begin { result in
             guard result == .OK, let directory = panel.url else { return }
-            do {
-                let destination = try installer.install(in: directory)
-                show(label("Skill 文件夹已准备好。", "The Skill folder is ready."))
-                NSWorkspace.shared.activateFileViewerSelecting([destination])
-            } catch is EquationLabSkillInstallation.Conflict {
-                show(label("这个位置已有同名 Skill。请选择其他导出位置。", "This location already contains a Skill with this name. Choose another export location."), error: true)
-            } catch {
-                show(label("无法导出 Skill。请检查目标目录的写入权限。", "Could not export the Skill. Check write access to the destination."), error: true)
+            Task { @MainActor in
+                guard !operationInFlight else { return }
+                operationInFlight = true
+                stateGeneration += 1
+                let generation = stateGeneration
+                activeOperation = Task { @MainActor in
+                    let outcome: (Result<URL, Error>, EquationLabSkillInstallation.StatusSnapshot) =
+                        await Task.detached(priority: .userInitiated) {
+                            let result: Result<URL, Error>
+                            do {
+                                result = .success(try installer.install(in: directory))
+                            } catch {
+                                result = .failure(error)
+                            }
+                            return (result, installer.statusSnapshot())
+                        }.value
+                    operationInFlight = false
+                    activeOperation = nil
+                    guard !Task.isCancelled, generation == stateGeneration else { return }
+                    loadState = .ready(installer, outcome.1)
+                    switch outcome.0 {
+                    case .success(let destination):
+                        show(label("Skill 文件夹已准备好。", "The Skill folder is ready."))
+                        NSWorkspace.shared.activateFileViewerSelecting([destination])
+                    case .failure(is EquationLabSkillInstallation.Conflict):
+                        show(label("这个位置已有同名 Skill。请选择其他导出位置。", "This location already contains a Skill with this name. Choose another export location."), error: true)
+                    case .failure:
+                        show(label("无法导出 Skill。请检查目标目录的写入权限。", "Could not export the Skill. Check write access to the destination."), error: true)
+                    }
+                }
             }
         }
     }
 
     private func show(_ message: String, error: Bool = false) {
-        statusRevision += 1
         feedback = message
         feedbackIsError = error
     }

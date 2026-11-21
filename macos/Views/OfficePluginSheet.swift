@@ -18,8 +18,11 @@ struct OfficePluginSheet: View {
             if bridge.installationRunning { ProgressView(bridge.t("正在处理插件…")).controlSize(.small) }
         }
         .padding(26).frame(width: 620)
-        .disabled(bridge.installationRunning)
-        .onAppear { bridge.verifyWordPlugin() }
+        .task {
+            await Task.yield()
+            guard !Task.isCancelled else { return }
+            bridge.verifyWordPlugin()
+        }
         .alert(bridge.t("Office 插件"), isPresented: Binding(get: { !bridge.installationMessage.isEmpty }, set: { if !$0 { bridge.installationMessage = "" } })) {
             Button(bridge.t("好"), role: .cancel) { bridge.installationMessage = "" }
         } message: { Text(bridge.t(bridge.installationMessage)) }
@@ -60,15 +63,19 @@ struct OfficePluginSheet: View {
                     Button(bridge.t("检查连接")) { bridge.verifyWordPlugin(showResult: true) }
                     Button(bridge.t("移除…")) { bridge.uninstallWordPlugin() }
                 }
+                .disabled(bridge.installationRunning)
                 if bridge.wordOfficeAccessRequired {
                     Button(bridge.t("允许访问 Word 文件夹…")) { bridge.chooseWordOfficeDirectory() }
+                        .disabled(bridge.installationRunning)
                 }
                 HStack {
                     Button(skillText("复制连接诊断", "Copy connection diagnostics")) { bridge.copyWordConnectionDiagnostics() }
                         .disabled(bridge.copyingWordDiagnostics)
                         .help(skillText("仅复制版本与连接状态。", "Copies only versions and connection status."))
                     Button(bridge.t("选择 Word 应用…")) { bridge.chooseWordApplication() }
-                }.controlSize(.small)
+                }
+                .controlSize(.small)
+                .disabled(bridge.installationRunning)
                 Text(skillText("保存文档并退出 Word 后安装。重新打开 Word，即可使用 Equation Lab 顶栏。",
                                "Save your documents and quit Word before installing. Reopen Word to use the Equation Lab ribbon."))
                     .font(.caption).foregroundStyle(.secondary)
