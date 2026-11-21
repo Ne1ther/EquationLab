@@ -8,9 +8,9 @@
 
 > 适用 **Apple Silicon（M 系列）Mac，macOS 14 及以上**。Word 联动需要**桌面版 Word for Mac**。安装包已包含 App、Word 插件、字体和运行时，无需另装 MathType。
 
-![Equation Lab 工作台（0.6.10 旧版界面截图）](docs/preview/workbench-0.6.10.png)
+![Equation Lab 0.7.4 工作台，显示 Word 公式列表、编辑预览和编号设置](docs/preview/workbench-0.7.4.png)
 
-*上图为 0.6.10 旧版界面截图（新版已增加顶部 AI 入口与多项编辑改进）；[查看更多截图与 0.6.11 演示视频](docs/preview/README.md)。*
+**[看 29 秒新版演示](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.4/EquationLab-0.7.4-demo-zh.mp4)** · [更多实际截图](docs/preview/README.md)
 
 ## 四个主要用法
 
@@ -50,7 +50,7 @@
 
 ## 拿一份示例直接试
 
-**[下载 30 公式 Word 示例（DOCX）](docs/examples/equation-lab-30-formulas.docx)** · [查看 PDF 预览](docs/examples/equation-lab-30-formulas.pdf) · [看 48 秒操作演示（0.6.11 旧版，无声中文字幕）](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
+**[下载 30 公式 Word 示例（DOCX）](docs/examples/equation-lab-30-formulas.docx)** · [查看 PDF 预览](docs/examples/equation-lab-30-formulas.pdf)
 
 示例含根式、求和、积分、矩阵、编号和交叉引用。用 Word 打开就可以试双击编辑、编号和批量整理。
 

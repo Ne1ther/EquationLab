@@ -1,4 +1,21 @@
-# 演示与实际截图
+# 演示与实际截图 · Demo and screenshots
+
+## Equation Lab 0.7.4 · build 108
+
+[![新版演示，从 Word 打开、修改并写回公式](demo-0.7.4.jpg)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.4/EquationLab-0.7.4-demo-zh.mp4)
+
+[下载新版演示](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.4/EquationLab-0.7.4-demo-zh.mp4) · 29 秒，1080p，无声，带中文字幕。画面来自 0.7.4 和 Word for Mac 的实际操作，按步骤剪辑。可以看见打开公式、切换条目、预览修改，以及更新回 Word 的结果。
+
+[Download the walkthrough](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.4/EquationLab-0.7.4-demo-zh.mp4) · 29 seconds, 1080p, with Chinese captions. The walkthrough uses step-by-step captures of opening an equation, switching rows, previewing an edit, and saving it back to Word.
+
+![Equation Lab 0.7.4 工作台与编号设置](workbench-0.7.4.png)
+
+![Equation Lab 0.7.4 在 Word for Mac 中的功能区](word-ribbon-0.7.4.png)
+
+[下载演示所用的 30 公式 Word 文档](../examples/equation-lab-30-formulas.docx) · [PDF](../examples/equation-lab-30-formulas.pdf)
+
+<details>
+<summary>旧版截图与视频 · Earlier screenshots and video</summary>
 
 [![48 秒常用功能演示](demo-0.6.11.jpg)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
 
@@ -31,3 +48,5 @@ The workbench combines document selection, equation browsing, editing, and Word 
 新版图标和 30 条合成公式的实际 Word 界面。
 
 Refreshed ribbon artwork in Word, shown with 30 synthetic equations.
+
+</details>

@@ -8,9 +8,9 @@ I built Equation Lab so I could keep editing existing MathType equations in Word
 
 > Requires an **Apple Silicon Mac with macOS 14 or later**. Word integration uses **desktop Word for Mac**. The installer includes the app, Word plugin, fonts, and runtime. MathType is optional.
 
-![Equation Lab workbench (0.6.10 screenshot)](docs/preview/workbench-0.6.10.png)
+![Equation Lab 0.7.4 workbench with the Word equation list, editor preview, and numbering settings](docs/preview/workbench-0.7.4.png)
 
-*Screenshot from 0.6.10 (newer versions add the AI toolbar menu and editor refinements); [more screenshots and the 0.6.11 walkthrough video](docs/preview/README.md).*
+**[Watch the 29-second walkthrough](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.4/EquationLab-0.7.4-demo-zh.mp4)** · [More screenshots](docs/preview/README.md)
 
 ## Four ways you will use it
 
@@ -50,7 +50,7 @@ See the [Skill guide](skills/equation-lab/SKILL.md) and [client setup reference]
 
 ## Try a sample document
 
-**[Download the 30-equation Word sample (DOCX)](docs/examples/equation-lab-30-formulas.docx)** · [View PDF](docs/examples/equation-lab-30-formulas.pdf) · [Watch the 48-second walkthrough (0.6.11, silent with Chinese captions)](https://github.com/Ne1ther/EquationLab/releases/download/v0.6.11/EquationLab-0.6.11-demo-zh.mp4)
+**[Download the 30-equation Word sample (DOCX)](docs/examples/equation-lab-30-formulas.docx)** · [View PDF](docs/examples/equation-lab-30-formulas.pdf)
 
 The sample includes radicals, sums, integrals, matrices, numbers, and cross-references. Open it in Word to try double-click editing, numbering, and batch tools.
 
