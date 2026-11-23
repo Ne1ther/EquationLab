@@ -11,6 +11,7 @@
    try{await next.decode();}
    catch{if(current===generation&&stillCurrent()){displayed='';image.removeAttribute('src');visibility(false);}return false;}
    if(current!==generation||!stillCurrent())return false;
+   image.style.setProperty('--word-preview-natural-width',next.naturalWidth+'px');
    image.src=url;displayed=url;visibility(true);return true;
   };
  }

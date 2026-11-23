@@ -9,6 +9,8 @@ import {promisify} from 'node:util';
 import {DOMParser} from '@xmldom/xmldom';
 
 const html = await readFile(new URL('../desktop/index.html', import.meta.url), 'utf8');
+const preferences = await readFile(new URL('../desktop/preferences.js', import.meta.url), 'utf8');
+const decodedPreviewSwap = preferences.slice(preferences.indexOf('function decodedPreviewSwap('), preferences.indexOf('\n let base='));
 const previews = html.match(/<div class="workbench-previews">(.*?)<\/div><\/section>/s)[1];
 const doc = new DOMParser().parseFromString('<panels>' + previews + '</panels>', 'application/xml');
 
@@ -60,10 +62,12 @@ paper.hidden = true;
 document.getElementById('word-preview-placeholder').hidden = true;
 zoom.addEventListener('change', event => document.documentElement.style.setProperty('--word-preview-scale', event.target.value));
 const readout = {zooms:[]};
+${decodedPreviewSwap}
+const swap = decodedPreviewSwap(image, visible => paper.hidden = !visible);
+const svg = (width, height) => 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="' + width + '" height="' + height + '"><rect width="100%" height="100%"/></svg>');
 globalThis.ready = (async () => {
-  image.src = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="800" height="330"><path d="M0 0H800V330H0z"/></svg>');
+  if (!await swap(svg(800,330))) throw new Error('Wide preview unavailable');
   await image.decode();
-  paper.hidden = false;
   for (const scale of ['1', '1.5', '2', '1']) {
     zoom.value = scale;
     zoom.dispatchEvent(new Event('change'));
@@ -77,6 +81,14 @@ globalThis.ready = (async () => {
       scrollX:paper.scrollLeft, scrollY:paper.scrollTop
     });
     paper.scrollLeft = paper.scrollTop = 0;
+  }
+  if (!await swap(svg(80,33))) throw new Error('Small preview unavailable');
+  await image.decode();
+  readout.small = [];
+  for (const scale of ['1', '2']) {
+    zoom.value = scale;
+    zoom.dispatchEvent(new Event('change'));
+    readout.small.push(image.getBoundingClientRect().width);
   }
   readout.appearances = {};
   for (const appearance of ['light', 'dark']) {
@@ -100,11 +112,12 @@ globalThis.readout = () => readout;
   const [normal, larger, largest, restored] = result.zooms;
   assert.equal(normal.scrollX, 0);
   assert.equal(normal.scrollY, 0);
-  assert.ok(larger.width > normal.width * 1.35 && larger.height > normal.height * 1.35);
-  assert.ok(largest.width > normal.width * 1.8 && largest.height > normal.height * 1.8);
+  assert.ok(larger.width > normal.width * 1.35 && larger.height > normal.height * 1.35, JSON.stringify(result.zooms));
+  assert.ok(largest.width > normal.width * 1.8 && largest.height > normal.height * 1.8, JSON.stringify(result.zooms));
   assert.ok(largest.scrollX > 0 && largest.scrollY > 0);
   assert.ok(result.zooms.every(sample => sample.startsVisible && sample.endVisible));
   assert.deepEqual(restored, normal);
+  assert.deepEqual(result.small,[80,160]);
   assert.deepEqual(result.appearances, {
     light:{paper:'rgb(255, 255, 255)', editSurface:'rgb(255, 255, 255)', editInk:'rgb(32, 33, 36)'},
     dark:{paper:'rgb(255, 255, 255)', editSurface:'rgb(36, 36, 37)', editInk:'rgb(243, 243, 244)'}
