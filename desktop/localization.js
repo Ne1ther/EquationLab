@@ -8,6 +8,7 @@ window.setWorkbenchLanguage = language => {
  const labels = {
   wordPreview: ['Word 排版预览', 'Word preview'],
   latexSource: ['LaTeX 源码', 'LaTeX source'],
+  editorPlaceholder: ['输入公式或粘贴 LaTeX', 'Type an equation or paste LaTeX'],
   previewPlaceholder: ['输入公式后，查看实际字体与字号。', 'Enter an equation to preview its font and size.']
  };
  for (const [key, pair] of Object.entries(labels)) {
@@ -23,6 +24,7 @@ window.setWorkbenchLanguage = language => {
  document.getElementById('latex').setAttribute('aria-label', english ? 'LaTeX source' : 'LaTeX 源码');
  document.getElementById('formula').setAttribute('aria-label', english ? 'Visual equation editor' : '公式可视化编辑区');
  document.getElementById('word-preview-zoom').setAttribute('aria-label', english ? 'Preview zoom' : '预览缩放');
+ document.getElementById('desktop-font-preview').setAttribute('aria-label', english ? 'Word preview, scrollable when zoomed' : 'Word 排版预览，放大后可滚动');
  const preview = document.getElementById('desktop-font-preview-image');
  if (preview) preview.alt = english ? 'Equation preview using native fonts and sizes' : '按原生字体字号生成的公式预览';
  const note = document.getElementById('mode-note');

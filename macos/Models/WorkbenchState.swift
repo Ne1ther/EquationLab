@@ -52,9 +52,17 @@ struct SidebarFormula: Identifiable, Decodable {
         numberStatus = try values.decodeIfPresent(String.self, forKey: .numberStatus)
     }
 
+    static func searchTerms(in query: String) -> [String] {
+        query.split(whereSeparator: \.isWhitespace).map(String.init)
+    }
+
     func matchesSearch(_ query: String) -> Bool {
+        matchesSearch(terms: Self.searchTerms(in: query))
+    }
+
+    func matchesSearch(terms: [String]) -> Bool {
         let content = "\(position ?? id + 1) \(numberText ?? "") \(latex) \(label) \(detail)"
-        return query.split(whereSeparator: \.isWhitespace).allSatisfy { content.localizedCaseInsensitiveContains(String($0)) }
+        return terms.allSatisfy { content.localizedCaseInsensitiveContains($0) }
     }
     var thumbnail: NSImage? {
         guard let image else { return nil }
@@ -230,6 +238,7 @@ struct WorkbenchState: Decodable {
     var wordAppInsertionSupported = false
     var wordDocumentIdentity: String? = nil
     var documentPath = ""
+    var fileCopyGeneration: Int? = nil
     var latex = ""
     var selected: Int? = nil
     var wordInsertionEquation: Int? = nil
@@ -248,6 +257,7 @@ struct WorkbenchState: Decodable {
     var numbering: DocumentNumbering? = nil
     var documentNumberFormat: String? = nil
     var wordNumberingRestarts = false
+    var wordNumberingMayMigrate = false
     var draftRecovery = DraftRecoveryState()
     var statusTitle = "正在载入公式引擎…"
     var statusDetail = ""
@@ -292,6 +302,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("wordAppInsertionSupported", Bool.self) { wordAppInsertionSupported = v }
         if payload["wordDocumentIdentity"] is NSNull { wordDocumentIdentity = nil } else if let v = try value("wordDocumentIdentity", String.self) { wordDocumentIdentity = v }
         if let v = try value("documentPath", String.self) { documentPath = v }
+        if payload["fileCopyGeneration"] is NSNull { fileCopyGeneration = nil } else if let v = try value("fileCopyGeneration", Int.self) { fileCopyGeneration = v }
         if let v = try value("latex", String.self) { latex = v }
         if payload["selected"] is NSNull { selected = nil } else if let v = try value("selected", Int.self) { selected = v }
         if payload["wordInsertionEquation"] is NSNull { wordInsertionEquation = nil } else if let v = try value("wordInsertionEquation", Int.self) { wordInsertionEquation = v }
@@ -345,6 +356,7 @@ struct WorkbenchState: Decodable {
         if let v = try value("spaces", [EditorField].self) { spaces = v }
         if let v = try value("layout", [EditorField].self) { layout = v }
         if let v = try value("wordNumberingRestarts", Bool.self) { wordNumberingRestarts = v }
+        if let v = try value("wordNumberingMayMigrate", Bool.self) { wordNumberingMayMigrate = v }
         if let v = try value("draftRecovery", DraftRecoveryState.self) { draftRecovery = v }
         if payload["documentNumberFormat"] is NSNull { documentNumberFormat = nil } else if let v = try value("documentNumberFormat", String.self) { documentNumberFormat = v }
         if payload["numbering"] is NSNull { numbering = nil } else if let v = try value("numbering", DocumentNumbering.self) { numbering = v }

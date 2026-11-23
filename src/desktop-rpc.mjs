@@ -1,5 +1,6 @@
-import {readFile,writeFile,realpath} from 'node:fs/promises';
-import {resolve} from 'node:path';
+import {access,chmod,mkdtemp,readFile,realpath,rename,rm,stat,writeFile} from 'node:fs/promises';
+import {constants} from 'node:fs';
+import {dirname,join,resolve} from 'node:path';
 import {isMainModule} from './cli-entry.mjs';
 import {createInterface} from 'node:readline';
 import {inspectOle,oleLatex,characters,editCharacters,replaceOleLatex,patchRuler,readRuler} from './native.mjs';
@@ -23,6 +24,44 @@ const drafts=createDraftStore(),draftBases=new Map();
 const thumbnailSize={maxWidth:640,maxHeight:240};
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
+
+async function checkCopyDestination(input,output){
+ const message='请另存为副本，保留原始 Word 文档';
+ if(input===output)throw Error(message);
+ const original=await stat(input,{bigint:true});
+ const destination=await stat(output,{bigint:true}).catch(error=>{
+  if(error.code==='ENOENT')return null;
+  throw error;
+ });
+ if(destination&&original.dev===destination.dev&&original.ino===destination.ino)throw Error(message);
+ return destination;
+}
+
+async function documentCopyPath(input,path){
+ const output=await realpath(path).catch(error=>{
+  if(error.code==='ENOENT')return resolve(path);
+  throw error;
+ });
+ await checkCopyDestination(input,output);
+ return output;
+}
+
+async function writeDocumentCopy(input,output,bytes){
+ const directory=await mkdtemp(join(dirname(output),'.equationlab-copy-'));
+ try{
+  const staged=join(directory,'copy.docx');
+  await writeFile(staged,bytes);
+  const destination=await checkCopyDestination(input,output);
+  if(destination?.isFile()){
+   await access(output,constants.W_OK);
+   await chmod(staged,Number(destination.mode&0o777n));
+  }
+  // Replace the directory entry without writing into a hard link created
+  // after the check. Keep an existing destination intact until publication.
+  await rename(staged,output);
+ }finally{await rm(directory,{recursive:true,force:true}).catch(()=>{});}
+}
+
 // Word stages immutable snapshots. Parse each snapshot once, including while
 // individual sidebar thumbnails are arriving, and reuse identical snapshots
 // across OLE activations. Recheck file identity before every reuse.
@@ -37,7 +76,19 @@ const documentCache=createDocumentSnapshotCache({
   return images;
  }
 });
-async function readDocument(path){return (await documentCache.get(path)).document;}
+function checkDocumentHash(expected,actual){
+ if(expected!==undefined&&expected!==actual)throw Error('源 Word 文件已变更，请重新打开文件副本。');
+}
+async function readDocument(path,sourceSha256){
+ const {document,contentHash}=await documentCache.get(path);
+ checkDocumentHash(sourceSha256,contentHash);
+ return document;
+}
+async function readDocumentBytes(path,sourceSha256){
+ const bytes=await readFile(path);
+ if(sourceSha256!==undefined)checkDocumentHash(sourceSha256,hash(bytes));
+ return bytes;
+}
 // Content-free diagnostics for offline benchmarks, not a product RPC action.
 export function documentSnapshotCacheStats(){return documentCache.stats();}
 // Track Word tickets whose edit session ended in this worker so queued
@@ -96,9 +147,10 @@ async function checkedDocumentToolsSource(payload){
  if(payload.ticket!==undefined){
   const session=await wordSession('native-read',{ticket:payload.ticket});checkedWordSource(session,payload.ticket);
   if(!session.document||session.document.scope||session.document.identity!==payload.documentIdentity||session.document.snapshot!==payload.documentSnapshot||await realpath(session.document.path)!==input)throw Error('Word 文档快照已变化或尚未载入完整，请重新读取');
-  return {input,mainStoryOnly:session.document.mainStoryOnly===true};
+  return {input,snapshot:input,mainStoryOnly:session.document.mainStoryOnly===true};
  }
- return {input};
+ const snapshot=payload.sourceSha256===undefined?input:await readDocumentBytes(input,payload.sourceSha256);
+ return {input,snapshot};
 }
 async function readWordSession(ticket,execution={}){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
@@ -177,8 +229,9 @@ export async function desktopRequest(request,execution={}) {
      // replacement worker starts. Reuse only this editor's durable, hash-
      // checked baseline; it grants no Word session or target authority.
      const previous=await drafts.load(payload.clientId);
-     if(!previous?.baseOle||hash(inspectOle(previous.baseOle).native)!==s.nativeSha256)throw error;
-     baseOle=previous.baseOle;
+     if(previous?.baseOle&&hash(inspectOle(previous.baseOle).native)===s.nativeSha256)baseOle=previous.baseOle;
+     else if(payload.draft?.mode==='rebuild')return drafts.save(payload.clientId,payload.draft);
+     else throw error;
     }
     draftBases.set(key,baseOle);while(draftBases.size>4)draftBases.delete(draftBases.keys().next().value);
    }
@@ -198,18 +251,19 @@ export async function desktopRequest(request,execution={}) {
   return {draft:record.draft,updatedAt:record.updatedAt,...source?{source}:{}};
  }
  if(action==='documentAudit'||action==='documentReferenceTargets'){
-  const {input,mainStoryOnly}=await checkedDocumentToolsSource(payload);
-  const report=await auditDocx(input,{mainStoryOnly});
+  const {snapshot,mainStoryOnly}=await checkedDocumentToolsSource(payload);
+  const report=await auditDocx(snapshot,{mainStoryOnly});
   return action==='documentAudit'?report:getReferenceTargets(report,{query:payload.query});
  }
- if(action==='documentTypographyPreset')return {preset:await readTypographyPreset((await checkedDocumentToolsSource(payload)).input)};
- if(action==='documentTypographyPreflight')return preflightTypography((await checkedDocumentToolsSource(payload)).input,payload.options,{checkpoint:execution.checkpoint});
- if(action==='documentNumberingPreflight')return preflightNumbering((await checkedDocumentToolsSource(payload)).input,payload.options,{checkpoint:execution.checkpoint});
+ if(action==='documentTypographyPreset')return {preset:await readTypographyPreset((await checkedDocumentToolsSource(payload)).snapshot)};
+ if(action==='documentTypographyPreflight')return preflightTypography((await checkedDocumentToolsSource(payload)).snapshot,payload.options,{checkpoint:execution.checkpoint});
+ if(action==='documentNumberingPreflight')return preflightNumbering((await checkedDocumentToolsSource(payload)).snapshot,payload.options,{checkpoint:execution.checkpoint});
  if(action==='documentTypographyApply'||action==='documentNumberingApply'){
-  const {input}=await checkedDocumentToolsSource(payload);
+  const {input,snapshot}=await checkedDocumentToolsSource(payload);
   if(typeof payload.output!=='string'||!payload.output)throw Error('请选择新的副本文件');
-  const result=await (action==='documentTypographyApply'?applyTypography:applyNumbering)(input,payload.plan,{output:payload.output});
-  return result.report;
+  const output=await documentCopyPath(input,payload.output);
+  const {report}=await (action==='documentTypographyApply'?applyTypography:applyNumbering)(snapshot,payload.plan,{output});
+  return report;
  }
  if(action==='wordDocumentOpen')return nativeWordRequest('native-document-request',payload);
  if(action==='wordDocumentStatus')return nativeWordRequest('native-document-status',payload);
@@ -226,15 +280,18 @@ export async function desktopRequest(request,execution={}) {
   const text=writeEqp(payload.typography,payload.originalText);await writeFile(payload.output,text);return {path:payload.output};
  }
  if(action==='exportGraphic'){
+  const output=payload.source?await documentCopyPath(payload.source.path,payload.output):payload.output;
   let ole;
-  if(payload.source){const {objects}=await inspectDocx(await readFile(payload.source.path)),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
+  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
   else ole=makeNewOle(payload.latex,payload.typography);
   ole=applyRuler(ole,payload);let bytes;
   if(payload.format==='pdf')bytes=Buffer.from((await nativePdf(ole)).pdf,'base64');
   else if(payload.format==='svg')bytes=Buffer.from((await renderNative(ole,{raster:false})).svg);
   else if(payload.format==='png')bytes=(await renderNative(ole)).png;
   else throw Error('未知图像格式');
-  await writeFile(payload.output,bytes);return {path:payload.output,bytes:bytes.length};
+  if(payload.source)await writeDocumentCopy(payload.source.path,output,bytes);
+  else await writeFile(output,bytes);
+  return {path:payload.output,bytes:bytes.length};
  }
  if(action==='wordSessionRead')return readWordSession(payload.ticket);
  if(action==='wordSessionDocument'){
@@ -331,15 +388,25 @@ export async function desktopRequest(request,execution={}) {
   const p=await renderNative(ole,{raster:false});
   return {latex,nativeSha256:hash(o.native),nativeBytes:o.native.length,characters:characters(o.parsed).length,svg:p.svg,warnings:p.warnings};
  }
+ if(action==='fileCopyThumbnails'){
+  const {path,sourceSha256,indices}=payload;
+  if(!/^[a-f0-9]{64}$/.test(sourceSha256)||!Array.isArray(indices))throw Error('Invalid file thumbnail snapshot');
+  const result=await desktopRequest({action:'inspect',payload:{path,sourceSha256,onlyIndices:indices}},execution);
+  return {images:result.objects.map(({index,image})=>({index,image}))};
+ }
  if(action==='inspect') {
-  const {document:{objects,numberFormat,numberingRevision,typographyPreset},contentHash}=await documentCache.get(payload.path,{checkpoint:execution.snapshotCheckpoint});
+  const {document:{objects,numberFormat,numberingRevision,typographyPreset,hasLegacyNumbering},contentHash}=await documentCache.get(payload.path,{checkpoint:execution.snapshotCheckpoint});
+  checkDocumentHash(payload.sourceSha256,contentHash);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.
   // Serialize CoreText work and reuse identical formula thumbnails per scan.
   const failedThumbnails=new Set();
-  const render=execution.renderThumbnail??(async o=>{
-   const rendered=await renderNative(o.ole,thumbnailSize);
-   return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
+  const render=execution.renderThumbnail??(o=>{
+   const work=async()=>{
+    const rendered=await renderNative(o.ole,thumbnailSize);
+    return cacheThumbnail(o.nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
+   };
+   return execution.scheduleThumbnail?execution.scheduleThumbnail(work):work();
   });
   const thumbnail=async o=>{
    if(thumbnailCache.has(o.nativeSha256))return thumbnailCache.get(o.nativeSha256);
@@ -374,47 +441,48 @@ export async function desktopRequest(request,execution={}) {
    for(const entry of entries)if(storedPaths.has(entry.index))entry.image=images[storedPaths.get(entry.index)]??null;
   }
   const documentToolObjects=mainStoryOnly&&payload.onlyIndices===undefined&&objects.length!==entries.length?objects.map(({index,nativeSha256})=>({index,nativeSha256})):null;
-  return {path:payload.path,objects:entries,...documentToolObjects?{documentToolObjects}:{},documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
+  return {path:payload.path,sourceSha256:contentHash,objects:entries,...documentToolObjects?{documentToolObjects}:{},...mainStoryOnly?{wordHasLegacyNumbering:hasLegacyNumbering}:{},documentNumberFormat:numberFormat,documentNumberingRevision:numberingRevision,documentTypographyPreset:typographyPreset};
  }
  if(action==='export') {
   if(!Array.isArray(payload.equations)||payload.equations.length<1||payload.equations.length>500)throw Error('需要 1–500 条公式');
+  const output=payload.source?await documentCopyPath(payload.source.path,payload.output):payload.output;
   const equations=payload.equations.map(e=>({latex:e.latex,label:e.label||'',typography:e.typography,layout:e.layout,ruler:e.ruler}));
   if(payload.source){
-   const {objects}=await inspectDocx(await readFile(payload.source.path)),o=objects[payload.source.index];
+   const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];
    if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');
    equations[0].ole=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,equations[0].latex);
   }
   const bytes=await createDocx(equations,{fragment:payload.fragment??true,numberingFamily:'mathtype'});
-  await writeFile(payload.output,bytes); return {path:payload.output,bytes:bytes.length};
+  if(payload.source)await writeDocumentCopy(payload.source.path,output,bytes);
+  else await writeFile(output,bytes);
+  return {path:payload.output,bytes:bytes.length};
  }
  if(action==='editPreview') {
-  const {objects}=await readDocument(payload.input),o=objects[payload.index];
+  const {objects}=await readDocument(payload.input,payload.sourceSha256),o=objects[payload.index];
   if(!o||o.parseError)throw Error(o?.parseError||'公式不存在');
   const changed=payload.mode==='rebuild'?replaceOleLatex(o.ole,payload.latex):editCharacters(o.ole,payload.replacements),updated=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),latex=oleLatex(updated),p=await renderNative(updated,{raster:false});
   return {latex,nativeSha256:hash(inspectOle(updated).native),svg:p.svg,warnings:p.warnings};
  }
  if(action==='edit') {
-  const input=await realpath(payload.input),output=await realpath(payload.output).catch(()=>resolve(payload.output));
-  if(input===output)throw Error('请另存为副本，保留原始 Word 文档');
-  const buffer=await readFile(input);
+  const input=await realpath(payload.input),output=await documentCopyPath(input,payload.output);
+  const buffer=await readDocumentBytes(input,payload.sourceSha256);
   const bytes=payload.mode==='characters'?await editDocx(buffer,payload.index,payload.replacements,{typography:payload.typography,ruler:payload.ruler}):await replaceDocxEquation(buffer,payload.index,payload.latex,{typography:payload.typography,ruler:payload.ruler});
   const checked=await inspectDocx(bytes),o=checked.objects[payload.index];
   if(!o?.nativeSha256||o.parseError)throw Error('原生公式写回校验失败，未保存');
-  await writeFile(output,bytes);return {path:output,bytes:bytes.length,latex:o.latex,nativeSha256:o.nativeSha256};
+  await writeDocumentCopy(input,output,bytes);return {path:output,bytes:bytes.length,latex:o.latex,nativeSha256:o.nativeSha256};
  }
  if(action==='arrange') {
-  const input=await realpath(payload.input),output=await realpath(payload.output).catch(()=>resolve(payload.output));
-  if(input===output)throw Error('请另存为副本，保留原始 Word 文档');
-  let bytes=await arrangeDocx(await readFile(input),{indices:payload.indices,layout:payload.layout,defaultNumberingFamily:'mathtype'});
+  const input=await realpath(payload.input),output=await documentCopyPath(input,payload.output);
+  let bytes=await arrangeDocx(await readDocumentBytes(input,payload.sourceSha256),{indices:payload.indices,layout:payload.layout,defaultNumberingFamily:'mathtype'});
   if(payload.layout?.mode?.startsWith('numbered-')&&payload.layout.numberFormat){
    const plan=await preflightNumbering(bytes,{scope:'future',numberFormat:payload.layout.numberFormat});
    bytes=(await applyNumbering(bytes,plan)).buffer;
   }
-  await writeFile(output,bytes);return {path:output,bytes:bytes.length};
+  await writeDocumentCopy(input,output,bytes);return {path:output,bytes:bytes.length};
  }
  if(action==='preview') {
   let ole;
-  if(payload.source){const {objects}=await inspectDocx(await readFile(payload.source.path)),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
+  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
   else ole=makeNewOle(payload.latex,payload.typography);
   ole=applyRuler(ole,payload);
   if(payload.favoriteThumbnail===true){const p=await renderNative(ole,thumbnailSize);return {png:p.png.toString('base64')};}
@@ -439,7 +507,7 @@ if(await isMainModule(import.meta.url)){
    // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
    // Rendering and filesystem mutations retain their original serial order.
    const isPreview=['validate','editPreview'].includes(request.action);
-   const isThumbnailBatch=request.action==='wordSessionThumbnails';
+   const isThumbnailBatch=request.action==='wordSessionThumbnails'||request.action==='fileCopyThumbnails';
    const isFavoriteThumbnail=request.action==='preview'&&request.payload?.favoriteThumbnail===true;
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;

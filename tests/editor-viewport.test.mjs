@@ -10,8 +10,9 @@ function viewport({canvasHeight=250,verticalPadding=0}={}){
  const pageEvents=events(),documentEvents=events();
  const rail={...events(),hidden:true,clientWidth:576,scrollLeft:0,firstElementChild:{style:{}}};
  const content={...events(),clientWidth:600,scrollLeft:0,get scrollWidth(){return Math.max(600,width*font/29);},querySelector:()=>({getBoundingClientRect:()=>({width:width*font/29,height:height*font/29})})};
- const wrap={...events(),clientHeight:canvasHeight,parentElement:{querySelector:()=>rail}};
- const field={value:'x',closest:()=>wrap,shadowRoot:{querySelector:()=>content},style:{
+ const emptyHint={hidden:true};
+ const wrap={...events(),clientHeight:canvasHeight,parentElement:{querySelector:selector=>selector==='.equation-scrollbar'?rail:emptyHint}};
+ const field={value:'x',readOnly:false,focused:false,focus(){this.focused=true;},closest:()=>wrap,shadowRoot:{querySelector:()=>content},style:{
   setProperty(_key,value){inlineSize=value;font=parseFloat(value);},
   getPropertyValue(){return inlineSize;},
   removeProperty(){inlineSize='';font=29;}
@@ -21,7 +22,7 @@ function viewport({canvasHeight=250,verticalPadding=0}={}){
  vm.runInContext(source,context);
  const controller=context.window.createEquationViewport(field,{getZoom:()=>selected,onScaleChange(){changes++;}});
  function flush(){let count=0;while(frames.length){assert.ok(++count<10,'sizing must settle without a continuous frame loop');frames.shift()();}}
- return {rail,content,controller,field,document,window:pageEvents,flush,get zoom(){return controller.effectiveZoom;},get changes(){return changes;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
+ return {rail,content,controller,field,emptyHint,wrap,document,window:pageEvents,flush,get zoom(){return controller.effectiveZoom;},get changes(){return changes;},render(w,h=40){width=w;height=h;mutation();flush();},select(zoom){selected=zoom;controller.refresh();flush();}};
 }
 
 test('Re-measuring tall content with em padding preserves the displayed scale',()=>{
@@ -61,4 +62,15 @@ test('Page reveal, resize, and visibility restoration remeasure without changing
  v.document.hidden=true;v.document.handlers.visibilitychange();
  v.document.hidden=false;v.document.handlers.visibilitychange();v.flush();
  assert.equal(v.field.value,originalValue);assert.equal(v.zoom,originalZoom);
+});
+
+test('Only an empty editable canvas displays the input hint and accepts background clicks',()=>{
+ const v=viewport();
+ v.controller.refresh();v.flush();assert.equal(v.emptyHint.hidden,true);
+ v.field.value='';v.controller.refresh();v.flush();assert.equal(v.emptyHint.hidden,false);
+ v.wrap.handlers.click({target:v.field});assert.equal(v.field.focused,false);
+ v.wrap.handlers.click({target:v.wrap});assert.equal(v.field.focused,true);
+ v.field.readOnly=true;v.field.focused=false;v.controller.refresh();v.flush();assert.equal(v.emptyHint.hidden,true);
+ v.wrap.handlers.click({target:v.wrap});assert.equal(v.field.focused,false);
+ assert.equal(v.field.value,'','the input hint never becomes formula content');
 });

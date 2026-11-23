@@ -35,3 +35,14 @@ test('The current decoded image is reused and invalidates an obsolete replacemen
  const loading=p.swap('second');await p.swap('first');p.pending[1].resolve();await loading;
  assert.equal(p.target.src,'first');assert.equal(p.pending.length,2);
 });
+test('Editor changes during image decode keep the previous image until a current response is available',async()=>{
+ const p=preview(),first=p.swap('first');p.pending[0].resolve();await first;
+ let current=true;
+ const outdated=p.swap('outdated',()=>current);current=false;
+ p.pending[1].resolve();assert.equal(await outdated,false);
+ assert.equal(p.target.src,'first');assert.deepEqual(p.visibility,[true]);
+ current=true;
+ const failed=p.swap('failed',()=>current);current=false;
+ p.pending[2].reject(Error('decode failed'));assert.equal(await failed,false);
+ assert.equal(p.target.src,'first');assert.deepEqual(p.visibility,[true]);
+});

@@ -17,8 +17,10 @@ function deferred(){let resolve;const promise=new Promise(r=>{resolve=r;});retur
 
 test('projection keeps independent metadata and OLE without DOM, ZIP or media',()=>{
  const original=fixture(Buffer.from('formula'));
+ original.hasLegacyNumbering=true;
  const snapshot=projectDocumentSnapshot(original,{font:'Times'});
- assert.deepEqual(Object.keys(snapshot),['objects','numberFormat','numberingRevision','typographyPreset']);
+ assert.deepEqual(Object.keys(snapshot),['objects','numberFormat','numberingRevision','hasLegacyNumbering','typographyPreset']);
+ assert.equal(snapshot.hasLegacyNumbering,true);
  assert.equal(snapshot.objects[0].element,undefined);
  assert.equal(snapshot.objects[0].partDoc,undefined);
  assert.equal(snapshot.objects[0].rels,undefined);

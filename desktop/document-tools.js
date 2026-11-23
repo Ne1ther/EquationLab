@@ -5,7 +5,7 @@
  function input(){
   if(!completeDocument())throw Error('请先载入完整且可用的文档');
   if(source.numberingRefreshNeeded)throw Error('Word 中的编号已更新，请刷新文档后重试。');
-  return {input:source.path,...wordTicket?{ticket:wordTicket,documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot}:{}};
+  return {input:source.path,...wordTicket?{ticket:wordTicket,documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot}:source.fileCopyGeneration?{sourceSha256:source.sourceSha256}:{}};
  }
  const same=report=>{
   const bound=report?.sourceBinding??report?.binding;

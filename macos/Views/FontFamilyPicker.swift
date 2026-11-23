@@ -38,7 +38,6 @@ struct FontFamilyPicker: NSViewRepresentable {
     final class Coordinator: NSObject, NSComboBoxDataSource, NSComboBoxDelegate {
         var parent: FontFamilyPicker
         var committedValue: String
-        private var query = ""
         private var visible = FontFamilyPicker.families
         init(_ parent: FontFamilyPicker) { self.parent = parent; committedValue = parent.value }
         func numberOfItems(in comboBox: NSComboBox) -> Int { visible.count }
@@ -49,31 +48,30 @@ struct FontFamilyPicker: NSViewRepresentable {
             FontFamilyPicker.families.first { $0.range(of: string, options: [.anchored, .caseInsensitive]) != nil }
         }
         func controlTextDidBeginEditing(_ notification: Notification) {
-            query = ""; visible = FontFamilyPicker.families
+            visible = FontFamilyPicker.families
             (notification.object as? NSComboBox)?.reloadData()
         }
         func controlTextDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSComboBox else { return }
-            query = view.stringValue
+            let query = view.stringValue
             visible = query.isEmpty ? FontFamilyPicker.families : FontFamilyPicker.families.filter { $0.localizedCaseInsensitiveContains(query) }
             view.reloadData()
         }
         func controlTextDidEndEditing(_ notification: Notification) {
             guard let view = notification.object as? NSComboBox else { return }
-            commit(view.stringValue)
+            commit(view.stringValue, in: view)
         }
-        private func commit(_ text: String) {
+        private func commit(_ text: String, in view: NSComboBox) {
             let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !text.isEmpty else { return }
-            let chosen = FontFamilyPicker.families.first { $0.caseInsensitiveCompare(text) == .orderedSame } ?? text
+            let chosen = text.isEmpty ? committedValue : (FontFamilyPicker.families.first { $0.caseInsensitiveCompare(text) == .orderedSame } ?? text)
+            if view.stringValue != chosen { view.stringValue = chosen }
+            guard chosen != committedValue else { return }
             committedValue = chosen
             parent.value = chosen
         }
         func comboBoxSelectionDidChange(_ notification: Notification) {
             guard let view = notification.object as? NSComboBox, visible.indices.contains(view.indexOfSelectedItem) else { return }
-            let chosen = visible[view.indexOfSelectedItem]
-            view.stringValue = chosen
-            commit(chosen)
+            commit(visible[view.indexOfSelectedItem], in: view)
         }
     }
 }

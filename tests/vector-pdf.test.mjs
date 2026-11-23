@@ -1,5 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import {DOMParser} from '@xmldom/xmldom';
+import sharp from 'sharp';
 import {nativePdf,renderNative} from '../src/font-renderer.mjs';
 import {makeNewOle} from '../src/new-formula.mjs';
 import {inspectOle,replaceOleLatex,oleLatex} from '../src/native.mjs';
@@ -26,6 +28,34 @@ test('Nested SVG delimiter viewports retain their translation and clipping in PD
  const result=vectorPdfRequest('<svg viewBox="0 0 100 100"><svg x="10" y="20" width="30" height="40" viewBox="0 -5 30 40"><path d="M0 -100L0 100"/></svg></svg>',12,12);
  assert.deepEqual(result.vector[0].matrix,[1,0,0,1,10,25]);
  assert.deepEqual(result.vector[0].clips,[{matrix:[1,0,0,1,0,0],rect:[10,20,30,40]}]);
+});
+test('Rounded-box native exports preserve the corners drawn in SVG',async()=>{
+ const ole=makeNewOle(String.raw`\enclose{roundedbox}{x}`),before=Buffer.from(ole);
+ const preview=await renderNative(ole),dom=new DOMParser().parseFromString(preview.svg,'image/svg+xml');
+ const borderElement=Array.from(dom.getElementsByTagName('rect')).find(rect=>rect.hasAttribute('rx'));
+ assert.ok(borderElement,'MathJax draws this template as a rounded SVG rectangle');
+ const [x,y,w]=['x','y','width'].map(name=>Number(borderElement.getAttribute(name)));
+ const {vector,viewBox}=vectorPdfRequest(preview.svg,preview.width,preview.height);
+ const border=vector.find(part=>part.fill==='none'&&part.strokeWidth>0);
+ assert.ok(border.commands.filter(command=>command.op==='C').length>=4,'all four corners must have curves');
+ const {data,info}=await sharp(preview.png).raw().toBuffer({resolveWithObject:true});
+ const [a,b,c,d,e,f]=border.matrix,[vx,vy,vw,vh]=viewBox;
+ const alpha=(x,y)=>{
+  const col=Math.floor((a*x+c*y+e-vx)*preview.width*8/vw);
+  const row=Math.floor((b*x+d*y+f-vy)*preview.height*8/vh);
+  return data[(row*info.width+col)*info.channels+info.channels-1];
+ };
+ assert.equal(alpha(x,y),0,'the old right-angle corner must be transparent');
+ assert.ok(alpha(x+w/2,y)>200,'the straight border must stay visible');
+ const pdf=Buffer.from((await nativePdf(ole)).pdf,'base64').toString('latin1');
+ assert.match(pdf,/^%PDF-/);assert.doesNotMatch(pdf,/\/Subtype\s*\/Image/);
+ assert.deepEqual(ole,before);
+});
+test('Vector rounded radii inherit the missing axis, clamp to the rectangle and keep zero radii square',()=>{
+ const commands=attrs=>vectorPdfRequest('<svg viewBox="0 0 100 100"><rect x="10" y="20" width="30" height="40" '+attrs+'/></svg>',12,12).vector[0].commands;
+ assert.deepEqual(commands('ry="7"'),commands('rx="7"'));
+ assert.deepEqual(commands('rx="90" ry="50"')[0].values,[25,20]);
+ assert.deepEqual(commands('rx="0" ry="8"'),commands(''));
 });
 test('Outline normalization preserves relative geometry and reflected curve controls',()=>{
  assert.deepEqual(outlineCommands('M1 2h3v4q1 2 3 4t5 6z'),[

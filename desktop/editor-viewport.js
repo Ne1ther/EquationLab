@@ -7,7 +7,8 @@
  }
  window.equationFitZoom=fittedZoom;
  window.createEquationViewport=(field,{getZoom,onScaleChange})=>{
-  const wrap=field.closest('.math-wrap'),rail=wrap.parentElement.querySelector('.equation-scrollbar');let effectiveZoom=maximum,scheduled=false,content=null;
+  const wrap=field.closest('.math-wrap'),rail=wrap.parentElement.querySelector('.equation-scrollbar');let effectiveZoom=maximum,frame=null,content=null;
+  const emptyHint=wrap.parentElement.querySelector('.editor-empty-hint');
   const padding=(element,axis)=>{const style=getComputedStyle(element);return axis==='x'?parseFloat(style.paddingLeft)+parseFloat(style.paddingRight):parseFloat(style.paddingTop)+parseFloat(style.paddingBottom);};
   function apply(zoom){
    if(zoom===effectiveZoom)return;
@@ -20,19 +21,19 @@
    if(!rail.hidden){rail.firstElementChild.style.width=(rail.clientWidth+overflow)+'px';rail.scrollLeft=content.scrollLeft;}
   }
   rail.addEventListener('scroll',()=>{if(content&&Math.abs(content.scrollLeft-rail.scrollLeft)>.5)content.scrollLeft=rail.scrollLeft;},{passive:true});
+  wrap.addEventListener('click',event=>{if(event.target===wrap&&!field.readOnly)field.focus();});
   wrap.addEventListener('wheel',event=>{
    const delta=event.deltaX||(event.shiftKey?event.deltaY:0);
    if(content&&delta&&content.scrollWidth>content.clientWidth){content.scrollLeft+=delta;event.preventDefault();}
   },{passive:false});
-  function refresh(){
-   if(scheduled)return;scheduled=true;
-   requestAnimationFrame(()=>{
-    scheduled=false;
+  function measure(){
+    const hasFormula=!!field.value.trim();
+    if(emptyHint)emptyHint.hidden=field.readOnly||hasFormula;
     const nextContent=field.shadowRoot?.querySelector('[part=content]');
     if(nextContent!==content){content=nextContent;content?.addEventListener('scroll',syncRail,{passive:true});}
     const selected=getZoom();if(selected){apply(selected);syncRail();return;}
     const base=content?.querySelector('.ML__base');
-    if(!content||!base||!field.value.trim()){apply(maximum);syncRail();return;}
+    if(!content||!base||!hasFormula){apply(maximum);syncRail();return;}
     // Measure at a fixed font size so em padding and subpixel rounding
     // cannot feed the last applied zoom back into the next fit.
     const adjusted=effectiveZoom!==maximum,property='--formula-size';
@@ -53,19 +54,28 @@
     }
     apply(zoom);
     syncRail();
-   });
+  }
+  function refresh(){
+   if(frame!==null)return;
+   frame=requestAnimationFrame(()=>{frame=null;measure();});
+  }
+  function reveal(){
+   if(!window.editorIsComposing?.())window.flushEquationMathfieldRender?.(field);
+   if(frame!==null)cancelAnimationFrame(frame);
+   frame=null;
+   measure();
   }
   // WebKit can pause its process while the retained native window is hidden.
   // Re-measure after the page or app becomes visible again; this only updates
   // display sizing and the scrollbar, never the MathLive value or selection.
-  window.addEventListener('pageshow',refresh);
+  window.addEventListener('pageshow',reveal);
   window.addEventListener('resize',refresh);
-  document.addEventListener('visibilitychange',()=>{if(!document.hidden)refresh();});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)reveal();});
   new ResizeObserver(refresh).observe(wrap);
   // MathLive can render after the host's input event/animation frame. Measure
   // its completed content too, without polling or observing caret animation.
   if(field.shadowRoot)new MutationObserver(refresh).observe(field.shadowRoot,{childList:true,subtree:true});
   document.fonts.ready.then(refresh);
-  return {refresh,get effectiveZoom(){return effectiveZoom;}};
+  return {refresh,reveal,get effectiveZoom(){return effectiveZoom;}};
  };
 })();

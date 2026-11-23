@@ -151,15 +151,7 @@ struct NumberingFormatEditor: View {
 
             if let number = bridge.state.numbering {
                 VStack(alignment: .leading, spacing: 6) {
-                    HStack(alignment: .firstTextBaseline) {
-                        Text(bridge.t("文档中的编号")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
-                        Spacer()
-                        if number.actualNumber == nil && number.mode == "unknown" && bridge.state.wordDocumentLoading {
-                            Text(label("载入中", "Loading")).font(.caption).foregroundStyle(.secondary)
-                        } else {
-                            numberBadge(number.actualNumber ?? bridge.t(number.mode == "unknown" ? "未读取" : "未编号"))
-                        }
-                    }
+                    documentNumberLine(number)
                     if number.hasDocumentContext {
                         HStack(spacing: 4) {
                             Text(english ? "Equation" : "文档中的第").foregroundStyle(.secondary)
@@ -246,7 +238,10 @@ struct NumberingFormatEditor: View {
                     .font(.caption2).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } else if !field.disabled {
-                Text(label(
+                Text(bridge.state.wordNumberingMayMigrate ? label(
+                    "保存编号修改前，Word 会将整篇文档的旧 Equation Lab 编号转换为共享 MathType 编号。现有引用仍指向原公式。",
+                    "Saving a numbering change converts legacy Equation Lab numbering throughout the document to shared MathType numbering. Existing references keep their original targets."
+                ) : label(
                     "点击“更新公式”仅改当前公式，并将此格式设为后续新增公式默认；不会自动重编文档中其他已有编号。",
                     "Update Equation changes only this equation and sets the default for future equations. Other existing numbers in Word are not renumbered."
                 ))
@@ -379,6 +374,33 @@ struct NumberingFormatEditor: View {
             .foregroundStyle(.black).padding(.horizontal, 9).padding(.vertical, 3)
             .background(Color.white.opacity(0.92), in: RoundedRectangle(cornerRadius: 6, style: .continuous)).textSelection(.enabled)
     }
+
+    private func documentNumberLine(_ number: DocumentNumbering) -> some View {
+        let title = Text(bridge.t("文档中的编号")).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+        let value = documentNumberValue(number)
+        return ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                title.fixedSize()
+                Spacer(minLength: 0)
+                value.fixedSize()
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                title.fixedSize(horizontal: false, vertical: true)
+                value.fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+
+    @ViewBuilder private func documentNumberValue(_ number: DocumentNumbering) -> some View {
+        if let actualNumber = number.actualNumber {
+            numberBadge(actualNumber)
+        } else {
+            let status = number.mode != "unknown" ? label("未编号", "No number")
+                : bridge.state.wordDocumentLoading ? label("载入中", "Loading") : label("未读取", "Not read")
+            Text(status).font(.caption.weight(.medium)).foregroundStyle(.secondary)
+        }
+    }
+
     private func counters(_ chapter: Int?, _ section: Int?, _ equation: Int?) -> some View {
         HStack(spacing: 10) {
             ForEach(Array([(bridge.t("章"), chapter), (bridge.t("节"), section), (bridge.t("公式序号"), equation)].enumerated()), id: \.offset) { _, item in

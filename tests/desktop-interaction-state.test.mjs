@@ -41,17 +41,17 @@ test('Reverting the ruler restores the open equation’s own tab stops without c
 });
 
 test('A busy New action is blocked; Word completion waits for the native window to hide before clearing the editor',async()=>{
- const names=['function resetNewFormula()','window.nativeNew='];
+ const names=['function retireStandaloneDraft()','function resetNewFormula()','window.nativeNew='];
  const finish=source.slice(source.indexOf('async function finishWordSave('),source.indexOf('function releaseWordSaveLock()'));
  const code=[...names.map(name=>source.split('\n').find(line=>line.startsWith(name))),finish].join('\n');
  assert.ok(names.every(name=>code.includes(name)));
  const elements=new Map(),element=id=>{if(!elements.has(id))elements.set(id,{hidden:false,textContent:'',querySelectorAll:()=>[]});return elements.get(id);};
  let hide;const hidden=new Promise(resolve=>{hide=resolve;});
  const metrics=[];let now=5;
- const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:value=>metrics.push(value)}}}},performance:{now:()=>now},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},editingRuler:[{position:3200,type:0}],mf,$:element,
-  renderObjects(){},changed(){},loadObjectLayout(){},syncSidebar(){return hidden;},message(){}});
+ const mf={value:'edited formula',readOnly:true};const context=vm.createContext({window:{webkit:{messageHandlers:{native:{postMessage:value=>metrics.push(value)}}}},performance:{now:()=>now},busy:true,wordTicket:'active',wordSaveQueued:true,source:{},selected:{},mode:'characters',editingRuler:[{position:3200,type:0}],mf,$:element,
+  renderModes(){mf.readOnly=context.mode==='characters';},renderObjects(){},changed(){},loadObjectLayout(){},syncSidebar(){return hidden;},message(){}});
  vm.runInContext(code,context);assert.equal(context.window.nativeNew(),false);assert.equal(mf.value,'edited formula');
- const completion=vm.runInContext('finishWordSave({started: 1, kind: "save"})',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');now=9;hide();await completion;assert.equal(mf.value,'');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(context.editingRuler,undefined);assert.equal(element('word-session-actions').hidden,true);
+ const completion=vm.runInContext('finishWordSave({started: 1, kind: "save"})',context);assert.equal(mf.value,'edited formula','keep the formula painted while the window is visible');now=9;hide();await completion;assert.equal(mf.value,'');assert.equal(context.mode,'rebuild');assert.equal(mf.readOnly,false);assert.equal(context.wordTicket,null);assert.equal(context.selected,null);assert.equal(context.editingRuler,undefined);assert.equal(element('word-session-actions').hidden,true);
  assert.deepEqual(JSON.parse(JSON.stringify(metrics)),[{action:'wordSaveTiming',payload:{kind:'save',confirmedMs:4,totalMs:8}}]);
 });
 
@@ -66,6 +66,35 @@ test('Using a favorite inserts into an editable Word draft and defers all Word w
  workspace.pending=true;assert.equal(window.nativeFavorite(0),false);workspace.pending=false;
  field.readOnly=true;assert.equal(window.nativeFavorite(0),false);field.readOnly=false;
  assert.equal(window.nativeFavorite(999),false);assert.equal(field.value,'x+\\frac{a}{b}');
+});
+
+test('Standalone row selection, New and favorites preserve the current draft when declined',async()=>{
+ const transitions=source.slice(source.indexOf('function retireStandaloneDraft('),source.indexOf('window.nativeInsertWord='));
+ const browsing=source.slice(source.indexOf('window.nativeSelectObject=async'),source.indexOf('\nsyncSidebar();',source.indexOf('window.nativeFavorite=')));
+ const perform=source.split('\n').find(line=>line.startsWith('async function perform('));
+ const document={objects:[{index:0},{index:1}]},mf={value:'draft'};
+ const prompts=[];let answer=false,dirty=true,composing=false,clears=0;
+ const window={hasRecoverableDraft:()=>dirty,editorIsComposing:()=>composing,draftOutcomeUnknown:true,clearSavedDrafts:async()=>{clears++;}};
+ const context=vm.createContext({window,mf,busy:false,wordNavigating:false,wordOutcomeUnknown:false,wordTicket:null,source:document,selected:document.objects[0],favorites:['favorite'],idleWaiters:new Set(),controls(){},changed(){},message(){},
+  native:async(action,payload)=>{assert.equal(action,'confirmWordSessionSwitch');prompts.push(payload);return {discard:answer};},
+  loadObjectLayout(){},renderModes(){},renderObjects(){},$:()=>({}),
+  selectObject(index){context.selected=document.objects[index];mf.value='other equation';}
+ });
+ vm.runInContext([perform,transitions,browsing].join('\n'),context);
+ assert.equal(await window.nativeSelectObject(0),undefined);
+ for(const leave of [()=>window.nativeSelectObject(1),()=>window.nativeNew(),()=>window.nativeFavorite(0)]){
+  assert.equal(await leave(),false);assert.equal(context.selected,document.objects[0]);assert.equal(mf.value,'draft');
+ }
+ assert.deepEqual(prompts.map(payload=>Object.keys(payload)[0]),['browsing','newFormula','newFormula']);
+ assert.equal(clears,0);assert.equal(window.draftOutcomeUnknown,true);
+ composing=true;assert.equal(await window.nativeSelectObject(1),false);assert.equal(window.nativeNew(),false);
+ assert.equal(prompts.length,3);assert.equal(mf.value,'draft');
+ composing=false;answer=true;
+ assert.equal(await window.nativeSelectObject(1),true);assert.equal(mf.value,'other equation');
+ assert.equal(clears,1);assert.equal(window.draftOutcomeUnknown,false);
+ dirty=false;
+ assert.equal(window.nativeFavorite(0),true);assert.equal(mf.value,'favorite');assert.equal(context.selected,null);
+ assert.equal(prompts.length,4);
 });
 
 test('Rapid sidebar browsing changes only the local selection and retains the Word save owner',async()=>{

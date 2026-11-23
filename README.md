@@ -4,7 +4,7 @@
 
 做这个项目，是想在 M 系列 Mac 的 Word 里把原来的 MathType 公式接着写下去。在 Word 里双击公式打开编辑器，改完写回原位置。也可以单独打开 App，用模板或 LaTeX 写公式。
 
-**[下载 0.7.5 安装包（build 109）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.5/Equation-Lab-0.7.5.pkg)** · [更新记录](docs/releases.md) · [安装与排查](docs/install.md) · [全部 Releases](https://github.com/Ne1ther/EquationLab/releases)
+**[下载 0.7.6 安装包（build 110）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)** · [更新记录](docs/releases.md) · [安装与排查](docs/install.md) · [全部 Releases](https://github.com/Ne1ther/EquationLab/releases)
 
 > 适用 **Apple Silicon（M 系列）Mac，macOS 14 及以上**。Word 联动需要**桌面版 Word for Mac**。安装包已包含 App、Word 插件、字体和运行时，无需另装 MathType。
 
@@ -18,6 +18,7 @@
 
 - 打开桌面版 Word，用顶部的 **Equation Lab** 功能区插入行内、居中或左右编号公式，或直接**双击已有 MathType 公式**进入编辑器。编辑已有公式后点 **更新公式**，新公式点 **完成并插入**。
 - 左侧列出当前打开的多份 Word 文档（同名文件也能区分），也可以按编号和 LaTeX 搜索。支持渐进加载的长文档会先显示可点选目录，再补齐内容。用模板或 LaTeX 写多行、分段和矩阵，调整字体、字号和间距，或导出 PDF、SVG、PNG。
+- 打开 `.docx` 副本时，先显示公式目录，缩略图随浏览加载。新建或切换公式前会提示处理未保存的草稿。
 
 [编辑与样式说明](docs/features.md) · [草稿恢复说明](docs/draft-recovery.md)
 
@@ -25,6 +26,7 @@
 
 - 在编辑器右侧 **文档 → Word 编排** 设置编号格式与章、节。在 Word 功能区选单条正文公式可补加或切换 **左侧编号 / 右侧编号**，正文里点 **插入引用** 可搜索编号或附近文字来插入交叉引用。
 - 增删或移动公式后，点 Word 功能区的 **更新编号** 重算序号和交叉引用，同时兼容 Equation Lab 和旧版 MathType 编号。新设的编号格式会作为后续新增编号的默认值。
+- 如果文档仍使用旧 Equation Lab 编号，首次保存编号格式时会提示确认全文编号字段的转换。
 
 ### 3. 文档副本批量工具（先预检，再另存副本）
 
@@ -57,7 +59,7 @@
 ## 安装、兼容性与排查
 
 1. 保存正在写的文档，完全退出 Word 和 Equation Lab。
-2. 双击 `Equation-Lab-0.7.5.pkg` 完成安装（请从 GitHub Releases 下载并核对同版本 `SHA256SUMS`）。
+2. 双击 `Equation-Lab-0.7.6.pkg` 完成安装（请从 GitHub Releases 下载并核对同版本 `SHA256SUMS`）。
 3. 先打开 Equation Lab，按提示授予 Office 文件夹访问权限并完成 **安装 / 更新 Word 插件**。
 4. 重新打开 Word，即可在顶部看到 **Equation Lab** 功能区。
 

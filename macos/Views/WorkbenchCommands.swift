@@ -255,6 +255,60 @@ struct WorkbenchCommands: Commands {
     }
 }
 
+struct CommandSearchResults {
+    typealias Command = (id: String, title: String, icon: String)
+
+    enum Match {
+        case command(String)
+        case letter(EquationLetter)
+        case template(FormulaTemplate)
+        case catalog(CatalogItem)
+    }
+
+    let commands: [Command]
+    let letters: [EquationLetter]
+    let templates: [FormulaTemplate]
+    let catalog: [CatalogItem]
+    private let query: String
+
+    var isEmpty: Bool { commands.isEmpty && letters.isEmpty && templates.isEmpty && catalog.isEmpty }
+
+    init(query: String, commands: [Command], templates: [FormulaTemplate],
+         letters: @autoclosure () -> [EquationLetter], catalog: @autoclosure () -> [CatalogItem],
+         localize: (String) -> String) {
+        let query = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.query = query
+        if query.isEmpty {
+            self.commands = commands
+            self.templates = templates
+            self.letters = []
+            self.catalog = []
+            return
+        }
+        func matches(_ content: String) -> Bool { content.localizedCaseInsensitiveContains(query) }
+        self.commands = commands.filter { matches("\(localize($0.title)) \($0.title)") }
+        self.letters = letters().filter { matches("\($0.name) \($0.symbol) \($0.latex) \($0.unicode)") }
+        self.templates = templates.filter { item in
+            let title = item.hint.isEmpty ? item.label : item.hint
+            return matches("\(localize(item.category)) \(localize(title)) \(item.category) \(item.hint) \(item.label) \(item.latex)")
+        }
+        self.catalog = catalog().filter { item in
+            item.available && matches("\(localize(item.label)) \(localize(item.hint)) \(item.label) \(item.hint) \(item.latex) \(item.originalToken ?? "")")
+        }
+    }
+
+    func firstEnabledMatch(commandAvailable: (String) -> Bool, letterAvailable: (EquationLetter) -> Bool,
+                           canInsertTemplates: Bool) -> Match? {
+        guard !query.isEmpty else { return nil }
+        // Keep the Return key in the same order as the visible sections.
+        if let command = commands.first(where: { commandAvailable($0.id) }) { return .command(command.id) }
+        if let letter = letters.first(where: letterAvailable) { return .letter(letter) }
+        guard canInsertTemplates else { return nil }
+        if let template = templates.first { return .template(template) }
+        return catalog.first.map { .catalog($0) }
+    }
+}
+
 struct CommandSearch: View {
     @ObservedObject var bridge: DesktopBridge
     @Environment(\.dismiss) private var dismiss
@@ -264,7 +318,7 @@ struct CommandSearch: View {
         guard bridge.wordSessionActive else { return "另存 Word 副本…" }
         return bridge.wordSessionIsInsertion ? "完成并插入" : "更新公式"
     }
-    private var commands: [(String, String, String)] {
+    private var commands: [CommandSearchResults.Command] {
         [
             ("new", "新建公式", "plus.circle"), ("open", "打开 Word 文档", "folder"),
             ("save", saveCommandLabel, "square.and.arrow.down"),
@@ -275,18 +329,6 @@ struct CommandSearch: View {
             ("copyPNG", "复制公式图片", "photo"), ("office-plugins", "安装 / 管理 Office 插件", "puzzlepiece.extension"), ("install", "安装 / 更新 Word 插件", "puzzlepiece.extension"),
             ("compatibility", "兼容性说明", "info.circle")
         ]
-    }
-    private var matchingCommands: [(String, String, String)] { commands.filter { query.isEmpty || ("\(bridge.t($0.1)) \($0.1)").localizedCaseInsensitiveContains(query) } }
-    private var matchingTemplates: [FormulaTemplate] {
-        bridge.state.templates.filter { query.isEmpty || "\(bridge.t($0.category)) \(bridge.t($0.hint)) \($0.label) \($0.latex)".localizedCaseInsensitiveContains(query) }
-    }
-    private var matchingLetters: [EquationLetter] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return LetterCatalog.all.filter { "\($0.name) \($0.symbol) \($0.latex) \($0.unicode)".localizedCaseInsensitiveContains(query) }
-    }
-    private var matchingCatalog: [CatalogItem] {
-        guard !query.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return [] }
-        return FeatureCatalog.all.filter { $0.available && "\($0.label) \($0.hint) \($0.latex) \($0.originalToken ?? "")".localizedCaseInsensitiveContains(query) }
     }
     private func letterAvailable(_ item: EquationLetter) -> Bool {
         !bridge.state.readOnly && item.isAvailable(lowercaseGreekFont: bridge.state.fonts.first { $0.id == "font-4" }?.value ?? "Symbol")
@@ -301,37 +343,38 @@ struct CommandSearch: View {
         default: true
         }
     }
-    private func insert(_ item: EquationLetter) {
-        guard letterAvailable(item) else { return }
-        bridge.action("insertLetter", ["latex": item.latex]); dismiss()
+    private var searchResults: CommandSearchResults {
+        CommandSearchResults(query: query, commands: commands, templates: bridge.state.templates,
+                             letters: LetterCatalog.all, catalog: FeatureCatalog.all, localize: bridge.t)
     }
     var body: some View {
+        let results = searchResults
         VStack(spacing: 0) {
             HStack(spacing: 12) {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField(bridge.t("搜索命令、符号或模板"), text: $query).textFieldStyle(.plain).focused($focused)
                     .onSubmit {
-                        if let first = matchingCommands.first(where: { commandAvailable($0.0) }) { execute(first.0) }
-                        else if let first = matchingLetters.first(where: letterAvailable) { insert(first) }
-                        else if let first = matchingCatalog.first, !bridge.state.readOnly { bridge.insertCatalogItem(first); dismiss() }
-                        else if let first = matchingTemplates.first, !bridge.state.readOnly { bridge.action("template", ["id": first.id]); dismiss() }
+                        if let match = searchResults.firstEnabledMatch(commandAvailable: commandAvailable, letterAvailable: letterAvailable,
+                                                                      canInsertTemplates: !bridge.state.readOnly) {
+                            execute(match)
+                        }
                     }
                 Button(bridge.t("完成")) { dismiss() }.keyboardShortcut(.cancelAction)
             }.padding(18)
             Divider()
             List {
-                if !matchingCommands.isEmpty {
+                if !results.commands.isEmpty {
                     Section(bridge.t("命令")) {
-                        ForEach(matchingCommands, id: \.0) { item in
-                            Button { execute(item.0) } label: { Label(bridge.t(item.1), systemImage: item.2).frame(maxWidth: .infinity, alignment: .leading) }
-                                .buttonStyle(WorkbenchButtonStyle()).disabled(!commandAvailable(item.0))
+                        ForEach(results.commands, id: \.id) { item in
+                            Button { execute(.command(item.id)) } label: { Label(bridge.t(item.title), systemImage: item.icon).frame(maxWidth: .infinity, alignment: .leading) }
+                                .buttonStyle(WorkbenchButtonStyle()).disabled(!commandAvailable(item.id))
                         }
                     }
                 }
-                if !matchingLetters.isEmpty {
+                if !results.letters.isEmpty {
                     Section(bridge.t("字母")) {
-                        ForEach(matchingLetters) { item in
-                            Button { insert(item) } label: {
+                        ForEach(results.letters) { item in
+                            Button { execute(.letter(item)) } label: {
                                 HStack(spacing: 10) {
                                     Text(item.symbol).font(.custom("Times New Roman", size: 20)).frame(width: 24)
                                     Text(item.name + " · " + bridge.t(item.caseName))
@@ -341,29 +384,48 @@ struct CommandSearch: View {
                         }
                     }
                 }
-                if !matchingTemplates.isEmpty {
+                if !results.templates.isEmpty {
                     Section(bridge.t("符号与模板")) {
-                        ForEach(matchingTemplates) { item in
-                            Button { bridge.action("template", ["id": item.id]); dismiss() } label: {
+                        ForEach(results.templates) { item in
+                            Button { execute(.template(item)) } label: {
                                 HStack { Text(bridge.t(item.hint.isEmpty ? item.label : item.hint)); Spacer(); Text(bridge.t(item.category)).font(.caption).foregroundStyle(.secondary) }
                             }.buttonStyle(WorkbenchButtonStyle()).disabled(bridge.state.readOnly)
                         }
                     }
                 }
-                if !matchingCatalog.isEmpty {
+                if !results.catalog.isEmpty {
                     Section(bridge.t("完整集合")) {
-                        ForEach(matchingCatalog) { item in
-                            Button { bridge.insertCatalogItem(item); dismiss() } label: {
+                        ForEach(results.catalog) { item in
+                            Button { execute(.catalog(item)) } label: {
                                 HStack { TemplateGlyph(item: item.template).frame(width: 52, height: 32); Text(bridge.t(item.hint)); Spacer() }.frame(maxWidth: .infinity, alignment: .leading)
                             }.buttonStyle(WorkbenchButtonStyle()).disabled(bridge.state.readOnly)
                         }
                     }
                 }
-                if matchingCommands.isEmpty && matchingTemplates.isEmpty && matchingLetters.isEmpty && matchingCatalog.isEmpty { Text(bridge.t("没有匹配的现有命令")).foregroundStyle(.secondary) }
+                if results.isEmpty { Text(bridge.t("没有匹配的现有命令")).foregroundStyle(.secondary) }
             }.listStyle(.inset)
         }.frame(width: 560, height: 480).onAppear { focused = true }
     }
-    private func execute(_ id: String) {
+    private func execute(_ match: CommandSearchResults.Match) {
+        switch match {
+        case .command(let id):
+            executeCommand(id)
+        case .letter(let item):
+            guard letterAvailable(item) else { return }
+            bridge.action("insertLetter", ["latex": item.latex])
+            dismiss()
+        case .template(let item):
+            guard !bridge.state.readOnly else { return }
+            bridge.action("template", ["id": item.id])
+            dismiss()
+        case .catalog(let item):
+            guard !bridge.state.readOnly else { return }
+            bridge.insertCatalogItem(item)
+            dismiss()
+        }
+    }
+
+    private func executeCommand(_ id: String) {
         guard commandAvailable(id) else { return }
         dismiss()
         switch id {

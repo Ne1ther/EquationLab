@@ -4,7 +4,7 @@
 
 I built Equation Lab so I could keep editing existing MathType equations in Word on an Apple Silicon Mac. Double-click a Word equation to open it in the editor and save it back to the same place. You can also open the app on its own to write equations with templates or LaTeX.
 
-**[Download 0.7.5 Installer (build 109)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.5/Equation-Lab-0.7.5.pkg)** · [Release Notes](docs/releases.md) · [Install & Troubleshooting](docs/install.md) · [All Releases](https://github.com/Ne1ther/EquationLab/releases)
+**[Download 0.7.6 Installer (build 110)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)** · [Release Notes](docs/releases.md) · [Install & Troubleshooting](docs/install.md) · [All Releases](https://github.com/Ne1ther/EquationLab/releases)
 
 > Requires an **Apple Silicon Mac with macOS 14 or later**. Word integration uses **desktop Word for Mac**. The installer includes the app, Word plugin, fonts, and runtime. MathType is optional.
 
@@ -18,6 +18,7 @@ I built Equation Lab so I could keep editing existing MathType equations in Word
 
 - Use the **Equation Lab** ribbon in desktop Word to insert inline, centered, or left/right-numbered equations, or **double-click an existing MathType equation** to open the editor. Choose **Update Equation** to save edits or **Finish and Insert** for a new equation.
 - The sidebar lists open Word documents (including files with the same name) and lets you search by displayed number and LaTeX. Where progressive loading is available, you can select equations while the rest of the document loads. Mix visual templates with LaTeX for multiline formulas, cases, and matrices, adjust fonts, sizes, and spacing, or work in a standalone draft and export PDF, SVG, or PNG.
+- Opening a `.docx` copy shows the equation list first. Thumbnails load as you browse, and the editor prompts you before replacing an unsaved draft.
 
 [Editor guide](docs/features.md) · [Draft recovery](docs/draft-recovery.md)
 
@@ -25,6 +26,7 @@ I built Equation Lab so I could keep editing existing MathType equations in Word
 
 - Set the number format, chapter, and section under **Document → Word layout** in the inspector. In the Word ribbon, select a standalone equation to add or move **Left Number / Right Number**, or use **Insert Reference** to search by equation number or nearby text.
 - After inserting, deleting, or moving equations, click **Update Numbers** in Word to recalculate sequences and cross-references across both Equation Lab and legacy MathType numbering. Updated formats also become the default for future numbered insertions.
+- If the document still uses legacy Equation Lab numbering, the app asks for confirmation before the first format save converts the document’s numbering fields.
 
 ### 3. Batch checks and document-copy tools
 
@@ -57,7 +59,7 @@ The sample includes radicals, sums, integrals, matrices, numbers, and cross-refe
 ## Install, compatibility, and troubleshooting
 
 1. Save your open documents and quit both Word and Equation Lab.
-2. Run `Equation-Lab-0.7.5.pkg` (download from GitHub Releases and verify against the release `SHA256SUMS`).
+2. Run `Equation-Lab-0.7.6.pkg` (download from GitHub Releases and verify against the release `SHA256SUMS`).
 3. Open Equation Lab first, grant Office folder access if prompted, and run **Install / Update Word plugin**.
 4. Reopen Word to use the **Equation Lab** ribbon at the top.
 

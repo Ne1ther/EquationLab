@@ -5,6 +5,7 @@ import {readFile} from 'node:fs/promises';
 
 const app=await readFile(new URL('../desktop/app.js',import.meta.url),'utf8');
 const workspace=await readFile(new URL('../desktop/word-document-workspace.js',import.meta.url),'utf8');
+const drafts=await readFile(new URL('../desktop/draft-integration.js',import.meta.url),'utf8');
 const bootstrap=app.slice(app.indexOf('window.wordDocumentWorkspace='),app.indexOf('window.nativeResumeWordDocument='));
 const requestId='b'.repeat(64),oldTicket='a'.repeat(64),newTicket='c'.repeat(64);
 const document=identity=>({hasDocumentContext:true,documentIdentity:identity,documentSnapshot:1,documentName:identity+'.docx',objects:[{index:0,latex:'x',editorBaseline:'x',nativeSha256:'d'.repeat(64)}]});
@@ -12,8 +13,9 @@ const document=identity=>({hasDocumentContext:true,documentIdentity:identity,doc
 async function editor(cancel,workspaceStatus={connected:true,revision:2,active:{identity:'B',name:'B.docx'}},{confirmed=true}={}){
  const calls=[],messages=[],elements=new Map(),source=document('A');let publishingInitial=confirmed;
  const context=vm.createContext({
-  window:{},Date,setTimeout(){},busy:false,wordNavigating:false,wordCommitRunning:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordTicket:oldTicket,source,selected:source.objects[0],mode:'rebuild',editingRuler:undefined,mf:{value:'x',readOnly:false},
-  $(id){if(!elements.has(id))elements.set(id,{});return elements.get(id);},
+  window:{createDraftRecovery:()=>({initialize:async()=>{}})},crypto,Date,setTimeout(){},busy:false,wordNavigating:false,wordCommitRunning:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordTicket:oldTicket,source,selected:source.objects[0],mode:'rebuild',editingRuler:undefined,mf:{value:'x',readOnly:false},
+  $(id){if(!elements.has(id))elements.set(id,{addEventListener(){},querySelectorAll:()=>[]});return elements.get(id);},
+  wordLayout:()=>({mode:'inline',numberFormat:'(#E1)',chapter:1,section:1}),
   renderObjects(){},renderModes(){},controls(){},changed(){context.changedCalls=(context.changedCalls||0)+1;},requestWorkbenchSync(){},resetNewFormula(){context.mf.value='';context.resetCalls=(context.resetCalls||0)+1;},syncSidebar:async(...args)=>calls.push({action:'syncSidebar',args}),
   wordSessionChanged:()=>context.mf.value!==context.selected?.editorBaseline,
   message:(message,error)=>messages.push({message,error}),
@@ -27,7 +29,7 @@ async function editor(cancel,workspaceStatus={connected:true,revision:2,active:{
    return {};
   }
  });
- vm.runInContext(workspace,context);vm.runInContext(bootstrap,context);
+ vm.runInContext(workspace+'\n'+bootstrap+'\n'+drafts,context);
  context.window.wordDocumentWorkspace.accepted(source);
  // Existing-session tests start after the host has published the accepted
  // identity; otherwise their first status is ambiguous with a stale snapshot.

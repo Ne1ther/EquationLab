@@ -2,14 +2,32 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import JSZip from 'jszip';
 import {readFile} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
 import {createDocx,inspectDocx,arrangeDocx,flatOpc,fromFlatOpc} from '../src/document.mjs';
+import {desktopRequest} from '../src/desktop-rpc.mjs';
 
 test('The published demo carries its chapter-number default for later Word insertions',async()=>{
  const bytes=await readFile(new URL('../docs/examples/equation-lab-30-formulas.docx',import.meta.url)),doc=await inspectDocx(bytes);
  assert.equal(doc.objects.length,30);
+ assert.equal(doc.hasLegacyNumbering,true);
  assert.match(await doc.zip.file('word/settings.xml').async('string'),/<w:docVar w:name="EquationLabNumberFormat" w:val="\(#C1\.#E1\)"\/>/);
  assert.equal(doc.objects[29].layout.numberText,'(3.10)');
  assert.equal(doc.objects[25].layout.bookmarkName,'EL_DEMO_26');assert.equal(doc.objects[25].layout.referenceCount,1);
+});
+
+test('Shared MathType numbering and unnumbered equations do not need a legacy conversion',async()=>{
+ const shared=await createDocx([{latex:'x',layout:{mode:'numbered-right',bookmarkName:'EL_SAMPLE'}}],{numberingFamily:'mathtype'});
+ const unnumbered=await createDocx([{latex:'x'}]);
+ assert.equal((await inspectDocx(shared)).hasLegacyNumbering,false);
+ assert.equal((await inspectDocx(unnumbered)).hasLegacyNumbering,false);
+});
+
+test('Word snapshot reads carry the legacy numbering flag through the cache',async()=>{
+ const path=fileURLToPath(new URL('../docs/examples/equation-lab-30-formulas.docx',import.meta.url));
+ for(const wordMainStoryOnly of [false,true,true]){
+  const result=await desktopRequest({action:'inspect',payload:{path,thumbnails:false}},{wordMainStoryOnly});
+  assert.equal(result.wordHasLegacyNumbering,wordMainStoryOnly?true:undefined);
+ }
 });
 
 test('Numbered DOCX integrates live chapter fields, stable references and package settings',async()=>{

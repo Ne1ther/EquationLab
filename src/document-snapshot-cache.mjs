@@ -21,6 +21,7 @@ export function projectDocumentSnapshot(document,typographyPreset){
  return {
   objects:document.objects.map(object=>Object.fromEntries(OBJECT_FIELDS.filter(key=>object[key]!==undefined).map(key=>[key,copyData(object[key])]))),
   numberFormat:copyData(document.numberFormat),numberingRevision:copyData(document.numberingRevision),
+  hasLegacyNumbering:document.hasLegacyNumbering===true,
   typographyPreset:copyData(typographyPreset),
  };
 }

@@ -253,6 +253,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   if(checkpoint)await checkpoint();
   const objects = [];
   let mainRelationships=null;
+  let hasLegacyNumbering=false;
   const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
   for (const part of parts) {
   const partDoc=part===mainPart?doc:parseXml(await zip.file(part).async('string'));
@@ -261,6 +262,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   const rels = parseXml(await zip.file(relPart).async('string'));
   if(part===mainPart)mainRelationships=rels;
   const numberingScan=nativeIndexOnly?null:scanWordNumberingPart(partDoc,part);
+  if(part===mainPart&&numberingScan)hasLegacyNumbering=numberingScan.fields.some(({instruction})=>instruction.type==='SEQ'&&instruction.family==='equationlab');
   if(checkpoint)await checkpoint();
   const references=new Map();if(!nativeIndexOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
@@ -326,7 +328,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
    const property=Array.from(custom.getElementsByTagName('*')).find(n=>n.localName==='property'&&n.getAttribute('name')==='MTEquationNumber2');
    if(property){const value=property.textContent;try{previewNumberFormat(value);numberFormat=value;}catch{/* Unsupported MathType tokens remain host-owned. */}}
   }
-  return {zip,doc,mainPart,objects,numberFormat,numberingRevision};
+  return {zip,doc,mainPart,objects,numberFormat,numberingRevision,hasLegacyNumbering};
 }
 
 export async function editDocx(buffer,index,replacements,options={}) {

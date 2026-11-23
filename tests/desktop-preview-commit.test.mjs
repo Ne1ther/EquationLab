@@ -30,7 +30,7 @@ function editor(){
   slice('async function ensureValid()','function changed('),
   app.split('\n').find(line=>line.startsWith('async function perform(')),
   app.split('\n').find(line=>line.startsWith('function wordSourceUnavailable()')),
-  app.split('\n').find(line=>line.startsWith('async function previewCharacterEdit()')),
+  slice('async function previewCharacterEdit()',"$('mode-characters').onclick"),
   slice('async function bindSelectedWordFormula()',"$('word-session-save').onclick")
  ].join('\n'),context);
  return {context,calls,decodes,messages,image,setTypography:patch=>{typography=patch;},

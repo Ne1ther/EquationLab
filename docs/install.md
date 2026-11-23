@@ -1,6 +1,6 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.7.5（build109）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.5/Equation-Lab-0.7.5.pkg)**
+**[下载 Equation Lab 0.7.6（build110）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
@@ -25,7 +25,7 @@
 
 正在编辑已有公式时，新公式插在它所在段落之后；独立草稿使用所选文档在 Word 中的空光标位置。**文件 → 新建独立草稿**和**打开文件副本…**可用于单独写公式或编辑文件副本。
 
-重开 App 后，可在编辑区上方恢复上次留在本机的草稿。[草稿恢复说明](draft-recovery.md)
+新建草稿、打开文件副本或切换公式时，App 会提示处理未保存的编辑。重开 App 后，可在编辑区上方恢复留在本机的草稿。[草稿恢复说明](draft-recovery.md)
 
 左侧文件名菜单列出 Word 打开的文档，并区分同名文件。切换前会提示处理未保存的草稿。菜单刷新更新文档列表；公式区刷新重新读取当前文档公式。支持的长文档可先显示可点选的公式目录，编号、内容和缩略图随后载入。
 
@@ -34,6 +34,8 @@
 在 Word 正文中选中一个公式对象，点功能区的“右侧编号”或“左侧编号”，给它添加编号或移动编号位置。这项操作用于每段一个公式的普通正文段落；“独立编号”会在公式右侧添加编号。
 
 在 App 的 **文档 → Word 编排** 中调整编号格式、章和节，点“更新公式”应用到当前公式；新公式在“完成并插入”时采用这些设置。格式也会用于后续新增编号。修改章或节会从当前公式重新起号，后面的公式沿用该设置，直到下一处章／节标记。
+
+如果文档仍采用旧 Equation Lab 编号，首次保存编号格式前会提示确认将全文编号字段转换为共享 MathType 编号。取消后可继续编辑编号草稿。
 
 旧 MathType 公式的编号通过 Word 功能区调整。插入、删除或移动公式后，点“更新编号”重算公式序号和交叉引用。它也会更新旧 MathType 的 MTEqn、MTChap、MTSec 和 MTPlaceRef 中的相关字段。点“插入引用”后，可以在列表中搜索编号和附近文字，再选择目标。
 
@@ -75,7 +77,7 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.7.5 (build109)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.5/Equation-Lab-0.7.5.pkg)**
+**[Download Equation Lab 0.7.6 (build110)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
@@ -100,7 +102,7 @@ To add an equation, choose a Word document at the top of the sidebar and use Ins
 
 While editing an existing equation, insertion goes after its paragraph. A standalone draft uses the selected document’s empty Word cursor. **File → New standalone draft** and **Open a file copy…** let you write independently or edit a file copy.
 
-After reopening the app, use Restore draft above the editor to continue an unfinished local draft. [Draft recovery](draft-recovery.md)
+The app prompts you before replacing unsaved edits when you start a draft, open a file copy, or switch equations. After reopening the app, use Restore draft above the editor to continue an unfinished local draft. [Draft recovery](draft-recovery.md)
 
 The filename menu lists open Word documents and distinguishes matching names. Switching prompts you to handle unsaved drafts. The menu refresh updates the document list; the formula-area refresh reloads the current document’s equations. Supported long documents can show a selectable equation directory first, then fill in numbers and formula text. Thumbnails load as you browse.
 
@@ -109,6 +111,8 @@ The filename menu lists open Word documents and distinguishes matching names. Sw
 Select an equation object in Word and choose Right Number or Left Number to add a number or move it to that side. This action is for plain body paragraphs containing one equation each. Independent Number adds a right-side number.
 
 Under **Document → Word layout** in the app, adjust the number format, chapter, and section, then choose Update equation. New equations use these settings at Finish and insert. The format also becomes the default for later numbered insertions. Changing the chapter or section restarts numbering at the current equation; later equations follow it until the next chapter/section marker.
+
+If a document still uses legacy Equation Lab numbering, the app asks for confirmation before the first format save converts its numbering fields to shared MathType numbering. Cancel to keep editing the numbering draft.
 
 Use the Word ribbon to adjust legacy MathType numbering. After inserting, deleting, or moving equations, choose Update Numbers to recalculate equation sequences and cross-references. This also updates legacy MTEqn, MTChap, MTSec, and related fields inside MTPlaceRef. Insert Reference opens a list you can search by number or nearby text.
 

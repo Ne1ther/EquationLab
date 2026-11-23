@@ -34,6 +34,7 @@ function workspaceBootstrap(){
  assert.ok(start>=0&&end>start,'the production Word workspace bootstrap should be present');
  return appSource.slice(start,end)+'\n'+slice('function wordSessionChanged(','window.nativePrepareToClose=async()=>{');
 }
+const drafts=await readFile(new URL('../desktop/draft-integration.js',import.meta.url),'utf8');
 
 function createEditor(){
  const calls=[],messages=[],layoutLoads=[],changedCalls=[],modeRenders=[],historyResets=[];let clock=0;
@@ -41,11 +42,11 @@ function createEditor(){
  let behavior=async(action)=>action==='wordSessionInsert'?{acknowledgement:false}:{};
  const defaults={'layout-mode':'inline','layout-format':'(#E1)','layout-chapter':'1','layout-section':'1'};
  const element=id=>{
-  if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,readOnly:false,value:defaults[id]??'',textContent:'',classList:{toggle(){}},querySelectorAll:()=>[],replaceChildren(){},append(){}});
+  if(!elements.has(id))elements.set(id,{hidden:false,disabled:false,readOnly:false,value:defaults[id]??'',textContent:'',classList:{toggle(){}},addEventListener(){},querySelectorAll:()=>[],replaceChildren(){},append(){}});
   return elements.get(id);
  };
  context=vm.createContext({
-  window:{},performance,busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,favorites:[],mf:{value:'',readOnly:false},
+  window:{createDraftRecovery:()=>({initialize:async()=>{},schedule(){},clear:async()=>{},available:{}})},crypto,performance,busy:false,wordNavigating:false,wordNavigationTimer:null,wordTicket:null,wordSaveQueued:false,wordOutcomeUnknown:false,wordCommitRunning:null,timer:null,revision:0,validationRequested:false,validationPending:false,valid:true,idleWaiters:new Set(),source:null,selected:null,mode:'rebuild',editingRuler:undefined,favorites:[],mf:{value:'',readOnly:false},
   Date:{now:()=>clock},$:element,controls(){},message:(text,isError=false)=>messages.push({text,isError}),requestWorkbenchSync(){},loadWordThumbnails(){},
   renderObjects(){const document=context.window.wordDocumentWorkspace?.visibleSource(context.source)??context.source;const objects=document?.objects||[];renderedLists.push(objects.map(object=>object.index));return context.syncSidebar?.()??Promise.resolve();},
   loadObjectLayout(object){
@@ -99,7 +100,7 @@ function createEditor(){
  context.window.createWordDocumentWorkspace=undefined;
  vm.runInContext(workspaceSource,context);
  vm.runInContext(workspaceBootstrap(),context);
- vm.runInContext([perform,idle,sidebarSync,select,open,commit].join('\n'),context);
+ vm.runInContext([perform,idle,sidebarSync,select,open,commit,drafts].join('\n'),context);
  return {
   context,calls,messages,layoutLoads,changedCalls,modeRenders,historyResets,renderedLists,elements,now:()=>clock,
   async advance(ms){const target=clock+ms;clock=target;for(const [id,timer] of [...timers])if(timer.at<=target){timers.delete(id);timer.callback();}await Promise.resolve();await Promise.resolve();},

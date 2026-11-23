@@ -27,4 +27,13 @@ final class SidebarSearchTests: XCTestCase {
         XCTAssertFalse(item.matchesSearch("2.14"))
         XCTAssertTrue(item.matchesSearch("  \t "))
     }
+
+    func testSharedSearchTermsIgnoreWhitespaceAndPreserveSubstringMatching() throws {
+        let item = try formula(number: "(2.14)")
+        let terms = SidebarFormula.searchTerms(in: " \tFRAC\n可编辑\u{3000}2.14 ")
+        XCTAssertEqual(terms, ["FRAC", "可编辑", "2.14"])
+        XCTAssertTrue(item.matchesSearch(terms: terms))
+        XCTAssertFalse(item.matchesSearch(terms: terms + ["sqrt"]))
+        XCTAssertTrue(SidebarFormula.searchTerms(in: " \n\u{3000}").isEmpty)
+    }
 }

@@ -1,18 +1,23 @@
 /* The native window owns chrome. This one WebKit view retains MathLive's live session. */
-.native-layout{height:100vh;min-height:0;margin:0;overflow:hidden;background:var(--native-surface,#f5f5f5);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--native-label,#222);color-scheme:light dark;--line:var(--native-separator,#dfe2e6);--formula-size:29px;--preview-height:190px}
+.native-layout{height:100vh;min-height:0;margin:0;overflow:hidden;background:var(--native-surface,#f5f5f5);font:12px -apple-system,BlinkMacSystemFont,sans-serif;color:var(--native-label,#222);color-scheme:light;--line:var(--native-separator,#dfe2e6);--formula-size:29px;--preview-height:clamp(118px,32vh,190px);--editor-paper:#fff;--editor-ink:#202124;--editor-muted:#666970;--editor-track:#eff1f4;--editor-thumb:#a6adb8;--editor-selection:#cbe1ff;--editor-highlight:#edf4ff;--editor-accent:#176ccf}
+:root[data-appearance="dark"] .native-layout{color-scheme:dark;--editor-paper:#242425;--editor-ink:#f3f3f4;--editor-muted:#a5a5ad;--editor-track:#303033;--editor-thumb:#686875;--editor-selection:#224e7e;--editor-highlight:#28394e;--editor-accent:#71b1ff}
 .native-layout>main>header,.native-layout>main>.tabs,.native-layout>main>.palette,.native-layout .editor-toolbar,.native-layout .editor-hint,.native-layout>main>.native-status,.native-layout #native-preferences,.native-layout .layout-settings,.native-layout .actions,.native-layout>main>.toast,.native-layout>main>footer{display:none!important}
 .native-layout>main{margin:0;padding:12px 0 0;box-sizing:border-box;width:100%;max-width:none;height:100%;display:flex;flex-direction:column;overflow:hidden;background:transparent}
 .native-layout .editor-card{display:flex;flex-direction:column;flex:1;min-height:0;margin:0;border:0;border-radius:0;box-shadow:none;background:transparent;overflow:hidden}
-.native-layout .math-viewport{position:relative;flex:1;min-height:0;margin:0 18px 14px;overflow:hidden;background:#fff;color-scheme:light;border:1px solid var(--line);border-radius:8px;box-shadow:0 1px 2px rgba(0,0,0,.04)}
-.native-layout .math-wrap{display:flex;align-items:safe center;justify-content:center;width:100%;height:100%;min-height:0;padding:16px 18px 30px;overflow-y:auto;overflow-x:hidden}
-.native-layout math-field{width:100%;min-width:0;font-size:var(--formula-size);padding:8px 0;border:0;background:transparent;color:#111;text-align:center;--selection-background-color:#d1e3ff;--caret-color:#1672ff;--contains-highlight-background-color:#edf4ff}
+.native-layout .math-viewport{position:relative;flex:1;min-height:0;margin:0 18px 10px;overflow:hidden;background:var(--editor-paper);border:1px solid var(--line);border-radius:8px}
+.native-layout .math-viewport:focus-within{border-color:var(--editor-accent)}
+.native-layout .math-wrap{display:flex;align-items:safe center;justify-content:center;width:100%;height:100%;min-height:0;padding:16px 18px 30px;overflow-y:auto;overflow-x:hidden;cursor:text}
+.native-layout .math-wrap:has(math-field[read-only]){cursor:default}
+.native-layout .editor-empty-hint{position:absolute;inset:0 16px 14px;display:grid;place-items:center;pointer-events:none;color:var(--editor-muted);font-size:13px;text-align:center}
+.native-layout .math-viewport:focus-within .editor-empty-hint{visibility:hidden}
+.native-layout math-field{width:100%;min-width:0;font-size:var(--formula-size);padding:8px 0;border:0;background:transparent;color:var(--editor-ink);text-align:center;--selection-background-color:var(--editor-selection);--selection-color:var(--editor-ink);--caret-color:var(--editor-accent);--contains-highlight-background-color:var(--editor-highlight);--placeholder-color:var(--editor-accent);--smart-fence-color:var(--editor-accent)}
 .native-layout math-field::part(menu-toggle){display:none}
 .native-layout math-field::part(content){overflow:hidden;padding:.3em .12em;min-height:1.8em}
-.native-layout .equation-scrollbar{position:absolute;left:12px;right:12px;bottom:4px;height:14px;overflow-x:scroll;overflow-y:hidden;scrollbar-width:thin;background:#fff;border-radius:5px}
+.native-layout .equation-scrollbar{position:absolute;left:12px;right:12px;bottom:4px;height:14px;overflow-x:scroll;overflow-y:hidden;scrollbar-width:thin;background:var(--editor-paper);border-radius:5px}
 .native-layout .equation-scrollbar>div{height:1px;pointer-events:none}
 .native-layout .equation-scrollbar::-webkit-scrollbar{height:7px}
-.native-layout .equation-scrollbar::-webkit-scrollbar-thumb{background:#b8bcc3;border-radius:4px}
-.native-layout .equation-scrollbar::-webkit-scrollbar-track{background:#f3f4f6;border-radius:4px}
+.native-layout .equation-scrollbar::-webkit-scrollbar-thumb{background:var(--editor-thumb);border-radius:4px}
+.native-layout .equation-scrollbar::-webkit-scrollbar-track{background:var(--editor-track);border-radius:4px}
 .native-layout .workbench-previews{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;flex:none;height:var(--preview-height);margin:0 18px 18px;min-width:0}
 .native-layout #word-preview,.native-layout #latex-details{display:flex;flex-direction:column;min-width:0;height:100%;margin:0;padding:0;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--native-control,#f9fafb);color:var(--native-label,#222);font-size:12px}
 .native-layout .preview-panel-header{box-sizing:border-box;height:35px;padding:0 12px;display:flex;align-items:center;gap:7px;flex:none;font-weight:600;cursor:default;user-select:none;border-bottom:1px solid var(--line);background:var(--native-surface,#f7f8fa)}
@@ -21,14 +26,17 @@
 .native-layout #word-preview .preview-panel-header:before{color:#1672ff;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect x='2' y='1.5' width='12' height='13' rx='2' fill='none' stroke='black' stroke-width='1.4'/%3E%3Cpath d='M5 5.5h6M5 8.2h6M5 10.9h3.8' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'/%3E%3C/svg%3E") center/contain no-repeat}
 .native-layout #latex-details .preview-panel-header:before{color:#8b5cf6;-webkit-mask:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M5.2 4.5 1.8 8l3.4 3.5M10.8 4.5 14.2 8l-3.4 3.5M9.1 3.2 6.9 12.8' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/contain no-repeat}
 .native-layout #word-preview-zoom{border:0;max-width:66px;background:transparent;color:var(--native-secondary,#636b78);font:11px -apple-system;cursor:pointer}
-.native-layout #word-preview-placeholder{padding:24px 18px;margin:0;font-size:12px;line-height:1.6;color:var(--native-secondary,#737b87)}
-.native-layout #desktop-font-preview{display:flex;align-items:safe center;justify-content:safe center;box-sizing:border-box;min-height:148px;margin:0;border:0;padding:20px;background:#fff;overflow:auto;flex:1}
+.native-layout #word-preview-placeholder{padding:16px;margin:auto 0;font-size:12px;line-height:1.6;color:var(--native-secondary,#737b87);text-align:center}
+.native-layout #desktop-font-preview{display:flex;align-items:safe center;justify-content:safe center;box-sizing:border-box;min-height:0;margin:0;border:0;padding:16px;background:#fff;color-scheme:light;overflow:auto;scrollbar-gutter:stable;overscroll-behavior:contain;container-type:inline-size;flex:1}
+.native-layout #desktop-font-preview:focus-visible{outline:2px solid var(--editor-accent);outline-offset:-2px}
 .native-layout #desktop-font-preview figcaption{display:none}
-.native-layout #desktop-font-preview img{display:block;max-width:100%;height:auto;min-height:18px;transform:scale(var(--word-preview-scale,1));transform-origin:center}
+/* Size the image against the unzoomed paper width, then zoom its layout box
+   so the full image remains reachable on both scroll axes. */
+.native-layout #desktop-font-preview img{display:block;flex:none;max-width:100%;max-width:100cqi;height:auto;zoom:var(--word-preview-scale,1)}
 .native-layout #latex-details textarea{box-sizing:border-box;display:block;resize:none;width:100%;flex:1;min-height:0;max-height:none;padding:16px;margin:0;border:0;border-radius:0;outline:none;background:var(--native-control,#f7f9fb);color:var(--native-label,#26364b);font:12px/1.7 'SFMono-Regular',Menlo,monospace;tab-size:2;overflow-x:hidden;overflow-y:auto;scrollbar-width:none}
 .native-layout #latex-details textarea::-webkit-scrollbar{display:none;width:0;height:0}
-.native-layout .math-wrap,.native-layout #desktop-font-preview,.native-layout #source-panel{scrollbar-width:none}
-.native-layout .math-wrap::-webkit-scrollbar,.native-layout #desktop-font-preview::-webkit-scrollbar,.native-layout #source-panel::-webkit-scrollbar{display:none;width:0;height:0}
+.native-layout #source-panel{scrollbar-width:none}
+.native-layout #source-panel::-webkit-scrollbar{display:none;width:0;height:0}
 .native-layout #latex-details textarea:focus-visible{outline:none}
 .native-layout #latex-details:focus-within{border-color:#1672ff;box-shadow:inset 0 0 0 1px #1672ff}
 .native-layout #copy-latex{font-size:0;width:28px;height:28px;min-height:0;padding:0;border:0;border-radius:6px;box-shadow:none;background:transparent;color:var(--native-secondary,#687588);transition:background-color .12s,transform .14s}
@@ -58,15 +66,15 @@
 [hidden]{display:none!important}
 button:focus-visible,input:focus-visible,textarea:focus-visible{outline:2px solid #1672ff;outline-offset:2px}
 .ML__keyboard{--keyboard-zindex:1000}
-@media(max-height:450px){.native-layout{--preview-height:150px}.native-layout .workbench-previews{margin-bottom:12px}.native-layout .math-wrap{padding:12px 12px 28px}.native-layout #desktop-font-preview{min-height:108px}}
+@media(max-height:450px){.native-layout .workbench-previews{margin-bottom:12px}.native-layout .math-wrap{padding:12px 12px 28px}}
 @media(prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
 .editor-structure{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:0 18px 12px;padding:0 2px;font:11px/1.5 -apple-system,BlinkMacSystemFont,sans-serif;color:var(--native-secondary,#657186)}
 .editor-structure-scope{min-width:0;display:flex;flex-direction:column;gap:2px}
 .editor-structure-path{font-weight:600;color:var(--native-label,#26364b);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.editor-structure-hint{font-size:10px}
+.editor-structure-hint{font-size:11px}
 .editor-structure-actions{display:flex;align-items:center;flex:none;gap:6px}
 .editor-structure-actions button,.editor-structure-actions select{min-height:25px;margin:0;padding:3px 7px;border:1px solid var(--native-separator,#dfe2e6);border-radius:5px;background:var(--native-control,#f9fafb);color:var(--native-label,#26364b);box-shadow:none;font:11px -apple-system,BlinkMacSystemFont,sans-serif}
 .editor-structure-actions button:disabled,.editor-structure-actions select:disabled{opacity:.45}
 .editor-structure-actions label{display:flex;align-items:center;gap:5px;white-space:nowrap}
-.editor-structure-boundary{position:absolute;z-index:1;pointer-events:none;border:1px dashed #3987d7;border-radius:3px;background:#3987d70a;box-sizing:border-box}
-@media(max-width:750px){.editor-structure{align-items:flex-start;flex-direction:column;gap:5px}.editor-structure-actions{flex-wrap:wrap}.editor-structure-hint{line-height:1.4}}
+.editor-structure-boundary{position:absolute;z-index:1;pointer-events:none;border:1px dashed var(--editor-accent,#3987d7);border-radius:3px;background:#3987d70a;box-sizing:border-box}
+@media(max-width:620px){.editor-structure{align-items:flex-start;flex-direction:column;gap:5px}.editor-structure-actions{flex-wrap:wrap}.editor-structure-hint{line-height:1.4}}

@@ -2,14 +2,15 @@
 (()=>{
  function decodedPreviewSwap(image,visibility,makeImage=()=>new Image()){
   let generation=0,displayed='';
-  return async url=>{
+  return async (url,stillCurrent=()=>true)=>{
+   if(!stillCurrent())return false;
    const current=++generation;
    if(!url){displayed='';image.removeAttribute('src');visibility(false);return false;}
    if(url===displayed){visibility(true);return true;}
    const next=makeImage();next.decoding='async';next.src=url;
    try{await next.decode();}
-   catch{if(current===generation){displayed='';image.removeAttribute('src');visibility(false);}return false;}
-   if(current!==generation)return false;
+   catch{if(current===generation&&stillCurrent()){displayed='';image.removeAttribute('src');visibility(false);}return false;}
+   if(current!==generation||!stillCurrent())return false;
    image.src=url;displayed=url;visibility(true);return true;
   };
  }
@@ -82,7 +83,7 @@
   if(empty){empty.hidden=visible;empty.textContent=mf.value.trim()?$('status-detail').textContent:(window.workbenchEnglish?'Enter an equation to preview its font and size.':'输入公式后，查看实际字体与字号。');}
   requestWorkbenchSync();
  });
- window.desktopFontPreview=svg=>swapPreview(svg?'data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(svg))):null);
+ window.desktopFontPreview=(svg,stillCurrent)=>swapPreview(svg?'data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(svg))):null,stillCurrent);
  window.desktopTypographyNew=()=>{if(factory)load(factory,defaults);};
  $('desktop-reset-fonts').onclick=()=>{render(base,original);changed();};
  $('desktop-factory-fonts').onclick=()=>perform(async()=>{if(selected)throw Error('请先新建公式；已有公式可恢复其原始设置');if(!factory)throw Error('原厂偏好尚未载入');render(factory);changed();message('当前新公式已恢复原厂 Times+Symbol 12 偏好；已保存的自定义默认未改动。如需以后使用此设置，请再点“设为新公式默认”。');});

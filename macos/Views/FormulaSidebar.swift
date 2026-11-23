@@ -26,14 +26,17 @@ struct FormulaSidebar: View {
             Color.clear
                 .keyframeAnimator(initialValue: SelectionMarkFrame(), trigger: trigger) { _, frame in
                     ZStack(alignment: .leading) {
-                        Color.accentColor.opacity(0.16 + frame.fillBoost)
+                        RoundedRectangle(cornerRadius: 7)
+                            .fill(Color.accentColor.opacity(0.15 + frame.fillBoost))
                         Capsule(style: .continuous)
                             .fill(Color.accentColor)
-                            .frame(width: 3, height: 24)
-                            .padding(.leading, 3)
+                            .frame(width: 3, height: 18)
+                            .padding(.leading, 4)
                             .scaleEffect(y: frame.scaleY, anchor: .center)
                             .opacity(frame.opacity)
                     }
+                    .padding(.horizontal, 4)
+                    .padding(.vertical, 1)
                 } keyframes: { _ in
                     KeyframeTrack(\.scaleY) {
                         MoveKeyframe(0.38)
@@ -68,7 +71,9 @@ struct FormulaSidebar: View {
     @Environment(\.colorScheme) private var colorScheme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var showingFavorites = false
-    @State private var query = ""
+    @State private var documentQuery = ""
+    @State private var favoritesQuery = ""
+    @FocusState private var searchFocused: Bool
     @State private var pendingSelection: PendingRowSelection?
     @State private var activeSelectionPulseID: Int?
     @State private var activeSelectionPulseCount = 0
@@ -87,25 +92,9 @@ struct FormulaSidebar: View {
     private var english: Bool { bridge.language.usesEnglish }
     private func label(_ zh: String, _ en: String) -> String { english ? en : zh }
     private var allItems: [SidebarFormula] { showingFavorites ? bridge.state.favorites : bridge.state.objects }
-    private var items: [SidebarFormula] {
-        let search = query.trimmingCharacters(in: .whitespacesAndNewlines)
-        return search.isEmpty ? allItems : allItems.filter { $0.matchesSearch(search) }
-    }
-    private var totalCount: Int { max(allItems.count, bridge.state.wordDocumentTotal) }
-    private var isPartiallyLoaded: Bool {
-        !showingFavorites && bridge.state.wordDocumentLoading && !allItems.isEmpty && allItems.count < totalCount
-    }
-    private var staleCount: Int { allItems.filter { $0.numberStatus == "stale" }.count }
-    private var pendingCount: Int { allItems.filter { $0.numberStatus == "pending" }.count }
-    private var hasStaleNumbers: Bool { !showingFavorites && staleCount > 0 }
-    private var hasPendingNumbers: Bool { !showingFavorites && pendingCount > 0 }
+    private var searchQuery: Binding<String> { showingFavorites ? $favoritesQuery : $documentQuery }
     private var canRefreshWorkspace: Bool {
         !bridge.state.busy && !bridge.state.wordDocumentLoading && !bridge.state.wordOutcomeUnknown && !bridge.state.wordDocumentUnavailable
-    }
-    private var countLabel: String {
-        if !query.isEmpty { return "\(items.count) / \(allItems.count)" }
-        if isPartiallyLoaded { return "\(allItems.count) / \(totalCount)" }
-        return "\(showingFavorites ? allItems.count : totalCount)"
     }
     private var selectionUnavailable: Bool {
         bridge.state.busy || showingFavorites && bridge.wordSessionActive && (bridge.state.readOnly || bridge.state.wordOutcomeUnknown || bridge.state.wordDocumentUnavailable) ||
@@ -124,6 +113,18 @@ struct FormulaSidebar: View {
     }
 
     var body: some View {
+        let allItems = self.allItems
+        let terms = SidebarFormula.searchTerms(in: searchQuery.wrappedValue)
+        let isFiltering = !terms.isEmpty
+        let items = isFiltering ? allItems.filter { $0.matchesSearch(terms: terms) } : allItems
+        let totalCount = showingFavorites ? allItems.count : max(allItems.count, bridge.state.wordDocumentTotal)
+        let isPartiallyLoaded = !showingFavorites && bridge.state.wordDocumentLoading && !allItems.isEmpty && allItems.count < totalCount
+        let countLabel = isFiltering ? "\(items.count) / \(allItems.count)" : isPartiallyLoaded ? "\(allItems.count) / \(totalCount)" : "\(totalCount)"
+        let hasStaleNumbers = !showingFavorites && allItems.contains { $0.numberStatus == "stale" }
+        let selectedID = showingFavorites ? nil : bridge.state.selected
+        let selectionIsLoaded = selectedID.map { id in allItems.contains { $0.id == id } } ?? false
+        let selectionIsInResults = isFiltering ? (selectedID.map { id in items.contains { $0.id == id } } ?? false) : selectionIsLoaded
+
         VStack(spacing: 0) {
             Picker(bridge.t("公式来源"), selection: $showingFavorites) {
                 Text(bridge.t("文档")).tag(false)
@@ -207,7 +208,7 @@ struct FormulaSidebar: View {
             }
             HStack(spacing: 6) {
                 Text(bridge.t(showingFavorites ? "模板收藏" : "当前文档的公式"))
-                    .font(showingFavorites ? .headline : .subheadline.weight(.medium))
+                    .font(.subheadline.weight(.semibold))
                     .lineLimit(1)
                     .minimumScaleFactor(0.85)
                 Spacer(minLength: 4)
@@ -216,7 +217,10 @@ struct FormulaSidebar: View {
                     .foregroundStyle(.secondary)
                     .monospacedDigit()
                     .fixedSize()
-                if !showingFavorites {
+                    .accessibilityLabel(isFiltering
+                        ? label("\(items.count) 项匹配，共 \(allItems.count) 项", "\(items.count) \(items.count == 1 ? "match" : "matches") out of \(allItems.count)")
+                        : countLabel)
+                if !showingFavorites && bridge.state.fileCopyGeneration == nil {
                     Button { bridge.invoke("nativeRefreshWordWorkspace") } label: {
                         Image(systemName: "arrow.clockwise")
                             .foregroundStyle(hasStaleNumbers && !bridge.state.wordDocumentLoading ? .orange : .secondary)
@@ -233,19 +237,10 @@ struct FormulaSidebar: View {
                 }
             }.padding(.horizontal, 14).padding(.vertical, 8)
             if !showingFavorites && !allItems.isEmpty {
-                freshnessBanner
+                freshnessBanner(allItems: allItems, totalCount: totalCount, isPartiallyLoaded: isPartiallyLoaded, hasStaleNumbers: hasStaleNumbers)
             }
-            if !allItems.isEmpty || !query.isEmpty {
-                HStack(spacing: 6) {
-                    Image(systemName: "line.3.horizontal.decrease").foregroundStyle(.secondary)
-                    TextField(bridge.t("搜索编号、公式或 LaTeX"), text: $query).textFieldStyle(.plain)
-                    if !query.isEmpty {
-                        Button { query = "" } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                            .buttonStyle(.plain).accessibilityLabel(bridge.t("清除搜索"))
-                    }
-                }.font(.callout).padding(8)
-                    .background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                    .padding(.horizontal, 14).padding(.bottom, 8)
+            if !allItems.isEmpty || isFiltering {
+                searchField(isFiltering: isFiltering)
             }
             if items.isEmpty {
                 if !showingFavorites && allItems.isEmpty && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentReadState == .loading) {
@@ -275,14 +270,25 @@ struct FormulaSidebar: View {
                 } else if !showingFavorites && allItems.isEmpty && bridge.state.wordDocumentReadState == .empty {
                     ContentUnavailableView(label("当前文档暂无公式", "No Equations in This Document"), systemImage: "function")
                         .font(.callout)
+                } else if isFiltering {
+                    ContentUnavailableView {
+                        Label(!showingFavorites && bridge.state.wordCatalogAvailable
+                            ? label("已读取内容中没有匹配", "No matches in loaded content")
+                            : bridge.t("没有匹配的公式"), systemImage: "magnifyingglass")
+                    } description: {
+                        Text(showingFavorites
+                            ? label("试试公式中的 LaTeX，可用空格组合搜索。", "Search within the LaTeX. Use spaces to combine terms.")
+                            : bridge.t("试试正文编号、LaTeX 或位置序号；空格可组合搜索。"))
+                    } actions: {
+                        Button(bridge.t("清除搜索"), action: clearSearch)
+                    }
+                    .font(.callout)
+                    Spacer(minLength: 0)
                 } else {
                     ContentUnavailableView {
-                        Label(!query.isEmpty && !showingFavorites && bridge.state.wordCatalogAvailable
-                            ? label("已读取内容中没有匹配", "No matches in loaded content")
-                            : bridge.t(!query.isEmpty ? "没有匹配的公式" : showingFavorites ? "暂无收藏" : "打开 Word 文档"),
-                            systemImage: !query.isEmpty ? "magnifyingglass" : showingFavorites ? "star" : "doc.text")
+                        Label(bridge.t(showingFavorites ? "暂无收藏" : "打开 Word 文档"), systemImage: showingFavorites ? "star" : "doc.text")
                     } description: {
-                        Text(bridge.t(!query.isEmpty ? "试试正文编号、LaTeX 或位置序号；空格可组合搜索。" : showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
+                        Text(bridge.t(showingFavorites ? "将常用公式加入收藏。" : "文档中的 MathType 公式会显示在这里。"))
                     }
                     .font(.callout)
                     Spacer(minLength: 0)
@@ -301,76 +307,21 @@ struct FormulaSidebar: View {
                             }
                             bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
                         } label: {
-                            HStack(spacing: 12) {
-                                Text("\(item.position ?? item.id + 1)")
-                                    .font(.system(size: 11, weight: .medium, design: .rounded))
-                                    .monospacedDigit()
-                                    .foregroundStyle(.secondary).frame(minWidth: 17)
-                                    .fixedSize()
-                                    .help(bridge.t("文档位置序号"))
-                                if catalogPlaceholder {
-                                    Text(label("打开公式", "Open equation"))
-                                        .font(.callout).foregroundStyle(.secondary).lineLimit(1)
-                                    Spacer(minLength: 4)
-                                    Image(systemName: "chevron.right")
-                                        .font(.caption2.weight(.semibold)).foregroundStyle(.tertiary).accessibilityHidden(true)
-                                } else {
-                                    VStack(alignment: .leading, spacing: 4) {
-                                        if !showingFavorites {
-                                            HStack(spacing: 5) {
-                                                let isStale = item.numberStatus == "stale"
-                                                let isPending = item.numberStatus == "pending"
-                                                Text(item.numberText ?? bridge.t(isPending ? "编号待载入" : "无已读编号"))
-                                                    .font(.caption.weight(item.numberText == nil ? .regular : isStale ? .medium : .semibold))
-                                                    .monospacedDigit()
-                                                    .foregroundStyle(item.numberText == nil || isStale ? .secondary : .primary)
-                                                    .lineLimit(1)
-                                                if isStale {
-                                                    Text(bridge.t("待刷新"))
-                                                        .font(.system(size: 9.5, weight: .medium))
-                                                        .foregroundStyle(.orange)
-                                                        .padding(.horizontal, 5).padding(.vertical, 1)
-                                                        .background(Color.orange.opacity(0.14), in: Capsule())
-                                                        .fixedSize()
-                                                }
-                                            }
-                                        }
-                                        if let thumbnail = item.thumbnail {
-                                            let cardFill = colorScheme == .dark ? Color(red: 0.925, green: 0.922, blue: 0.906) : Color.white
-                                            Image(nsImage: thumbnail).resizable().interpolation(.high)
-                                                .scaledToFit().frame(maxWidth: .infinity).frame(height: 41)
-                                                .padding(.horizontal, 8).padding(.vertical, 3)
-                                                .background(cardFill, in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-                                                .overlay {
-                                                    RoundedRectangle(cornerRadius: 7, style: .continuous)
-                                                        .strokeBorder(Color.primary.opacity(colorScheme == .dark ? 0.14 : 0.07), lineWidth: 0.5)
-                                                }
-                                                .accessibilityLabel(item.latex)
-                                        } else {
-                                            VStack(alignment: .leading, spacing: 4) {
-                                                Image(systemName: "function").font(.title2)
-                                                if item.latex.isEmpty {
-                                                    Text(bridge.state.wordCatalogAvailable && !showingFavorites
-                                                        ? label("打开公式", "Open equation")
-                                                        : bridge.t(item.readOnly || !bridge.wordSessionActive ? "未能预览" : "正在生成预览")).font(.caption2)
-                                                } else {
-                                                    Text(item.latex).font(.system(.caption2, design: .monospaced)).lineLimit(2)
-                                                }
-                                            }.frame(maxWidth: .infinity, alignment: .leading).frame(height: 47).foregroundStyle(.secondary)
-                                        }
-                                    }
-                                    if item.readOnly { Image(systemName: "lock").font(.caption2).foregroundStyle(.secondary) }
-                                }
-                            }.frame(height: 66).contentShape(Rectangle())
+                            formulaRow(item, catalogPlaceholder: catalogPlaceholder, selected: selectedID == item.id)
                         }
                         .buttonStyle(.plain)
                         .disabled(selectionUnavailable)
+                        .accessibilityLabel(rowAccessibilityLabel(item, selected: selectedID == item.id))
+                        .accessibilityValue(item.latex)
+                        .accessibilityAddTraits(selectedID == item.id ? .isSelected : [])
                         .background {
                             let thumbnailDocument = bridge.state.documentPath
-                            FormulaThumbnailVisibility(key: "\(bridge.state.documentPath):\(item.id)", enabled: !showingFavorites && !bridge.state.wordCatalogAvailable && bridge.wordSessionActive && item.image == nil && !item.readOnly) {
-                                thumbnailVisibility(item.id, document: thumbnailDocument, visible: true)
+                            let fileCopyGeneration = bridge.state.fileCopyGeneration
+                            let canRequest = fileCopyGeneration != nil || bridge.wordSessionActive
+                            FormulaThumbnailVisibility(key: "\(thumbnailDocument):\(fileCopyGeneration ?? 0):\(item.id)", enabled: canRequest && !showingFavorites && !bridge.state.wordCatalogAvailable && item.image == nil && !item.readOnly) {
+                                thumbnailVisibility(item.id, document: thumbnailDocument, fileCopyGeneration: fileCopyGeneration, visible: true)
                             } onHidden: {
-                                thumbnailVisibility(item.id, document: thumbnailDocument, visible: false)
+                                thumbnailVisibility(item.id, document: thumbnailDocument, fileCopyGeneration: fileCopyGeneration, visible: false)
                             }
                         }
                         .listRowBackground(rowSelectionBackground(for: item.id))
@@ -392,7 +343,7 @@ struct FormulaSidebar: View {
                 .listStyle(.sidebar)
                 .scrollContentBackground(.hidden)
                 .onAppear {
-                    revealSelection(using: scroll)
+                    if !isFiltering { revealSelection(using: scroll, selectionIsInResults: selectionIsInResults) }
                 }
                 .onChange(of: bridge.state.selected) { _, selected in
                     if !showingFavorites,
@@ -411,21 +362,22 @@ struct FormulaSidebar: View {
                             activeSelectionPulseID = nil
                         }
                     }
-                    revealSelection(using: scroll)
+                    revealSelection(using: scroll, selectionIsInResults: selectionIsInResults)
                 }
-                .onChange(of: items.map(\.id)) { _, _ in
-                    revealSelection(using: scroll)
+                .onChange(of: selectionIsLoaded) { _, isLoaded in
+                    if isLoaded { revealSelection(using: scroll, selectionIsInResults: selectionIsInResults) }
                 }
-                .onChange(of: bridge.wordPresentationRevision) { _, revision in
+                .onChange(of: currentSelectionDocumentKey) { _, _ in
+                    revealSelection(using: scroll, selectionIsInResults: selectionIsInResults)
+                }
+                .onChange(of: showingFavorites) { _, favorites in
+                    if !favorites && !isFiltering { revealSelection(using: scroll, selectionIsInResults: selectionIsInResults) }
+                }
+                .onChange(of: bridge.wordPresentationRevision) { _, _ in
                     // A retained window can be hidden while its list is being
                     // populated. Retry after it has had a layout pass, even if
                     // the selected id is the same as in the previous session.
-                    DispatchQueue.main.asyncAfter(deadline: .now() + .milliseconds(150)) {
-                        guard revision == bridge.wordPresentationRevision, !showingFavorites,
-                              let selected = bridge.state.selected,
-                              items.contains(where: { $0.id == selected }) else { return }
-                        scroll.scrollTo(selected, anchor: .center)
-                    }
+                    revealSelection(using: scroll, selectionIsInResults: selectionIsInResults, after: .milliseconds(150))
                 }
                 }
             }
@@ -459,8 +411,153 @@ struct FormulaSidebar: View {
         }
     }
 
+    private func searchField(isFiltering: Bool) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(.secondary)
+                .accessibilityHidden(true)
+            TextField(showingFavorites ? label("搜索收藏", "Find favorites") : label("搜索公式", "Find equations"), text: searchQuery)
+                .textFieldStyle(.plain)
+                .focused($searchFocused)
+                .accessibilityLabel(showingFavorites ? label("搜索收藏", "Search favorites") : bridge.t("搜索编号、公式或 LaTeX"))
+            if isFiltering {
+                Button(action: clearSearch) {
+                    Image(systemName: "xmark.circle.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 20, height: 20)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(bridge.t("清除搜索"))
+                .accessibilityLabel(bridge.t("清除搜索"))
+            }
+        }
+        .font(.callout)
+        .frame(height: 28)
+        .padding(.horizontal, 8)
+        .background(.quaternary.opacity(0.45), in: RoundedRectangle(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(searchFocused ? Color.accentColor : Color.primary.opacity(0.08))
+                .allowsHitTesting(false)
+        }
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+    }
+
+    private func clearSearch() {
+        searchQuery.wrappedValue = ""
+        searchFocused = !allItems.isEmpty
+    }
+
+    private func numberText(for item: SidebarFormula) -> String {
+        item.numberText ?? bridge.t(item.numberStatus == "pending" ? "编号待载入" : "无已读编号")
+    }
+
+    private func rowAccessibilityLabel(_ item: SidebarFormula, selected: Bool) -> String {
+        let position = item.position ?? item.id + 1
+        if showingFavorites { return label("收藏公式 \(position)", "Favorite equation \(position)") }
+
+        var parts = [label("文档位置 \(position)", "Equation at position \(position)")]
+        if let number = item.numberText {
+            parts.append(label("编号 \(number)", "Number \(number)"))
+        } else {
+            parts.append(numberText(for: item))
+        }
+        if item.numberStatus == "stale" { parts.append(bridge.t("待刷新")) }
+        if item.readOnly { parts.append(bridge.t("只读")) }
+        if selected { parts.append(label("已选中", "Selected")) }
+        return parts.joined(separator: label("，", ", "))
+    }
+
+    private func formulaRow(_ item: SidebarFormula, catalogPlaceholder: Bool, selected: Bool) -> some View {
+        HStack(spacing: 8) {
+            if !showingFavorites {
+                Text("\(item.position ?? item.id + 1)")
+                    .font(.caption.weight(selected ? .semibold : .regular))
+                    .monospacedDigit()
+                    .foregroundStyle(selected ? .primary : .secondary)
+                    .fixedSize()
+                    .frame(minWidth: 22, alignment: .trailing)
+                    .help(bridge.t("文档位置序号"))
+            }
+            if catalogPlaceholder {
+                Text(label("打开公式", "Open equation"))
+                    .font(.callout)
+                    .lineLimit(1)
+                Spacer(minLength: 4)
+                Image(systemName: "chevron.right")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+                    .accessibilityHidden(true)
+            } else {
+                VStack(alignment: .leading, spacing: 4) {
+                    if !showingFavorites {
+                        HStack(spacing: 5) {
+                            let isStale = item.numberStatus == "stale"
+                            Text(numberText(for: item))
+                                .font(.caption.weight(item.numberText == nil ? .regular : .semibold))
+                                .monospacedDigit()
+                                .foregroundStyle(item.numberText == nil || isStale ? .secondary : .primary)
+                                .lineLimit(1)
+                            if isStale {
+                                Text(bridge.t("待刷新"))
+                                    .font(.caption2.weight(.medium))
+                                    .foregroundStyle(.orange)
+                                    .lineLimit(1)
+                            }
+                            Spacer(minLength: 0)
+                            if item.readOnly {
+                                Image(systemName: "lock")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
+                            }
+                        }
+                    }
+                    if let thumbnail = item.thumbnail {
+                        let paper = colorScheme == .dark ? Color(red: 0.94, green: 0.94, blue: 0.93) : Color.white
+                        Image(nsImage: thumbnail)
+                            .resizable()
+                            .interpolation(.high)
+                            .scaledToFit()
+                            .frame(maxWidth: .infinity)
+                            .frame(height: 39)
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 3)
+                            .background(paper, in: RoundedRectangle(cornerRadius: 6))
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 6)
+                                    .strokeBorder(Color.black.opacity(0.09), lineWidth: 0.5)
+                            }
+                            .accessibilityHidden(true)
+                    } else {
+                        HStack(spacing: 6) {
+                            Image(systemName: "function").font(.callout)
+                            if item.latex.isEmpty {
+                                Text(bridge.t(item.readOnly || !bridge.wordSessionActive ? "未能预览" : "正在生成预览"))
+                                    .font(.caption)
+                            } else {
+                                Text(item.latex)
+                                    .font(.system(.caption, design: .monospaced))
+                                    .lineLimit(2)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .frame(height: 45)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, minHeight: catalogPlaceholder ? 26 : showingFavorites ? 50 : 66, alignment: .leading)
+        .contentShape(Rectangle())
+    }
+
     @ViewBuilder
-    private var freshnessBanner: some View {
+    private func freshnessBanner(allItems: [SidebarFormula], totalCount: Int, isPartiallyLoaded: Bool, hasStaleNumbers: Bool) -> some View {
+        let pendingCount = allItems.lazy.filter { $0.numberStatus == "pending" }.count
         if bridge.state.wordDocumentLoading {
             HStack(alignment: .top, spacing: 7) {
                 ProgressView().controlSize(.small).padding(.top, 1)
@@ -469,9 +566,7 @@ struct FormulaSidebar: View {
                         ? label("目录可点选，编号和公式内容正在加载。", "Open any row while equation text and numbers load.")
                         : isPartiallyLoaded
                         ? label("当前公式可编辑，后台载入其余公式（\(allItems.count)/\(totalCount)）…", "Current equation ready; loading others (\(allItems.count)/\(totalCount))…")
-                        : !allItems.isEmpty
-                            ? label("正在后台同步列表快照，已有公式仍可查看与编辑…", "Syncing list snapshot in background; loaded equations stay visible…")
-                            : bridge.t("当前公式可编辑，正在加载其余公式…")
+                        : label("正在后台同步列表快照，已有公式仍可查看与编辑…", "Syncing list snapshot in background; loaded equations stay visible…")
                 )
                 .font(.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -540,7 +635,7 @@ struct FormulaSidebar: View {
                     .allowsHitTesting(false)
             }
             .padding(.horizontal, 14).padding(.bottom, 8)
-        } else if hasPendingNumbers {
+        } else if pendingCount > 0 {
             Text(label("部分编号待载入（\(pendingCount) 项）；当前可继续编辑。", "\(pendingCount) equation numbers pending; editing stays available."))
                 .font(.caption2).foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -550,12 +645,15 @@ struct FormulaSidebar: View {
 
     private var staticSelectionBackground: some View {
         ZStack(alignment: .leading) {
-            Color.accentColor.opacity(0.16)
+            RoundedRectangle(cornerRadius: 7)
+                .fill(Color.accentColor.opacity(0.15))
             Capsule(style: .continuous)
                 .fill(Color.accentColor)
-                .frame(width: 3, height: 24)
-                .padding(.leading, 3)
+                .frame(width: 3, height: 18)
+                .padding(.leading, 4)
         }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
     }
 
     @ViewBuilder
@@ -574,17 +672,21 @@ struct FormulaSidebar: View {
         }
     }
 
-    private func revealSelection(using scroll: ScrollViewProxy) {
-        guard !showingFavorites, let selected = bridge.state.selected, items.contains(where: { $0.id == selected }) else { return }
-        let path = bridge.state.documentPath, identity = bridge.state.wordDocumentIdentity
-        DispatchQueue.main.async {
-            guard !showingFavorites, bridge.state.documentPath == path, bridge.state.wordDocumentIdentity == identity,
-                  bridge.state.selected == selected, items.contains(where: { $0.id == selected }) else { return }
+    private func revealSelection(using scroll: ScrollViewProxy, selectionIsInResults: Bool, after delay: DispatchTimeInterval = .milliseconds(0)) {
+        guard !showingFavorites, selectionIsInResults, let selected = bridge.state.selected else { return }
+        let document = currentSelectionDocumentKey, path = bridge.state.documentPath
+        let query = documentQuery, revision = bridge.wordPresentationRevision
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay) {
+            guard !showingFavorites, currentSelectionDocumentKey == document, documentQuery == query,
+                  bridge.state.documentPath == path, bridge.wordPresentationRevision == revision,
+                  bridge.state.selected == selected else { return }
             scroll.scrollTo(selected, anchor: .center)
         }
     }
-    private func thumbnailVisibility(_ index: Int, document: String, visible: Bool) {
-        guard let data = try? JSONSerialization.data(withJSONObject: ["index": index, "path": document, "visible": visible]),
+    private func thumbnailVisibility(_ index: Int, document: String, fileCopyGeneration: Int?, visible: Bool) {
+        var payload: [String: Any] = ["index": index, "path": document, "visible": visible]
+        if let fileCopyGeneration { payload["fileCopyGeneration"] = fileCopyGeneration }
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let argument = String(data: data, encoding: .utf8) else { return }
         bridge.invoke("nativeWordThumbnailVisibility", argument: argument)
     }

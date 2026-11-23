@@ -57,6 +57,23 @@ export function outlineCommands(data){
  return out;
 }
 
+function rectangleCommands(element){
+ const coordinate=name=>Number(element.getAttribute(name)||0);
+ const x=coordinate('x'),y=coordinate('y'),w=coordinate('width'),h=coordinate('height');
+ const radiusX=element.hasAttribute('rx')?coordinate('rx'):undefined;
+ const radiusY=element.hasAttribute('ry')?coordinate('ry'):undefined;
+ const rawRx=radiusX??radiusY??0,rawRy=radiusY??radiusX??0;
+ if(![x,y,w,h,rawRx,rawRy].every(Number.isFinite)||Math.min(w,h,rawRx,rawRy)<0)throw Error('Invalid vector rectangle');
+ const rx=Math.min(rawRx,w/2),ry=Math.min(rawRy,h/2);
+ if(!rx||!ry)return outlineCommands(`M${x} ${y}h${w}v${h}h${-w}Z`);
+ const right=x+w,bottom=y+h,corner=`A${rx} ${ry} 0 0 1 `;
+ return outlineCommands(`M${x+rx} ${y}H${right-rx}`
+  +`${corner}${right} ${y+ry}V${bottom-ry}`
+  +`${corner}${right-rx} ${bottom}H${x+rx}`
+  +`${corner}${x} ${bottom-ry}V${y+ry}`
+  +`${corner}${x+rx} ${y}Z`);
+}
+
 /** Drawn bounds in SVG viewBox coordinates, including transformed curves.
  * Keep advances/empty template slots separately in the caller's layout box. */
 export function vectorInkBounds({vector}){
@@ -130,7 +147,7 @@ export function vectorPdfRequest(svg,width,height){
    if(el.tagName==='path')commands=outlineCommands(el.getAttribute('d'));
    else if(el.tagName==='line'){const p=['x1','y1','x2','y2'].map(k=>Number(el.getAttribute(k)||0));commands=outlineCommands(`M${p[0]} ${p[1]}L${p[2]} ${p[3]}`);}
    else if(el.tagName==='polyline'||el.tagName==='polygon'){const p=numbers(el.getAttribute('points'));if(p.length<4||p.length%2)throw Error('Invalid vector polygon');commands=outlineCommands('M'+p.slice(0,2).join(' ')+'L'+p.slice(2).join(' ')+(el.tagName==='polygon'?'Z':''));}
-   else {const x=Number(el.getAttribute('x')||0),y=Number(el.getAttribute('y')||0),w=Number(el.getAttribute('width')),h=Number(el.getAttribute('height'));commands=outlineCommands(`M${x} ${y}h${w}v${h}h${-w}Z`);}
+   else commands=rectangleCommands(el);
    if(![...matrix,strokeWidth,...commands.flatMap(c=>c.values)].every(Number.isFinite))throw Error('Invalid vector geometry');
    vector.push({matrix,commands,fill:color(fill),stroke:color(stroke),strokeWidth,clips,lineCap:el.getAttribute('stroke-linecap')||'butt',lineJoin:el.getAttribute('stroke-linejoin')||'miter'});
   }else if(!['svg','g','title','desc'].includes(el.tagName))throw Error('Unsupported vector element '+el.tagName);

@@ -40,6 +40,17 @@ test('atomic draft writes leave the previous valid record after invalid edits an
   assert.deepEqual(await readdir(directory),[id+'.json']);
  }finally{await rm(directory,{recursive:true,force:true});}
 });
+test('draft storage preserves an unfinished number format for later editing',async t=>{
+ const directory=await mkdtemp(join(tmpdir(),'el-draft-'));
+ t.after(()=>rm(directory,{recursive:true,force:true}));
+ const store=createDraftStore({directory});
+ for(const numberFormat of ['(#C1.', '']){
+  const draft={...sample,layout:{...sample.layout,numberFormat}};
+  await store.save(id,draft);
+  assert.deepEqual((await store.load(id)).draft,draft);
+ }
+ await assert.rejects(store.save(id,{...sample,layout:{...sample.layout,numberFormat:'a'.repeat(129)}}),/number format/);
+});
 
 const controllerSource=await readFile(new URL('../desktop/draft-recovery.js',import.meta.url),'utf8');
 function factory(options){const context=vm.createContext({setTimeout,clearTimeout});vm.runInContext(controllerSource,context);return context.createDraftRecovery(options);}
@@ -91,4 +102,83 @@ test('a failed discard is retried before a later draft can be saved',async()=>{
  await recovery.initialize();await assert.rejects(recovery.discardRecovery(),/temporary failure/);
  await assert.rejects(recovery.flush(),/temporary failure/);assert.equal(actions.includes('draftSave'),false);
  fail=false;await recovery.flush();assert.deepEqual(actions.slice(-2),['draftClear','draftSave']);
+});
+
+test('clearing a draft runs after an already enqueued backup',async()=>{
+ const actions=[],records=new Map([[other,sample]]);
+ const recovery=factory({id,capture:()=>({draft:sample}),native:async(action,payload)=>{
+  if(action==='draftStatus')return {available:true,id:other};
+  actions.push(action);
+  if(action==='draftSave')records.set(payload.clientId,payload.draft);
+  if(action==='draftClear')records.delete(payload.clientId);
+ }});
+ await recovery.initialize();
+ await Promise.all([recovery.flush(),recovery.clear()]);
+ assert.deepEqual(actions,['draftSave','draftClear']);
+ assert.deepEqual([...records.keys()],[other]);
+});
+
+test('returning to clean removes this launch’s backup but keeps an active recovery source',async()=>{
+ let current={draft:sample},recoveredSource=false;
+ const records=new Map([[other,sample]]);
+ const recovery=factory({id,capture:()=>current,canClearCleanDraft:()=>!recoveredSource,native:async(action,payload)=>{
+  if(action==='draftStatus')return {available:true,id:other};
+  if(action==='draftSave')records.set(payload.clientId,payload.draft);
+  if(action==='draftClear')records.delete(payload.clientId);
+ }});
+ await recovery.initialize();await recovery.flush();assert.equal(records.has(id),true);
+ current=null;recoveredSource=true;
+ await recovery.flush();assert.equal(records.has(id),true,'draftClear would also remove the staged recovery source');
+ recoveredSource=false;
+ await recovery.flush();assert.deepEqual([...records.keys()],[other]);
+});
+
+test('an uncertain backup reply cannot make a later flush assume the prior draft is still on disk',async()=>{
+ let current={draft:{...sample,latex:'A'}},saved;
+ const recovery=factory({id,capture:()=>current,native:async(action,payload)=>{
+  if(action==='draftStatus')return {available:false};
+  if(action==='draftSave'){
+   saved=payload.draft.latex;
+   if(saved==='B')throw Error('reply was lost');
+  }
+ }});
+ await recovery.initialize();await recovery.flush();
+ current={draft:{...sample,latex:'B'}};
+ await assert.rejects(recovery.flush(),/reply was lost/);
+ current={draft:{...sample,latex:'A'}};
+ await recovery.flush();assert.equal(saved,'A');
+});
+
+test('an explicit flush republishes a backup removed by another launch',async()=>{
+ const records=new Map(),writes=[];
+ const native=async(action,{clientId,draft})=>{
+  if(action==='draftStatus'){
+   const candidate=[...records.keys()].find(key=>key!==clientId);
+   return candidate?{available:true,id:candidate}:{available:false};
+  }
+  if(action==='draftSave'){records.set(clientId,draft);writes.push(clientId);}
+  if(action==='draftClear')records.delete(clientId);
+ };
+ const first=factory({id,native,capture:()=>({draft:sample})});
+ const later=factory({id:other,native,capture:()=>null});
+ await first.initialize();await first.flush();await later.initialize();
+ await later.discardRecovery();assert.equal(records.has(id),false);
+ await first.flush();assert.deepEqual(writes,[id],'debounced backups skip an unchanged snapshot');
+ assert.equal(await first.flush({force:true}),true);
+ assert.equal(records.get(id)?.latex,sample.latex);
+ assert.deepEqual(writes,[id,id]);
+});
+
+test('a failed automatic cleanup never deletes an active recovery source later',async()=>{
+ let current={draft:sample},recoveredSource=false,clears=0;
+ const recovery=factory({id,capture:()=>current,canClearCleanDraft:()=>!recoveredSource,native:async action=>{
+  if(action==='draftStatus')return {available:true,id:other};
+  if(action==='draftClear'){clears++;throw Error('temporary cleanup failure');}
+  if(action==='draftRestore')return {draft:sample};
+ }});
+ await recovery.initialize();await recovery.flush();
+ current=null;await assert.rejects(recovery.flush(),/cleanup failure/);
+ assert.equal(await recovery.restore(()=>{recoveredSource=true;current={draft:sample};}),true);
+ assert.equal(await recovery.flush(),true);
+ assert.equal(clears,1);
 });

@@ -107,7 +107,7 @@
     context.selectedStructure?text('已选中'+context.structureLabel+'；输入会替换整个结构。',context.structureLabel+' selected. Typing replaces the whole structure.'):
     context.rootScope==='inside'?(context.structureType==='surd'?text('当前在根号内；“移出根号”后继续输入根号外的内容。','Inside the root. Exit the root to type outside it.'):text('当前在根号内；先移出'+context.structureLabel+'，再移出根号。','Inside the root. Exit '+context.structureLabel+' first, then exit the root.')):
     context.rootScope==='outside'?text('当前在根号外，输入不会扩大根号范围。','Outside the root. Typing will not extend its contents.'):
-    text('蓝色虚线标出当前输入范围。','The blue outline marks the current input scope.');
+    context.scopeRange?text('虚线标出当前输入范围。','The outline marks the current input scope.'):'';
    exit.textContent=context.structureLabel?text('移出'+context.structureLabel,'Exit '+context.structureLabel):text('移出结构','Exit structure');select.textContent=context.structureLabel?text('选中'+context.structureLabel,'Select '+context.structureLabel):text('选中结构','Select structure');
    exit.disabled=mathfield.readOnly||isComposing(mathfield)||!context.canExit;select.disabled=isComposing(mathfield)||!context.canSelect;
    label.textContent=text('上下限位置','Limits position');picker.setAttribute('aria-label',text('运算符上下限位置','Operator limits position'));
@@ -115,6 +115,7 @@
    picker.value=context.operator?.placement||'';picker.disabled=mathfield.readOnly||isComposing(mathfield)||!context.operator?.canSetPlacement;picker.title=context.preservedIntegral?text('此原生保留结构的上下限可编辑，位置保持原样。','Edit this preserved native structure’s limits; its placement is retained.'):context.operator?(context.operator.placement?context.operator.label:text('选择后只修改当前运算符的上下限位置。','Choose a position to change this operator only.')):text('点击积分、求和等运算符或它的上下限后设置。','Click an integral, sum or one of its limits to set placement.');
    if(context.preservedIntegral)hint.textContent=picker.title;
    else if(context.operator)hint.textContent=text('当前运算符：'+context.operator.label+'；Tab 切换输入组，方向键移动，也可用“移出结构”。','Current operator: '+context.operator.label+'. Tab changes groups; arrow keys move. You can also use Exit structure.');
+   hint.hidden=!hint.textContent;
    // MathLive renders on its next frame. Paint the independent scope outline
    // afterwards, including when WebKit suspends rAF in a background window.
    if(frame===null)frame=setTimeout(paint,32);return context;

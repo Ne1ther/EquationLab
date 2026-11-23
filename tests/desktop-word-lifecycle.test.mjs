@@ -16,6 +16,7 @@ function editor(){
   wordSessionChanged:()=>context.mf.value!==context.selected?.editorBaseline,
   native:async(action,payload)=>{calls.push({action,payload});if(action==='confirmWordSessionSwitch')return {discard:confirm};if(action==='wordSessionRead'){if(failRead)throw Error('read failed');return {hasDocumentContext:true,activeIndex:1,objects:[{index:0,latex:'other'},{index:1,latex:payload.ticket.slice(0,8)}]};}return {};}
  });
+ context.window.hasRecoverableDraft=()=>context.selected?context.wordSessionChanged():!!context.mf.value.trim();
  vm.runInContext(code.split('\n').find(l=>l.startsWith('async function perform('))+'\n'+slice('async function waitForEditorIdle(','function resetNewFormula()')+'\n'+slice('window.nativeOpenWordSession=async','async function loadWordThumbnails'),context);
  return {context,calls,messages,discard:value=>confirm=value,failRead:()=>failRead=true};
 }

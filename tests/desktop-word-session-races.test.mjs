@@ -327,6 +327,34 @@ test('A changed Word number format is bound to the selected equation, including 
  assert.deepEqual(JSON.parse(JSON.stringify(submitted.numbering)),{format:'[#C1-#E1]',side:'right'});
 });
 
+test('A legacy numbering conversion needs approval before submitting any write to Word',async()=>{
+ for(const scenario of ['declined','accepted','stale','content only','shared']){
+  const layout={...sourceDocument.objects[25].layout},object={...sourceDocument.objects[25],index:0,layout};
+  object.editorBaseline=object.latex;
+  const editor=createEditor(async action=>{
+   if(action==='confirmWordNumberingMigration'){
+    if(scenario==='stale')c.source.documentNumberingRevision++;
+    return {confirmed:scenario!=='declined'};
+   }
+   return {acknowledgement:false};
+  }),c=editor.context;
+  c.wordTicket='7'.repeat(64);c.selected=object;
+  c.source={path:'/tmp/document.docx',activeIndex:0,documentIdentity:'word:qa',documentNumberingRevision:1,
+   hasDocumentContext:true,wordNumberingSupported:true,wordHasLegacyNumbering:scenario!=='shared',objects:[object]};
+  c.mf.value=scenario==='content only'?'x+7':object.latex;
+  const format=scenario==='content only'?layout.numberFormat:'(#C1-#E1)';
+  c.$('layout-format').value=format;
+  installWordCommit(c);
+  const saves=scenario!=='stale'&&scenario!=='declined',prompts=scenario!=='content only'&&scenario!=='shared';
+  assert.equal(await c.window.nativeCommitWordSession(),saves,scenario);
+  const actions=editor.calls.map(call=>call.action);
+  assert.equal(actions.filter(action=>action==='confirmWordNumberingMigration').length,Number(prompts),scenario);
+  assert.equal(actions.filter(action=>action==='wordSessionSave').length,Number(saves),scenario);
+  if(saves&&prompts)assert.ok(actions.indexOf('confirmWordNumberingMigration')<actions.indexOf('wordSessionSave'));
+  if(!saves){assert.equal(c.mf.value,object.latex);assert.equal(c.$('layout-format').value,format);}
+ }
+});
+
 test('The confirmed format edit passes the sidebar its provisional label without waiting on preview',async()=>{
  for(const previewReady of [true,false]){
   const ticket='7'.repeat(64),object={...sourceDocument.objects[25],index:0};

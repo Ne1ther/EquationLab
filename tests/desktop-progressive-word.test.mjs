@@ -59,6 +59,77 @@ function thumbnailVisibilityTest(reply) {
  return {show,source,requests};
 }
 
+test('A source reopened at the same path ignores stale visibility events and delayed images',async()=>{
+ const makeSource=generation=>({
+  path:'copy.docx',sourceSha256:String(generation).repeat(64),fileCopyGeneration:generation,
+  objects:[{index:0},{index:1}]
+ });
+ const old=makeSource(1),next=makeSource(2),requests=[];
+ let started,finish;
+ const began=new Promise(resolve=>{started=resolve;});
+ const pending=new Promise(resolve=>{finish=resolve;});
+ const context=vm.createContext({
+  window:{},source:old,selected:old.objects[0],wordTicket:null,wordNavigating:false,busy:false,
+  wordCommitRunning:null,validationRunning:null,validationPending:false,setTimeout:queueMicrotask,requestWorkbenchSync(){},
+  async native(action,payload){
+   assert.equal(action,'fileCopyThumbnails');
+   assert.equal(payload.path,'copy.docx');
+   requests.push(payload.sourceSha256);
+   if(payload.sourceSha256===old.sourceSha256){started();await pending;}
+   return {images:[{index:1,image:payload.sourceSha256}]};
+  }
+ });
+ vm.runInContext(thumbnailLoader,context);
+ const show=generation=>context.window.nativeWordThumbnailVisibility(JSON.stringify({index:1,visible:true,path:old.path,fileCopyGeneration:generation}));
+ show(1);await began;
+ context.source=next;context.selected=next.objects[0];
+ show(1);
+ finish();await settle();
+ assert.equal(next.objects[1].image,undefined);
+ assert.equal(old.objects[1].image,undefined);
+ show(2);await settle();
+ assert.deepEqual(requests,[old.sourceSha256,next.sourceSha256]);
+ assert.equal(next.objects[1].image,next.sourceSha256);
+});
+
+test('Opening a cancelled, empty or unreadable DOCX keeps the current source and selected formula',async()=>{
+ const old={path:'current.docx',objects:[{index:0,latex:'x+1'}]},selected=old.objects[0],messages=[];
+ let response=null,dirty=false,discard=false;
+ const operations=[];
+ const context=vm.createContext({
+  window:{hasRecoverableDraft:()=>dirty,draftOutcomeUnknown:true,clearSavedDrafts:async()=>operations.push('clear')},wordTicket:null,source:old,selected,
+  perform:async operation=>{try{return await operation()!==false;}catch(error){messages.push(error.message);return false;}},
+  native(action,payload){
+   if(action==='confirmWordSessionSwitch'){assert.equal(payload.fileCopy,true);operations.push('confirm');return {discard};}
+   assert.equal(action,'open');assert.equal(payload.thumbnails,false);if(response instanceof Error)throw response;return response;
+  },
+  message(text){messages.push(text);},
+  $(){return {};},
+  selectObject(index){context.selected=context.source.objects[index];operations.push('select');},
+  loadWordThumbnails(ticket,document){assert.equal(ticket,null);assert.equal(document,response);operations.push('queue');}
+ });
+ vm.runInContext(app.slice(app.indexOf('function retireStandaloneDraft('),app.indexOf('function renderObjects(')),context);
+ dirty=true;
+ for(response of [null,{path:'empty.docx',objects:[]},Error('Cannot read this file')]){
+  assert.equal(await context.window.nativeOpen(),false);
+  assert.equal(context.source,old);
+  assert.equal(context.selected,selected);
+ }
+ assert.deepEqual(operations,[]);
+ assert.match(messages[1],/当前编辑已保留/);
+ response={path:'reopened.docx',objects:[{index:0,latex:'y+1'}],sourceSha256:'4'.repeat(64)};
+ assert.equal(await context.window.nativeOpen(),false);
+ assert.equal(context.source,old);assert.equal(context.selected,selected);
+ assert.equal(context.window.draftOutcomeUnknown,true);
+ discard=true;
+ assert.equal(await context.window.nativeOpen(),true);
+ assert.equal(context.source,response);
+ assert.equal(context.source.fileCopyGeneration,1);
+ assert.equal(context.selected,response.objects[0]);
+ assert.equal(context.window.draftOutcomeUnknown,false);
+ assert.deepEqual(operations,['confirm','confirm','clear','select','queue']);
+});
+
 test('A thumbnail request remains deduplicated when its row leaves and re-enters while the RPC is pending',async()=>{
  let notifyStarted,deliver;
  const started=new Promise(resolve=>{notifyStarted=resolve;});

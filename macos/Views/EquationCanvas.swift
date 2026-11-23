@@ -60,7 +60,7 @@ final class EquationWKWebView: WKWebView {
             self.layer?.setNeedsDisplay()
             self.displayIfNeeded()
             self.window?.displayIfNeeded()
-            self.evaluateJavaScript("window.dispatchEvent(new Event('resize'))", completionHandler: nil)
+            self.evaluateJavaScript("window.dispatchEvent(new Event('resize')); window.nativeRefreshEditorSurface?.()", completionHandler: nil)
             self.recordLifecycle("reveal_refresh")
         }
     }
@@ -79,7 +79,11 @@ final class EquationWKWebView: WKWebView {
             }
         }
         guard let data = try? JSONSerialization.data(withJSONObject: colors), let json = String(data: data, encoding: .utf8) else { return }
-        evaluateJavaScript("for(const [key,value] of Object.entries(\(json))) document.documentElement.style.setProperty(key,value)", completionHandler: nil)
+        let appearance = effectiveAppearance.bestMatch(from: [.darkAqua, .aqua]) == .darkAqua ? "dark" : "light"
+        evaluateJavaScript("""
+            document.documentElement.dataset.appearance = '\(appearance)';
+            for (const [key, value] of Object.entries(\(json))) document.documentElement.style.setProperty(key, value);
+            """, completionHandler: nil)
     }
 }
 

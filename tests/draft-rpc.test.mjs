@@ -35,3 +35,23 @@ test('RPC recovers a structure-preserving draft into a new standalone source wit
   assert.ok(makeNewOle('x').length>0);
  }finally{if(previous===undefined)delete process.env.EQUATIONLAB_DATA_DIR;else process.env.EQUATIONLAB_DATA_DIR=previous;await rm(directory,{recursive:true,force:true});}
 });
+
+test('A first rebuild backup survives loss of its original DOCX',async()=>{
+ const directory=await mkdtemp(join(tmpdir(),'el-recovery-missing-source-')),previous=process.env.EQUATIONLAB_DATA_DIR;
+ process.env.EQUATIONLAB_DATA_DIR=directory;
+ try{
+  const {desktopRequest}=await import('../src/desktop-rpc.mjs?draft-rpc-missing-source');
+  const path=join(directory,'removed.docx'),bytes=await createDocx([{latex:'x+1'}]);
+  await writeFile(path,bytes);
+  const initial=await desktopRequest({action:'inspect',payload:{path,thumbnails:false}});
+  await unlink(path);
+  const source={path,index:0,nativeSha256:initial.objects[0].nativeSha256};
+  const old='aaaaaaaa-aaaa-4aaa-aaaa-aaaaaaaaaaaa',current='bbbbbbbb-bbbb-4bbb-bbbb-bbbbbbbbbbbb';
+  await desktopRequest({action:'draftSave',payload:{clientId:old,source,draft:{latex:'y+1',mode:'rebuild',typography:{fullSize:14},ruler:[]}}});
+  const restored=await desktopRequest({action:'draftRestore',payload:{id:old,clientId:current}});
+  assert.equal(restored.draft.latex,'y+1');
+  assert.deepEqual(restored.draft.typography.sizes[0],{unit:'pt',value:14});
+  assert.equal(restored.source,undefined);
+  await assert.rejects(desktopRequest({action:'draftSave',payload:{clientId:current,source,draft:{latex:'x+1',mode:'characters',replacements:{}}}}),{code:'ENOENT'});
+ }finally{if(previous===undefined)delete process.env.EQUATIONLAB_DATA_DIR;else process.env.EQUATIONLAB_DATA_DIR=previous;await rm(directory,{recursive:true,force:true});}
+});

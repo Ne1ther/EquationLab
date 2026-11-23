@@ -1,5 +1,23 @@
 # 版本记录
 
+## 0.7.6 · build110
+
+- **草稿保护。** 新建、打开副本和切换公式前会提示处理未保存的编辑。草稿恢复涵盖编号、排版和原生字符替换。
+- **Word 编号。** 在仍使用旧 Equation Lab 编号的文档里，首次保存编号格式前会提示确认把全文编号字段转换为共享 MathType 编号。已使用共享编号的文档继续按当前公式更新编号格式。
+- **公式列表。** 打开 DOCX 副本时先显示公式目录，缩略图随浏览加载。文档和收藏夹分别记住搜索条件。
+- **标尺和 PDF。** 修复从制表位侧边拖动时的跳位，圆角公式框导出矢量 PDF 时保留圆角。
+
+在桌面版 Word 的 30 公式共享编号副本中，第 9 式从 `(1.9)` 改为 `(1-9)`，对应的 `REF` 引用随之更新。99 个 `SEQ` 域、其余 29 式的编号结构、全部 30 个公式的 OLE 数据与书签，以及对照 `REF` 均保持原样。
+
+- **Draft protection.** The app prompts before replacing unsaved edits when you start a draft, open a copy, or switch equations. Recovery includes numbering, layout, and native character replacements.
+- **Word numbering.** The first format save in a document with legacy Equation Lab numbering asks for confirmation before converting its numbering fields to shared MathType numbering. In documents already using shared numbering, the format change applies to the current equation.
+- **Equation list.** DOCX copies show the equation list first and load thumbnails as you browse. Documents and Favorites keep separate search terms.
+- **Ruler and PDF.** Tab stops no longer jump when grabbed off center. Vector PDF export preserves rounded equation boxes.
+
+In a 30-equation Word for Mac test copy using shared numbering, equation 9 changed from `(1.9)` to `(1-9)` and its `REF` updated. All 99 `SEQ` fields, the other 29 numbering structures, all 30 equation OLE payloads and their bookmarks, and the control `REF` were unchanged.
+
+[下载 0.7.6 · Download 0.7.6](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.6)
+
 ## 0.7.5 · build109
 
 - 修复 Word 保存后重新打开公式时偶尔出现的旧编号，结束编辑后会自动刷新。

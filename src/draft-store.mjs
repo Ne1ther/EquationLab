@@ -5,7 +5,6 @@ import {randomUUID} from 'node:crypto';
 import {inspectOle,patchRuler} from './native.mjs';
 import {makeNewOle} from './new-formula.mjs';
 import {normalizeTypographyPatch} from './document-typography.mjs';
-import {previewNumberFormat} from './layout.mjs';
 
 const SCHEMA='equationlab.draft.v1',MAX_BYTES=4_000_000,TTL=14*86400_000;
 const identifier=id=>{if(typeof id!=='string'||!/^\w{8}-\w{4}-\w{4}-\w{4}-\w{12}$/.test(id)||!/^[a-f0-9-]+$/i.test(id))throw Error('Invalid draft identifier');return id;};
@@ -22,7 +21,8 @@ export function normalizeDraft(value){
   if(Object.keys(layout).some(key=>!['mode','numberFormat','chapter','section'].includes(key))||!['inline','display','numbered-left','numbered-right'].includes(layout.mode))throw Error('Invalid draft layout');
   if(typeof layout.numberFormat!=='string'||layout.numberFormat.length>128)throw Error('Invalid draft number format');
   for(const key of ['chapter','section'])if(!Number.isSafeInteger(layout[key])||layout[key]<1||layout[key]>32767)throw Error('Invalid draft counter');
-  previewNumberFormat(layout.numberFormat,{chapter:layout.chapter,section:layout.section,equation:1});result.layout={...layout};
+  // Backup also preserves partial input while the number format is being edited.
+  result.layout={...layout};
  }
  if(value.replacements!==undefined){
   object(value.replacements,'draft replacements');const entries=Object.entries(value.replacements);

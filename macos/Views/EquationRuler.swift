@@ -9,25 +9,46 @@ struct EquationRuler: View {
     @State private var showingHelp = false
     private let names = ["左对齐", "居中", "右对齐", "关系对齐", "小数点对齐"]
     private let marks = ["└", "┴", "┘", "=", "·"]
+    private static let unitsPerPoint = 32
     private var scale: CGFloat {
         let full = Double(bridge.state.sizes.first?.value ?? "12") ?? 12
-        return CGFloat(Double(bridge.state.effectiveZoom) * 0.29 / max(2, full))
+        let points = full.isFinite ? max(2, full) : 12
+        return CGFloat(Double(max(1, bridge.state.effectiveZoom)) * 0.29 / points)
     }
     private func save(_ tabs: [RulerTab]) {
         bridge.action("ruler", ["tabs": tabs.sorted { $0.position < $1.position }.map { ["position": $0.position, "type": $0.type] }])
     }
+    static func tabPosition(at x: CGFloat, scale: CGFloat) -> Int? {
+        guard x.isFinite, scale.isFinite, scale > 0 else { return nil }
+        let points = (max(0, x) / scale).rounded()
+        guard points <= CGFloat(Int16.max) / CGFloat(unitsPerPoint) else { return nil }
+        return Int(points) * unitsPerPoint
+    }
+
+    private static func markerX(for tab: RulerTab, scale: CGFloat) -> CGFloat {
+        CGFloat(tab.position) / CGFloat(unitsPerPoint) * scale
+    }
+
+    private static func draggedMarkerX(for tab: RulerTab, by offset: CGFloat, width: CGFloat, scale: CGFloat) -> CGFloat {
+        min(width, max(0, markerX(for: tab, scale: scale) + offset))
+    }
+
     static func tabsAfterDrag(
         _ current: [RulerTab],
         dragging tab: RulerTab,
         location: CGPoint,
+        horizontalTranslation: CGFloat,
         width: CGFloat,
         scale: CGFloat
     ) -> [RulerTab]? {
+        guard current.contains(tab), width.isFinite, width > 0,
+              location.x.isFinite, location.y.isFinite, horizontalTranslation.isFinite else { return nil }
         let remaining = current.filter { $0.id != tab.id }
         let inBounds = location.y >= -12 && location.y <= 52 && location.x >= 0 && location.x <= width
         guard inBounds else { return remaining }
-        let position = max(0, min(32767, Int((location.x / scale).rounded()) * 32))
-        guard position != tab.position, !remaining.contains(where: { $0.position == position }) else {
+        let x = draggedMarkerX(for: tab, by: horizontalTranslation, width: width, scale: scale)
+        guard horizontalTranslation != 0, let position = tabPosition(at: x, scale: scale),
+              position != tab.position, !remaining.contains(where: { $0.position == position }) else {
             return nil
         }
         return remaining + [RulerTab(position: position, type: tab.type)]
@@ -72,22 +93,26 @@ struct EquationRuler: View {
                             if major { context.draw(Text("\(tick * minorStep)").font(.system(size: 9).monospacedDigit()).foregroundColor(.secondary), at: CGPoint(x: x + 2, y: 9), anchor: .leading) }
                         }
                     }.contentShape(Rectangle()).onTapGesture { location in
-                        let position = Int((max(0, location.x) / scale).rounded()) * 32
-                        guard position <= 32767, !bridge.state.ruler.contains(where: { $0.position == position }) else { return }
+                        guard let position = Self.tabPosition(at: location.x, scale: scale),
+                              !bridge.state.ruler.contains(where: { $0.position == position }) else { return }
                         save(bridge.state.ruler + [RulerTab(position: position, type: tabType)])
                     }
                     ForEach(bridge.state.ruler) { tab in
                         Text(marks[min(4, max(0, tab.type))]).font(.system(size: 17, weight: .semibold)).foregroundStyle(.blue)
                             .frame(width: 20, height: 24)
-                            .position(x: dragging == tab.id ? dragX : CGFloat(tab.position) / 32 * scale, y: 25)
-                            .help("\(bridge.t(names[min(4, max(0, tab.type))])) · \(String(format: "%.2f", Double(tab.position) / 32)) pt")
+                            .position(x: dragging == tab.id ? dragX : Self.markerX(for: tab, scale: scale), y: 25)
+                            .help("\(bridge.t(names[min(4, max(0, tab.type))])) · \(String(format: "%.2f", Double(tab.position) / Double(Self.unitsPerPoint))) pt")
                             .gesture(DragGesture(minimumDistance: 2, coordinateSpace: .named("ruler"))
-                                .onChanged { value in dragging = tab.id; dragX = value.location.x }
+                                .onChanged { value in
+                                    dragging = tab.id
+                                    dragX = Self.draggedMarkerX(for: tab, by: value.translation.width, width: geometry.size.width, scale: scale)
+                                }
                                 .onEnded { value in
                                     let updated = Self.tabsAfterDrag(
                                         bridge.state.ruler,
                                         dragging: tab,
                                         location: value.location,
+                                        horizontalTranslation: value.translation.width,
                                         width: geometry.size.width,
                                         scale: scale
                                     )

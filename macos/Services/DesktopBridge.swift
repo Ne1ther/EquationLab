@@ -601,6 +601,15 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             // visible until acknowledgement, then return to Word once.
             reply(id, ["ok": true, "data": [:]]); return
         }
+        if action == "confirmWordNumberingMigration" {
+            showEditorWindow()
+            let alert = NSAlert()
+            alert.messageText = t("转换整篇文档的旧编号？")
+            alert.informativeText = t("要写入本次编号修改，Word 会先将本文档的旧 Equation Lab 编号转换为共享 MathType 编号。现有引用仍指向原公式。")
+            alert.addButton(withTitle: t("保留编号草稿"))
+            alert.addButton(withTitle: t("转换并更新"))
+            reply(id, ["ok": true, "data": ["confirmed": alert.runModal() == .alertSecondButtonReturn]]); return
+        }
         if action == "confirmWordSessionSwitch" {
             showEditorWindow()
             let alert = NSAlert()
@@ -608,10 +617,18 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             let browsing = payload["browsing"] as? Bool == true
             let switchingDocument = payload["document"] as? Bool == true
             let newFormula = payload["newFormula"] as? Bool == true
+            let fileCopy = payload["fileCopy"] as? Bool == true
+            let characterMode = payload["characterMode"] as? Bool == true
             alert.messageText = t(closing ? "当前公式尚不能保存" : "当前公式还有未保存的修改")
-            alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : newFormula ? "继续编辑当前公式，或放弃草稿并新建公式。" : switchingDocument ? "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。" : browsing ? "继续编写新公式，或放弃草稿并编辑左侧选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            if characterMode {
+                alert.informativeText = t("保留结构模式只修改原公式的字符。你可以继续编辑，或放弃结构修改并切换模式。")
+            } else if fileCopy {
+                alert.informativeText = t("继续编辑当前公式，或放弃草稿并打开所选文件。")
+            } else {
+                alert.informativeText = t(closing ? "可以继续保留当前编辑，或结束本次编辑并返回 Word。保存失败时，请检查 Word 中的公式。" : newFormula ? "继续编辑当前公式，或放弃草稿并新建公式。" : switchingDocument ? "继续编辑当前公式，或放弃草稿并切换到所选 Word 文档。" : browsing ? "继续编辑当前公式，或放弃草稿并打开选中的公式。" : "继续编辑当前公式，或放弃这些修改并打开刚才双击的公式。")
+            }
             alert.addButton(withTitle: t("继续编辑当前公式"))
-            alert.addButton(withTitle: t(closing ? "放弃修改并返回 Word" : newFormula ? "放弃修改并新建" : "放弃修改并打开"))
+            alert.addButton(withTitle: t(characterMode ? "放弃结构修改并切换" : closing ? "放弃修改并返回 Word" : newFormula ? "放弃修改并新建" : "放弃修改并打开"))
             let answer: NSApplication.ModalResponse
             answer = alert.runModal()
             reply(id, ["ok": true, "data": ["discard": answer == .alertSecondButtonReturn]]); return
