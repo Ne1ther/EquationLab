@@ -1,5 +1,5 @@
 {
-  "version": "0.7.6",
-  "zh": "• 首次修改旧 Equation Lab 编号时，写回前说明全文转换范围并请求确认。\n• 切换公式、文件和编辑模式时保护草稿，恢复时保留公式、编号设置和编辑模式。\n• 按需生成文档公式缩略图，修复缩放后标尺拖动跳位和圆角框导出失真。",
-  "en": "• Explains the document-wide conversion before the first numbering change in a document with legacy Equation Lab fields and asks for confirmation.\n• Protects drafts when switching equations, files, or edit modes and restores the equation, numbering settings, and edit mode.\n• Generates document thumbnails on demand and fixes ruler drag jumps and rounded borders in exports."
+  "version": "0.7.7",
+  "zh": "修复部分 macOS 上 Word 排版预览放大比例不对的问题。将预览设为 150% 或 200% 后，可以横向和纵向滚动查看整个公式。",
+  "en": "Fixes incorrect Word preview zoom on some macOS versions. At 150% or 200%, scroll horizontally and vertically to see the full equation."
 }

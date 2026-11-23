@@ -1,5 +1,13 @@
 # 版本记录
 
+## 0.7.7 · build111
+
+修复不同版本 WebKit 下的 Word 排版预览缩放。放大宽公式或高公式后，可以横向和纵向滚动查看完整公式。
+
+Fixes Word layout preview zoom differences across WebKit versions. Wide and tall equations remain fully reachable by scrolling horizontally and vertically after zooming in.
+
+[下载 0.7.7 · Download 0.7.7](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.7)
+
 ## 0.7.6 · build110
 
 - **草稿保护。** 新建、打开副本和切换公式前会提示处理未保存的编辑。草稿恢复涵盖编号、排版和原生字符替换。

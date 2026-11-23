@@ -12,9 +12,9 @@ const fraction=String.raw`\frac{a}{b}\times\frac{c}{d}=\frac{ac}{bd}`;
 const tick=()=>new Promise(resolve=>setImmediate(resolve));
 
 function editor(){
- const calls=[],decodes=[],messages=[],elements=new Map(),image={src:'old-preview',removeAttribute(){this.src='';}};
+ const calls=[],decodes=[],messages=[],elements=new Map(),image={src:'old-preview',style:{setProperty(){}},removeAttribute(){this.src='';}};
  let typography={fullSize:18};
- const swap=swapFactory(image,()=>{},()=>({decode(){return new Promise((resolve,reject)=>decodes.push({resolve,reject}));}}));
+ const swap=swapFactory(image,()=>{},()=>({naturalWidth:100,decode(){return new Promise((resolve,reject)=>decodes.push({resolve,reject}));}}));
  const element=id=>{if(!elements.has(id))elements.set(id,{value:'',disabled:false,hidden:false,readOnly:false,querySelectorAll:()=>[]});return elements.get(id);};
  const context=vm.createContext({
   window:{desktopTypographyPatch:()=>typography,desktopFontPreview:swap},

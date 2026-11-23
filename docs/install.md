@@ -1,6 +1,6 @@
 # 安装与使用
 
-**[下载 Equation Lab 0.7.6（build110）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)**
+**[下载 Equation Lab 0.7.7（build111）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.7/Equation-Lab-0.7.7.pkg)**
 
 适用 M 系列 Mac、macOS 14 及以上；Word 功能需要桌面版 Word for Mac。App、插件、字体资源和运行时已打包在一起，不用另外安装开发工具。
 
@@ -77,7 +77,7 @@
 
 # Installation and use
 
-**[Download Equation Lab 0.7.6 (build110)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.6/Equation-Lab-0.7.6.pkg)**
+**[Download Equation Lab 0.7.7 (build111)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.7/Equation-Lab-0.7.7.pkg)**
 
 Use an Apple Silicon Mac with macOS 14 or later. Word integration requires desktop Word for Mac. The package includes the app, plugin, fonts, and runtime.
 
