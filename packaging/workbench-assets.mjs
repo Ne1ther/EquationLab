@@ -10,12 +10,9 @@ export async function buildWorkbenchAssets({root, resources}) {
  const inputs=[
   ['EquationLab-header','design/workbench-concepts/assets/equationlab-header-mark.svg',144,96],
   ['Word','design/office-product-icons/microsoft-20251117/word_48x1.svg',64,64],
-  ['Microsoft365','design/office-product-icons/microsoft-20251117/m365_48x1.svg',64,64],
-  ['Codex','design/ai-client-icons/Codex.png',64,64],
-  ['Antigravity','design/ai-client-icons/Antigravity.png',64,64],
-  ['ClaudeCode','design/ai-client-icons/ClaudeCode.png',64,64],
-  ['DeepSeekHarness','design/ai-client-icons/DeepSeekHarness.png',64,64]
+  ['Microsoft365','design/office-product-icons/microsoft-20251117/m365_48x1.svg',64,64]
  ];
+ const clientMarks=['Codex.png','Antigravity.png','ClaudeCode.svg','DeepSeekHarness.svg','DeepSeekHarnessDark.svg'];
  const assets=[];
  for(const [name,path,width,height] of inputs){
   const bytes=await readFile(join(root,path));
@@ -26,6 +23,17 @@ export async function buildWorkbenchAssets({root, resources}) {
    const dark=bytes.toString().replaceAll('#35383c','#f5f5f7').replaceAll('#292c30','#e8e8ed').replaceAll('#23262a','#d2d2d7').replaceAll('#77756e','#f2f2f7').replace('id="lab-watermark" clip-path="url(#labOutline)" opacity=".31"','id="lab-watermark" clip-path="url(#labOutline)" opacity=".76"');
    await writeFile(join(target,'EquationLab-header-dark.png'),await sharp(Buffer.from(dark),{density:192}).resize(width,height,{fit:'inside'}).png().toBuffer());
   }
+ }
+ for(const file of clientMarks){
+  const path='design/ai-client-icons/'+file;
+  const name=file.slice(0,file.lastIndexOf('.'));
+  const bytes=await readFile(join(root,path));
+  const png=await sharp(bytes,{density:192})
+   .trim({background:'#00000000',threshold:8})
+   .resize(64,64,{fit:'contain',background:'#00000000'})
+   .png().toBuffer();
+  await writeFile(join(target,name+'.png'),png);
+  assets.push({name,source:path,sourceSha256:createHash('sha256').update(bytes).digest('hex'),bytes:png.length});
  }
  await writeFile(join(target,'Microsoft-product-icons-NOTICE.md'),await readFile(join(root,'design/office-product-icons/README.md'),'utf8'));
  await writeFile(join(target,'AI-client-icons-NOTICE.md'),await readFile(join(root,'design/ai-client-icons/README.md'),'utf8'));

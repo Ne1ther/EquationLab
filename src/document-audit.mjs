@@ -69,6 +69,17 @@ function instruction(code){
  return result;
 }
 
+// The XML walk appends records in increasing document order.
+function firstAfter(records,key,position){
+ let first=0,end=records.length;
+ while(first<end){
+  const middle=first+Math.floor((end-first)/2);
+  if(records[middle][key]<=position)first=middle+1;
+  else end=middle;
+ }
+ return first;
+}
+
 export function scanWordNumberingPart(doc,part){
  let ordinal=0,paragraph=-1,fieldOrdinal=0,bookmarkOrdinal=0;
  const fields=[],bookmarks=[],openBookmarks=new Map(),texts=[],objects=[],structural=[],stack=[];
@@ -148,7 +159,12 @@ export function scanWordNumberingPart(doc,part){
  const outerDisplay=text=>text.replace(/^\s*MACROBUTTON\s+MTPlaceRef\s*/i,'').trim()
   .replace(/^(?:\\\*\s+(?:MERGEFORMAT|CHARFORMAT)\s+)+/i,'')
   .replace(/(?:\s+\\\*\s+(?:MERGEFORMAT|CHARFORMAT))+\s*$/i,'').trim();
- for(const field of fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code))){
+ const macrosByParagraph=new Map();
+ for(const field of fields){
+  if(!/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(field.code))continue;
+  const paragraph=field.location.paragraph;
+  if(!macrosByParagraph.has(paragraph))macrosByParagraph.set(paragraph,[]);
+  macrosByParagraph.get(paragraph).push(field);
   const projection=displayParts(field),complete=projection.complete;
   const text=outerDisplay(projection.text);
   // Only known outer formatting switches around the display are syntax.
@@ -160,24 +176,29 @@ export function scanWordNumberingPart(doc,part){
   // An unreferenced number still has a bounded MTPlaceRef envelope. Recognize
   // that display without inventing a bookmark or granting write authority.
   const children=byParent.get(field.id)??[],hidden=children.filter(child=>child.instruction.hidden),visible=children.filter(child=>!child.instruction.hidden);
+  const nextObject=objects[firstAfter(objects,'order',field.start)];
   const canonical=field.end!==null&&field.location.paragraph===field.endParagraph&&!field.locked&&field.reviewState==='unchanged'
    &&children.every(child=>child.end!==null&&child.end<field.end&&!child.locked&&child.reviewState==='unchanged'&&child.instruction.type==='SEQ'&&child.instruction.family==='mathtype'&&!child.instruction.unknownSwitches.length&&!byParent.has(child.id))
    &&singleNumberChain(children)&&hidden.length===1&&hidden[0].instruction.role==='equation'&&!hidden[0].instruction.repeat
    &&visible.every(child=>child.start>hidden[0].end&&child.instruction.repeat&&child.instruction.reset===null)
-   &&!objects.some(object=>object.order>field.start&&object.order<field.end);
+   &&(!nextObject||nextObject.order>=field.end);
   if(canonical){const format=displayParts(field,null,true),pattern=outerDisplay(format.text);if(format.complete&&pattern.length<=128&&!pattern.includes('\\'))field.numberFormat=pattern;}
  }
  for(const bookmark of bookmarks){
-  bookmark.cachedText=texts.filter(t=>t.position>bookmark.start&&bookmark.end!==null&&t.position<bookmark.end).map(t=>t.text).join('');
-  const enclosing=fields.filter(f=>/^\s*MACROBUTTON\s+MTPlaceRef\b/i.test(f.code)&&f.start<bookmark.start&&f.end>bookmark.end&&f.location.paragraph===bookmark.location.paragraph&&f.endParagraph===bookmark.endParagraph);
-  if(bookmark.end!==null&&enclosing.length===1){
+  bookmark.cachedText='';
+  if(bookmark.end===null){
+   structural.push({code:'unclosed-bookmark',location:bookmark.location,bookmark:bookmark.name});
+   continue;
+  }
+  for(let i=firstAfter(texts,'position',bookmark.start);i<texts.length&&texts[i].position<bookmark.end;i++)bookmark.cachedText+=texts[i].text;
+  const enclosing=(macrosByParagraph.get(bookmark.location.paragraph)??[]).filter(f=>f.start<bookmark.start&&f.end>bookmark.end&&f.endParagraph===bookmark.endParagraph);
+  if(enclosing.length===1){
    const display=displayParts(enclosing[0],bookmark),format=displayParts(enclosing[0],bookmark,true);
    // A bookmark inside the macro's code is MathType's actual REF target.
    // Project only its bounded contents, never surrounding macro instructions.
    if(display.complete&&display.text.length<=128&&!display.text.includes('\\'))bookmark.cachedText=display.text;
    if(format.complete&&format.text.length<=128&&!format.text.includes('\\'))bookmark.numberFormat=format.text;
   }
-  if(bookmark.end===null)structural.push({code:'unclosed-bookmark',location:bookmark.location,bookmark:bookmark.name});
  }
  return {part,doc,fields,bookmarks,objects,structural};
 }

@@ -6,6 +6,7 @@ import {nativeSessionOperation as op} from '../src/word-native-session.mjs';
 import {createDocx,flatOpc,inspectDocx} from '../src/document.mjs';
 import {inspectOle} from '../src/native.mjs';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
+import {MAX_COMPRESSED_CATALOGUE_PAGE_BYTES} from '../src/word-catalogue-limits.mjs';
 
 const bytes=await readFile(new URL('../docs/examples/equation-lab-30-formulas.docx',import.meta.url));
 const full=await flatOpc(bytes),doc=await inspectDocx(bytes),index=25,native=inspectOle(doc.objects[index].ole).native.toString('base64');
@@ -36,6 +37,95 @@ test('The exact current owner is editable before the full list; enrichment retai
   // The old preview file is immutable while the editor switches source paths.
   assert.equal((await inspectDocx(await readFile(read.document.path))).objects.length,1);
   assert.equal((await op('native-poll',{ticket})).loadDocument,undefined);
+ }finally{await close(ticket);}
+});
+test('Bound catalogue pages publish early searchable text while numbering and non-owner writes still require the full snapshot',async()=>{
+ const {ticket}=await open();
+ try{
+  const read=await op('native-read',{ticket}),session=read.session;
+  assert.equal(read.cataloguePreviewAvailable,true);
+  const numbered=({ole,index})=>({ole,layout:{mode:'numbered-right',equation:index+1,numberFormat:'(#E1)'}});
+  const first=await flatOpc(await createDocx(doc.objects.slice(0,8).map(numbered),{numberingFamily:'equationlab'}));
+  const second=await flatOpc(await createDocx(doc.objects.slice(8,16).map(numbered),{numberingFamily:'mathtype'}));
+  const part={ticket,session,initialSnapshot:100,snapshot:101,ordinal:0,ooxml:first};
+  await assert.rejects(op('native-catalogue-part',part),/no longer matches/);
+  await op('native-enrich-request',{ticket,catalogueCount:0});
+  assert.equal((await op('native-poll',{ticket})).cataloguePreview,true);
+  await assert.rejects(op('native-catalogue-part',{...part,ordinal:1}),/out of order/);
+  assert.deepEqual(await op('native-catalogue-part',part),{ok:true,more:true});
+  assert.deepEqual(await op('native-catalogue-part',{...part,ordinal:1,ooxml:second}),{ok:true,more:true});
+  const {state,catalogue}=await local(()=>desktopRequest({action:'wordSessionDocument',payload:{ticket,catalogueCount:0}}));
+  assert.equal(state,'pending');
+  assert.deepEqual(catalogue,{start:0,rows:doc.objects.slice(0,16).map(({latex,nativeSha256,index})=>({latex,nativeSha256,numberText:'('+(index+1)+')'}))});
+  assert.deepEqual(await op('native-enrich-request',{ticket,catalogueCount:16}),{state:'pending'});
+  await assert.rejects(op('native-navigate',{ticket,index:7}),/navigation/);
+  assert.equal((await op('native-read',{ticket})).document.scope,'selection');
+  await op('native-enrich',{ticket,session,initialSnapshot:100,document:context(false)});
+  const final=await local(()=>desktopRequest({action:'wordSessionDocument',payload:{ticket,catalogueCount:8}}));
+  assert.equal(final.state,'available');
+  assert.equal(final.catalogue,undefined);
+  assert.deepEqual(final.document.objects.map(o=>o.nativeSha256),doc.objects.map(o=>o.nativeSha256));
+  await assert.rejects(op('native-catalogue-part',{...part,ordinal:1}),/no longer matches/);
+ }finally{await close(ticket);}
+});
+test('A preview whose retained owner moved cannot become catalogue metadata or grant write access',async()=>{
+ const {ticket}=await open();
+ try{
+  const {session}=await op('native-read',{ticket});
+  const shifted=doc.objects.map(({ole})=>({ole}));
+  [shifted[index],shifted[index-1]]=[shifted[index-1],shifted[index]];
+  const body={ticket,session,initialSnapshot:100,snapshot:101,ordinal:0,ooxml:await flatOpc(await createDocx(shifted))};
+  await op('native-enrich-request',{ticket,catalogueCount:0});
+  await assert.rejects(op('native-catalogue-part',body),/does not match the captured equation/);
+  assert.deepEqual(await op('native-enrich-request',{ticket,catalogueCount:0}),{state:'pending'});
+  await op('native-enrich',{ticket,session,initialSnapshot:100,failed:true});
+  assert.deepEqual(await op('native-enrich-request',{ticket,catalogueCount:0}),{state:'failed'});
+  await assert.rejects(op('native-catalogue-part',body),/no longer matches/);
+  assert.equal((await op('native-read',{ticket})).native,native);
+ }finally{await close(ticket);}
+});
+test('A large Word page still returns early searchable formulas and preserves them during the full build',async()=>{
+ const {ticket}=await open();
+ try{
+  const {session}=await op('native-read',{ticket});
+  const numbered=({ole,index})=>({ole,layout:{mode:'numbered-right',equation:index+1,numberFormat:'(#E1)'}});
+  const first=await flatOpc(await createDocx(doc.objects.slice(0,8).map(numbered),{numberingFamily:'mathtype'}));
+  // Word's range export can include megabytes of auxiliary data even when it
+  // contains only a handful of useful equations for the sidebar.
+  const large=first.replace('</pkg:package>',`<pkg:part pkg:name="/word/auxiliary.xml" pkg:contentType="application/xml"><pkg:xmlData><aux>${'a'.repeat(1_600_000)}</aux></pkg:xmlData></pkg:part></pkg:package>`);
+  const part={ticket,session,initialSnapshot:100,snapshot:101,ordinal:0,ooxml:large};
+  await op('native-enrich-request',{ticket,catalogueCount:0});
+  assert.equal((await op('native-poll',{ticket})).catalogueEncoding,'deflate-base64');
+  await assert.rejects(op('native-catalogue-part',part),/Invalid Word catalogue part/);
+  const compressed={...part,encoding:'deflate-base64',ooxml:deflateRawSync(large).toString('base64')};
+  assert.deepEqual(await op('native-catalogue-part',compressed),{ok:true,more:true});
+  const finalXml=full.replace('</pkg:package>','<!-- large catalogue regression --></pkg:package>');
+  const pending=op('native-enrich',{ticket,session,initialSnapshot:100,
+   document:{...context(false),encoding:'parts-deflate-base64',ooxml:deflateRawSync(JSON.stringify([finalXml])).toString('base64')}});
+  try{
+   const {state,catalogue}=await op('native-enrich-request',{ticket,catalogueCount:0});
+   assert.equal(state,'pending');
+   assert.equal(catalogue.start,0);
+   assert.equal(catalogue.rows.length,8);
+   assert.equal(catalogue.rows[6].numberText,'(7)');
+   assert.equal(catalogue.rows[6].nativeSha256,doc.objects[6].nativeSha256);
+  }finally{await pending;}
+  assert.equal((await op('native-enrich-request',{ticket,catalogueCount:0})).state,'available');
+ }finally{await close(ticket);}
+});
+test('An oversized expanded page keeps the already published prefix without allowing a positional gap',async()=>{
+ const {ticket}=await open();
+ try{
+  const {session}=await op('native-read',{ticket});
+  const first=await flatOpc(await createDocx([{ole:doc.objects[0].ole}]));
+  const part={ticket,session,initialSnapshot:100,snapshot:101,ordinal:0,encoding:'deflate-base64',ooxml:deflateRawSync(first).toString('base64')};
+  await op('native-enrich-request',{ticket,catalogueCount:0});
+  await op('native-catalogue-part',part);
+  const inflated=Buffer.alloc(MAX_COMPRESSED_CATALOGUE_PAGE_BYTES+1,65);
+  await assert.rejects(op('native-catalogue-part',{...part,ordinal:1,ooxml:deflateRawSync(inflated).toString('base64')}),/oversized compressed/);
+  const {catalogue}=await op('native-enrich-request',{ticket,catalogueCount:0});
+  assert.equal(catalogue.rows.length,1);
+  await assert.rejects(op('native-catalogue-part',{...part,ordinal:2}),/out of order/);
  }finally{await close(ticket);}
 });
 test('Wrong document/index/count/native and stale/terminal loads never grant full-document authority',async()=>{

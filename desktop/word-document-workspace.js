@@ -330,7 +330,9 @@ window.createWordDocumentWorkspace = api => {
   let ready;const request={generation,requestId:null,target,discardApproved,expectedIdentity,clearOnEmpty,documentIdentity,insertion,retrySavedTarget,catalogTarget,catalogue:catalogTarget?catalogueDuringDetach:null,autoRefresh,fallbackDocument,recoveryAttempt,lastMessage,ready:new Promise(resolve=>{ready=resolve;})};pending=request;changed();
   if(!(autoRefresh&&recoveryAttempt>0))api.message(insertion?'正在准备 Word 插入位置…':catalogTarget?'正在读取选中的公式…':'正在读取 Word 文档…');
   try{
-   const destination=catalogTarget?{catalogTarget}:documentIdentity?{documentIdentity}:target?{target}:{};
+   const destination=catalogTarget?{catalogTarget:{
+    identity:catalogTarget.identity,snapshot:catalogTarget.snapshot,index:catalogTarget.index,count:catalogTarget.count,proof:catalogTarget.proof,
+   }}:documentIdentity?{documentIdentity}:target?{target}:{};
    const result=await api.native('wordDocumentOpen',{...destination,...insertion?{insertionMode:insertion.mode}:{}});
    if(pending!==request||request.generation!==generation){if(result.requestId)await api.native('wordDocumentCancel',{requestId:result.requestId}).catch(()=>{});return false;}
    if(!/^[a-f0-9]{64}$/.test(result.requestId||''))throw Error('Word 文档请求无效');
@@ -349,6 +351,7 @@ window.createWordDocumentWorkspace = api => {
  function visibleSource(source){
   const transitioningCatalogue=pending?.catalogue||catalogueDuringDetach;
   if(wordDocumentUnavailable&&(identityOf(source)===unavailableIdentity||identityOf(cached)===unavailableIdentity||identityOf(transitioningCatalogue)===unavailableIdentity))return null;
+  if(source?.savedCatalogue)return source;
   if(source?.catalogProof&&(identityOf(source)!==identityOf(cached)||source.documentTotal!==cached?.objects.length))return source;
   if(!source&&transitioningCatalogue)return transitioningCatalogue;
   const waitingOnCachedDocument=!source&&pending?.expectedIdentity&&pending.expectedIdentity===identityOf(cached);
@@ -652,7 +655,8 @@ window.createWordDocumentWorkspace = api => {
     if(state.busy||state.outcomeUnknown||pending||selecting||!Number.isInteger(index)||index<0||index>=document.documentTotal||index===document.documentPosition)return false;
     if(state.draftChanged){api.message('当前公式有修改，请先保存回 Word，再打开其他公式。',true);return false;}
     clearAutoRecovery();
-    const target={identity:document.documentIdentity,snapshot:document.documentSnapshot,index,count:document.documentTotal,proof:document.catalogProof};
+    const target={identity:document.documentIdentity,snapshot:document.documentSnapshot,index,count:document.documentTotal,proof:document.catalogProof,
+     nativeSha256:(document.catalogueRows?.[index]??document.retainedCatalogueRows?.[index])?.nativeSha256??null};
     selecting=true;catalogueDuringDetach=document;changed();
     try{
      if(!await api.detach())return false;
@@ -736,7 +740,16 @@ window.createWordDocumentWorkspace = api => {
    if(request.insertion&&(!document.insertion||document.insertionLayout?.mode!==request.insertion.mode)){await cancelPending();throw Error('Word 返回的插入会话不匹配。草稿仍保留。');}
    if(!request.insertion&&request.autoRefresh&&document.insertion){await cancelPending();throw Error('Word 返回的会话类型不匹配。草稿仍保留。');}
    const target=request.target,object=document.objects?.[request.insertion?target?.index:document.activeIndex];
-   if(request.catalogTarget&&(document.insertion||(document.documentPosition??document.activeIndex)!==request.catalogTarget.index||!/^[0-9a-f]{64}$/.test(object?.nativeSha256||''))){await cancelPending();throw Error('Word 返回的公式与所选目录行不一致。请刷新文档后再选。');}
+   if(request.catalogTarget&&(document.insertion||(document.documentPosition??document.activeIndex)!==request.catalogTarget.index||!/^[0-9a-f]{64}$/.test(object?.nativeSha256||'')||request.catalogTarget.nativeSha256&&object.nativeSha256!==request.catalogTarget.nativeSha256)){await cancelPending();throw Error('Word 返回的公式与所选目录行不一致。请刷新文档后再选。');}
+   const previous=request.catalogue;
+   if(document.catalogProof&&previous?.catalogProof&&request.catalogTarget?.nativeSha256&&
+    previous.documentIdentity===document.documentIdentity&&previous.documentTotal===document.documentTotal&&
+    Number.isSafeInteger(document.documentNumberingRevision)&&previous.documentNumberingRevision===document.documentNumberingRevision){
+    // Retain the rows already read while Word starts a new checked capture.
+    // The new session still requests fresh pages from ordinal zero.
+    const current=previous.catalogueRows??[],retained=previous.retainedCatalogueRows??[];
+    document.retainedCatalogueRows=Array.from({length:Math.max(current.length,retained.length)},(_,index)=>current[index]??retained[index]);
+   }
    const same=target&&document.documentIdentity===target.identity&&(request.insertion?target.index:(document.documentPosition??document.activeIndex))===target.index;
    if(target&&(!same||object?.nativeSha256!==target.nativeSha256)){
     await cancelPending();

@@ -13,6 +13,7 @@ import {previewNumberFormat} from './layout.mjs';
 import {checkedWordSnapshotZip} from './word-snapshot.mjs';
 import {checkedWordNumbering,checkExistingWordNumberingTarget} from './word-numbering.mjs';
 import {wordCatalogProof} from './word-document-requests.mjs';
+import {MAX_CATALOGUE_PAGE_BASE64} from './word-catalogue-limits.mjs';
 import {performance} from 'node:perf_hooks';
 
 const MAX_BLOB=16*1024*1024,MAX_ENCODED=4*Math.ceil(MAX_BLOB/3);
@@ -22,31 +23,41 @@ const sessions=new Map();
 const receipts=new Map();
 const documentSnapshots=new Map();let snapshotBytes=0;
 const inflateContext=promisify(inflateRaw),MAX_COMPRESSED_CONTEXT=34_000_000;
+const MAX_LEGACY_CATALOGUE_BYTES=1_500_000,MAX_CATALOGUE_PARTS=256,MAX_CATALOGUE_ROWS=256;
 // Opt-in, content-free timings. Never emit document names, paths, tickets,
 // identities or formula data, and never let diagnostics affect a session.
 function timing(event){
  if(process.env.EQUATIONLAB_HOST_TRACE!=='1')return;
  try{process.stderr.write(JSON.stringify({event:'word-native-timing',...event})+'\n');}catch{}
 }
-let activeSnapshotWorkers=0;
-function segmentedSnapshot(encoded,signal){
+let activeSnapshotWorkers=0,activeCatalogueWorkers=0;
+function snapshotWorker(data,signal){
  if(signal?.aborted)throw Error('Word document loading request is no longer current');
- if(activeSnapshotWorkers>=2)throw Error('Word document loading is busy');
- const worker=new Worker(new URL('./word-snapshot-worker.mjs',import.meta.url),{workerData:encoded,execArgv:[]});
- activeSnapshotWorkers++;
+ const catalogue=typeof data==='object';
+ if(catalogue?activeCatalogueWorkers>=1:activeSnapshotWorkers>=2)throw Error('Word document loading is busy');
+ const worker=new Worker(new URL('./word-snapshot-worker.mjs',import.meta.url),{workerData:data,execArgv:[]});
+ if(catalogue)activeCatalogueWorkers++;else activeSnapshotWorkers++;
  // Keep a slot until the worker has stopped, even after cancellation.
- worker.once('exit',()=>{activeSnapshotWorkers--;});
+ worker.once('exit',()=>{if(catalogue)activeCatalogueWorkers--;else activeSnapshotWorkers--;});
  return new Promise((resolve,reject)=>{
+  let catalogueResult;
   const abort=()=>{void worker.terminate();reject(Error('Word document loading request is no longer current'));};
   const cleanup=()=>signal?.removeEventListener('abort',abort);
   signal?.addEventListener('abort',abort,{once:true});
   worker.once('message',result=>{
+   // The helper can send the next page as soon as it receives our response.
+   // Keep the page in flight until the parser has released its worker slot.
+   if(catalogue&&!result.error){catalogueResult=result;return;}
    cleanup();
    if(result.error)reject(Error(result.error));
-   else resolve({...result,bytes:Buffer.from(result.bytes.buffer,result.bytes.byteOffset,result.bytes.byteLength)});
+   else resolve(result.bytes?{...result,bytes:Buffer.from(result.bytes.buffer,result.bytes.byteOffset,result.bytes.byteLength)}:result);
   });
   worker.once('error',error=>{cleanup();reject(error);});
-  worker.once('exit',()=>{cleanup();reject(Error('Word document loading worker exited'));});
+  worker.once('exit',code=>{
+   cleanup();
+   if(code===0&&catalogueResult)resolve(catalogueResult);
+   else reject(Error('Word document loading worker exited'));
+  });
  });
 }
 async function snapshot(value,signal){
@@ -55,7 +66,7 @@ async function snapshot(value,signal){
  let cached=documentSnapshots.get(key);
  const cacheHit=!!cached;
  if(!cached&&value.encoding==='parts-deflate-base64'){
-  const {conversionMs:converted,inspectMs:inspected,...result}=await segmentedSnapshot(value.ooxml,signal);
+  const {conversionMs:converted,inspectMs:inspected,...result}=await snapshotWorker(value.ooxml,signal);
   conversionMs=converted;inspectMs=inspected;cached=result;
  }else if(!cached){
   let xml=value.ooxml;
@@ -96,7 +107,7 @@ async function snapshot(value,signal){
  return {...cached,bytes:Buffer.from(cached.bytes)};
 }
 let sequence=Promise.resolve(),queued=0;
-const operations=new Set(['native-open','native-insert-open','native-poll','native-read','native-complete','native-cancel','native-ack','native-status','native-navigate','native-enrich','native-enrich-request']);
+const operations=new Set(['native-open','native-insert-open','native-poll','native-read','native-complete','native-cancel','native-ack','native-status','native-navigate','native-enrich','native-enrich-request','native-catalogue-part']);
 const ACK_CONFIRMATION_TIMEOUT=60_000;
 
 // Serialization also covers async staging/deletion. A cancel cannot overtake a
@@ -118,7 +129,7 @@ function request(operation,body){
  for(const key of ['document','target','layout','numbering'])if(body[key]&&typeof body[key]==='object'&&!Array.isArray(body[key]))body[key]={...body[key]};
  if(body.document?.insertionAfter&&typeof body.document.insertionAfter==='object')body.document.insertionAfter={...body.document.insertionAfter};
  if(body.numbering?.context&&typeof body.numbering.context==='object')body.numbering.context={...body.numbering.context};
- const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','numberingExistingSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-ack'?['ticket','session','ok','uncertain','numberingLocal']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
+ const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','numberingExistingSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-catalogue-part'?['ticket','session','initialSnapshot','snapshot','ordinal','ooxml','encoding']:operation==='native-enrich-request'?['ticket','session','catalogueCount']:operation==='native-ack'?['ticket','session','ok','uncertain','numberingLocal']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
  if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
  if(operation==='native-open'||operation==='native-insert-open')uint64(body.session);
  else{
@@ -160,6 +171,11 @@ async function removeStage(entry){
 function stopEnrichment(entry){
  entry.enrichment?.abort();
  entry.enrichment=null;
+ stopCataloguePreview(entry);
+}
+function stopCataloguePreview(entry){
+ entry.cataloguePreview?.controller?.abort();
+ entry.cataloguePreview=null;
 }
 function wipe(entry){
  stopEnrichment(entry);
@@ -252,7 +268,9 @@ async function documentContext(value,native,insertion=false,signal){
  if(partial?(cached.count!==fragmentCount||cached.objects.length!==fragmentCount):value.count!==undefined&&value.count!==cached.count)throw Error('Saved Word snapshot equation count does not match the live document');
  if(insertion){if(value.index!==-1)throw Error('Invalid insertion document index');}
  else if(!selected||selected.mainDocument!==true||selected.error||selected.nativeSha256!==nativeDigest)throw Error('Word document context does not match the activated equation');
- return {bytes:cached.bytes,objects:cached.objects,index:partial&&!insertion?0:value.index,position:value.index,partial,scope:value.scope??null,loadState:partial?'pending':'available',name:value.name,count:partial?value.count:cached.count,identity:value.identity??null,snapshot:value.snapshot??null,insertionAfter:value.insertionAfter?{...value.insertionAfter}:null,path:null,numberingRevision:value.numberingRevision,mainStoryOnly:value.encoding==='parts-deflate-base64'};
+ const savedSha256=!insertion&&!partial&&value.identity&&value.snapshot&&cached.count>20&&value.encoding==='docx-base64'
+  ?createHash('sha256').update(cached.bytes).digest('hex'):null;
+ return {bytes:cached.bytes,objects:cached.objects,index:partial&&!insertion?0:value.index,position:value.index,partial,scope:value.scope??null,loadState:partial?'pending':'available',name:value.name,count:partial?value.count:cached.count,identity:value.identity??null,snapshot:value.snapshot??null,insertionAfter:value.insertionAfter?{...value.insertionAfter}:null,path:null,numberingRevision:value.numberingRevision,mainStoryOnly:value.encoding==='parts-deflate-base64',savedSha256};
  }catch(error){cached.bytes.fill(0);throw error;}
 }
 
@@ -286,6 +304,48 @@ function saveTarget(value,document,numbering){
 }
 function saveNumbering(value,target,entry){
  return checkedWordNumbering(value,{supported:!entry.insertion&&entry.numberingSupport,contextSupported:entry.numberingContextSupport,existingSupported:entry.numberingExistingSupport&&entry.acknowledgement,target});
+}
+
+async function previewCataloguePart(body){
+ const compressed=body.encoding==='deflate-base64';
+ if(body.session===undefined||!Number.isSafeInteger(body.snapshot)||body.snapshot<=0||body.snapshot>0x7fffffff||
+    !Number.isSafeInteger(body.ordinal)||body.ordinal<0||body.ordinal>=MAX_CATALOGUE_PARTS||
+    !compressed&&body.encoding!==undefined||typeof body.ooxml!=='string'||!body.ooxml.length||
+    body.ooxml.length>(compressed?MAX_CATALOGUE_PAGE_BASE64:MAX_LEGACY_CATALOGUE_BYTES)||
+    !compressed&&Buffer.byteLength(body.ooxml)>MAX_LEGACY_CATALOGUE_BYTES)throw Error('Invalid Word catalogue part');
+ const job=await serial(async()=>{
+  await expire();
+  const entry=current(body),old=entry.document;
+  if(entry.state!=='editing'||!entry.catalogueRequested||old?.scope!=='selection'||old.loadState!=='pending'||
+     old.snapshot!==body.initialSnapshot||old.snapshot===body.snapshot)throw Error('Word catalogue preview no longer matches its session');
+  const preview=entry.cataloguePreview??={snapshot:body.snapshot,ordinal:0,rows:[],controller:null};
+  if(preview.snapshot!==body.snapshot||preview.ordinal!==body.ordinal||preview.controller||preview.failed)throw Error('Word catalogue preview part is out of order');
+  if(preview.rows.length>=MAX_CATALOGUE_ROWS)return null;
+  const controller=new AbortController();
+  preview.controller=controller;
+  return {entry,old,preview,controller};
+ });
+ if(!job)return {ok:true,more:false};
+ const {entry,old,preview,controller}=job;
+ try{
+  const {rows}=await snapshotWorker({cataloguePart:body.ooxml,compressed},controller.signal);
+  return await serial(async()=>{
+   if(entry.document!==old||entry.cataloguePreview!==preview||entry.state!=='editing')throw Error('Word catalogue preview no longer matches its session');
+   const start=preview.rows.length;
+   const owner=rows[old.position-start];
+   if(start+rows.length>old.count||owner&&owner.nativeSha256!==old.objects[0]?.nativeSha256)throw Error('Word catalogue preview does not match the captured equation');
+   preview.rows.push(...rows.slice(0,MAX_CATALOGUE_ROWS-start));
+   preview.ordinal++;
+   timing({phase:'catalogue-preview',objects:preview.rows.length});
+   return {ok:true,more:preview.rows.length<Math.min(old.count,MAX_CATALOGUE_ROWS)};
+  });
+ }catch(error){
+  if(controller.signal.aborted)return {ok:true,more:false,state:'superseded'};
+  // A missing page breaks positional alignment for subsequent pages. Keep
+  // already decoded rows visible and let the complete snapshot replace them.
+  preview.failed=true;
+  throw error;
+ }finally{preview.controller=null;}
 }
 
 async function enrichDocument(body){
@@ -323,6 +383,7 @@ async function enrichDocument(body){
    if(current(body)!==entry||entry.state!=='editing'||entry.document!==old||entry.enrichment!==controller)throw Error('Word document loading request is no longer current');
    await stage(entry);full.path=join(entry.directory,'document-full.docx');
    await writeFile(full.path,full.bytes,{mode:0o600,flag:'wx'});
+   stopCataloguePreview(entry);
    old.bytes.fill(0);entry.document=full;entry.documentRequested=false;
    return {ok:true};
   });
@@ -345,6 +406,7 @@ async function enrichDocument(body){
 export async function nativeSessionOperation(path,body){
  const operation=typeof path==='string'?path.replace(/^\/api\//,''):path;body=request(operation,body);
  if(operation==='native-enrich')return enrichDocument(body);
+ if(operation==='native-catalogue-part')return previewCataloguePart(body);
  const receivedAt=performance.now();
  return serial(async()=>{
   if(operation==='native-open'||operation==='native-insert-open')timing({phase:'open-queue',operation,queueMs:performance.now()-receivedAt});
@@ -403,7 +465,7 @@ export async function nativeSessionOperation(path,body){
   const entry=current(body);
   if(operation==='native-cancel'&&entry.insertion&&entry.state==='complete')throw Error('Cannot cancel a completed Word insertion before host acknowledgement');
   if(operation==='native-poll'){
-   if(entry.state==='editing')return {state:'editing',...entry.documentRequested?{loadDocument:true}:{}};
+   if(entry.state==='editing')return {state:'editing',...entry.documentRequested?{loadDocument:true,...entry.catalogueRequested?{cataloguePreview:true,catalogueEncoding:'deflate-base64'}:{}}:{}};
    const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height,...entry.insertion?{docx:entry.result.docx.toString('base64'),insertionMode:entry.result.insertionMode,insertionNumberFormat:entry.result.insertionNumberFormat}:{},...entry.result.target?{target:entry.result.target}:{},...entry.result.numbering?{numbering:entry.result.numbering}:{}}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
    await discard(entry);
    const receipt=receipts.get(body.ticket);
@@ -412,8 +474,17 @@ export async function nativeSessionOperation(path,body){
   }
   editing(entry);
   if(operation==='native-enrich-request'){
+   if(body.catalogueCount!==undefined&&(!Number.isSafeInteger(body.catalogueCount)||body.catalogueCount<0||body.catalogueCount>MAX_CATALOGUE_ROWS))throw Error('Invalid Word catalogue row count');
    if(entry.document?.partial&&entry.document.loadState==='pending')entry.documentRequested=true;
-   return {state:entry.document?.loadState??'missing'};
+   let catalogue;
+   if(body.catalogueCount!==undefined){
+    if(entry.documentRequested&&entry.document.scope==='selection'){
+     entry.catalogueRequested=true;
+     const {rows}=entry.cataloguePreview??{};
+     if(rows&&rows.length>body.catalogueCount)catalogue={start:body.catalogueCount,rows:rows.slice(body.catalogueCount)};
+    }
+   }
+   return {state:entry.document?.loadState??'missing',...catalogue?{catalogue}:{}};
   }
   if(operation==='native-read'){
    const path=await stage(entry);
@@ -421,7 +492,7 @@ export async function nativeSessionOperation(path,body){
    const snapshot=entry.document;
    const catalogProof=snapshot?.scope==='selection'&&snapshot.count>1&&Number.isSafeInteger(snapshot.snapshot)&&snapshot.snapshot<=0x7fffffff
     ?wordCatalogProof(snapshot.identity,snapshot.snapshot,snapshot.count,entry.expires):null;
-   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(snapshot),...catalogProof?{catalogProof}:{},...snapshot?{document:{path:snapshot.path,index:snapshot.index,name:snapshot.name,identity:snapshot.identity,snapshot:snapshot.snapshot,...snapshot.numberingRevision!==undefined?{numberingRevision:snapshot.numberingRevision}:{},...snapshot.mainStoryOnly?{mainStoryOnly:true}:{},...snapshot.partial?{scope:snapshot.scope,position:snapshot.position,count:snapshot.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.numberingExistingSupport?{numberingExistingSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
+   return {native:entry.native.toString('base64'),session:entry.session,ticket:entry.ticket,path,documentContext:contextStatus(snapshot),...catalogProof?{catalogProof,cataloguePreviewAvailable:true}:{},...snapshot?{document:{path:snapshot.path,index:snapshot.index,name:snapshot.name,identity:snapshot.identity,snapshot:snapshot.snapshot,...snapshot.savedSha256?{savedSha256:snapshot.savedSha256}:{},...snapshot.numberingRevision!==undefined?{numberingRevision:snapshot.numberingRevision}:{},...snapshot.mainStoryOnly?{mainStoryOnly:true}:{},...snapshot.partial?{scope:snapshot.scope,position:snapshot.position,count:snapshot.count}:{}}}:{},...entry.insertion?{insertion:true,layout:{...entry.layout}}:{},...entry.numberingSupport?{numberingSupport:true}:{},...entry.numberingContextSupport?{numberingContextSupport:true}:{},...entry.numberingExistingSupport?{numberingExistingSupport:true}:{},...entry.acknowledgement?{acknowledgement:true}:{}};
   }
   if(operation==='native-navigate'){
    if(entry.insertion||!entry.document||entry.document.partial||!Number.isInteger(body.index)||body.index<0||body.index>=entry.document.count||body.index===entry.document.index)throw Error('Invalid Word navigation target');

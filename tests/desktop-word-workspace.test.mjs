@@ -17,8 +17,9 @@ function setup(){
 }
 
 test('A loading Word directory can open a far-away row and rejects wrong or unverifiable replies',async()=>{
- for(const variant of ['correct','position','identity','digest','insertion']){
-  const e=setup(),partial={...document(),insertion:false,activeIndex:0,documentPosition:1,documentLoading:true,documentTotal:112,catalogProof:'receipt',objects:[{index:0,nativeSha256:digest}]};
+ for(const variant of ['correct','new-numbering-revision','position','identity','digest','changed-preview','insertion']){
+  const e=setup(),partial={...document(),insertion:false,activeIndex:0,documentPosition:1,documentLoading:true,documentTotal:112,documentNumberingRevision:4,catalogProof:'receipt',objects:[{index:0,nativeSha256:digest}],catalogueRows:[]};
+  partial.catalogueRows[79]={nativeSha256:digest,numberText:'(2-8)'};
   e.state.source=partial;e.state.wordTicket=ticket;e.state.draftChanged=true;
   assert.equal(await e.workspace.select(79),false);
   assert.equal(e.calls.length,0,'dirty drafts block catalog navigation before detaching');
@@ -32,8 +33,12 @@ test('A loading Word directory can open a far-away row and rejects wrong or unve
   assert.equal(await e.workspace.select(80),false);
   const incoming={...partial,documentSnapshot:18,documentPosition:variant==='position'?78:79,
    documentIdentity:variant==='identity'?'word:other':partial.documentIdentity,insertion:variant==='insertion',
-   objects:[{index:0,nativeSha256:variant==='digest'?undefined:digest}]};
-  if(variant==='correct')assert.equal(await e.workspace.prepareIncoming(incoming,requestId),true);
+   documentNumberingRevision:variant==='new-numbering-revision'?5:4,catalogueRows:undefined,
+   objects:[{index:0,nativeSha256:variant==='digest'?undefined:variant==='changed-preview'?'d'.repeat(64):digest}]};
+  if(['correct','new-numbering-revision'].includes(variant)){
+   assert.equal(await e.workspace.prepareIncoming(incoming,requestId),true);
+   assert.equal(incoming.retainedCatalogueRows?.[79]?.numberText,variant==='correct'?'(2-8)':undefined);
+  }
   else await assert.rejects(e.workspace.prepareIncoming(incoming,requestId),/不一致|已变化/);
   assert.equal(e.workspace.pending,false);
  }

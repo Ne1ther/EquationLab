@@ -48,10 +48,10 @@ function encodeDimensions(values,source){
 function encodingName(index,encodings){return index===1?'MTCode':index===2?'Unknown':index===3?'Symbol':index===4?'MTExtra':encodings[index-5]?.name;}
 function knownEncoding(index,encodings){return ['MTCode','Symbol','MTExtra','WinAllBasicCodePages','WinANSI'].includes(encodingName(index,encodings));}
 function collect(nodes,predicate){const out=[];function walk(ns){for(const n of ns){if(predicate(n))out.push(n);if(n.children)walk(n.children);}}walk(nodes);return out;}
-function state(ole){
+function state(ole,inspected){
  if(!Buffer.isBuffer(ole)&&!(ole instanceof Uint8Array))throw Error('Typography requires an OLE byte buffer');
  if(ole.length>MAX_OLE_BYTES)throw Error('OLE typography input exceeds 16 MiB');
- const source=inspectOle(ole),prefs=source.parsed.records.filter(n=>n.type===18);
+ const source=inspected??inspectOle(ole),prefs=source.parsed.records.filter(n=>n.type===18);
  if(prefs.length!==1)throw Error('Typography requires exactly one top-level EQN_PREFS record');
  const pref=prefs[0];if(pref.options!==0)throw Error('Unknown EQN_PREFS options; source unchanged');
  if(collect(source.parsed.records,n=>n.type===18).length!==1)throw Error('Nested equation preference overrides are not supported');
@@ -69,8 +69,8 @@ function state(ole){
 
 /** Native preferences only. Positive typefaces use these style definitions;
  * negative typefaces, local SIZE/NUDGE and formula records remain independent. */
-export function readTypography(ole){
- const s=state(ole);
+export function readTypography(ole,inspected){
+ const s=state(ole,inspected);
  return {
   styles:STYLE_LABELS.map((label,i)=>{const style=s.pref.styles[i]||{font:0,style:0},font=s.fonts[style.font-1];return {id:i+1,label,font:font?.name||'',style:style.style,fontIndex:style.font,encoding:font?.encoding??null};}),
   sizes:s.sizes.values.slice(0,5).map(valueOf),

@@ -10,6 +10,7 @@ enum WorkbenchArtwork {
     static let antigravity = load("Antigravity")
     static let claudeCode = load("ClaudeCode")
     static let deepSeekHarness = load("DeepSeekHarness")
+    static let deepSeekHarnessDark = load("DeepSeekHarnessDark")
     private static func load(_ name: String) -> NSImage? {
         guard let url = Bundle.main.resourceURL?.appendingPathComponent("brand/\(name).png") else { return nil }
         return NSImage(contentsOf: url)

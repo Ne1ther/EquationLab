@@ -21,6 +21,7 @@ extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
 void EquationLabFinishWordInsertionUncertain();
 void EquationLabDocumentContextDidCapture();
+void EquationLabPublishDocumentCataloguePart(NSDictionary* part);
 void EquationLabDocumentContextDidClear();
 void EquationLabDocumentContextDidClearSelection();
 void EquationLabDocumentContextDidCloseIdentity(std::int32_t identity);
@@ -259,10 +260,13 @@ NSDictionary* decodeDocumentPart(NSString* text,BOOL* selectionBound){
     if(!documentParts||![documentPartsBinding isEqual:binding]||static_cast<NSUInteger>(values[5])!=documentParts.count){clearDocumentParts();return nil;}
     NSString* xml=[text substringFromIndex:offset];
     xml=withoutSnapshotPictures(xml);
-    documentPartsBytes+=[xml lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    const NSUInteger bytes=[xml lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
+    documentPartsBytes+=bytes;
     if(!xml.length||documentPartsBytes>128*1024*1024){clearDocumentParts();return nil;}
     [documentParts addObject:xml];
-    if(!values[6])return @{@"partPending":@YES};
+    if(!values[6])return insertionPart?@{@"partPending":@YES}:@{
+        @"partPending":@YES,@"captureToken":@(values[0]),@"snapshot":@(values[2]),@"ordinal":@(values[5]),@"ooxml":xml,@"bytes":@(bytes)
+    };
     NSData* json=[NSJSONSerialization dataWithJSONObject:documentParts options:0 error:nil];
     NSData* packed=[json compressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nil];
     clearDocumentParts();if(!packed||packed.length>34000000)return nil;
@@ -443,6 +447,7 @@ std::int32_t captureDocument(){
     if([context[@"partPending"] boolValue]){
         const CFAbsoluteTime completed=CFAbsoluteTimeGetCurrent();
         os_log_info(OS_LOG_DEFAULT,"WordHostChunk xml_ms=%.3f write_ms=%.3f decode_ms=%.3f total_ms=%.3f",(captureTiming.xmlReady-captureTiming.started)*1000.0,(captureTiming.fileReady-captureTiming.xmlReady)*1000.0,(completed-decodeStarted)*1000.0,(completed-captureTiming.started)*1000.0);
+        if(!insertionPart)EquationLabPublishDocumentCataloguePart(context);
         captureTiming={};return 1;
     }
     const CFAbsoluteTime decoded=CFAbsoluteTimeGetCurrent();

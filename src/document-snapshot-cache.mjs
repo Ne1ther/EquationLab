@@ -137,5 +137,5 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   rememberPreview(key,result);
   return result;
  }
- return {get,getStoredPreviews,stats:()=>({entries:entries.size,files:files.size,retainedBytes,hits,misses,pendingPaths:pendingPaths.size,pendingContent:pendingContent.size,previewEntries:previews.size,previewRetainedBytes,previewHits,previewMisses})};
+ return {get,getStoredPreviews,hasContent:key=>entries.has(key),stats:()=>({entries:entries.size,files:files.size,retainedBytes,hits,misses,pendingPaths:pendingPaths.size,pendingContent:pendingContent.size,previewEntries:previews.size,previewRetainedBytes,previewHits,previewMisses})};
 }

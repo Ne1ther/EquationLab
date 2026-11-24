@@ -348,8 +348,13 @@ struct DocumentToolsSheet: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             if !hasAnyPlannedChange {
+                let skipped = intValue("skipped")
                 Label(
-                    label("预检未发现需要改动的项；若继续另存，副本内容将与原文档一致。", "No changes are needed in this preview. Saving will produce an unchanged copy."),
+                    skipped > 0
+                        ? label("预检未能应用任何修改。\(skipped) 项已跳过，请查看下方原因。",
+                                "No changes can be applied. See the reasons for the \(skipped) skipped items below.")
+                        : label("所选内容已符合设置。另存时会生成内容相同的副本。",
+                                "The selection already matches the settings. Saving will produce an unchanged copy."),
                     systemImage: "info.circle"
                 )
                 .font(.caption).foregroundStyle(.orange)

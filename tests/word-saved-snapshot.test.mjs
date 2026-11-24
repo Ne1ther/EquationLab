@@ -1,5 +1,6 @@
 import test from 'node:test';import assert from 'node:assert/strict';import {readFile} from 'node:fs/promises';import JSZip from 'jszip';
 import {checkedWordSnapshotZip} from '../src/word-snapshot.mjs';import {inspectDocx} from '../src/document.mjs';import {inspectOle} from '../src/native.mjs';import {nativeSessionOperation} from '../src/word-native-session.mjs';
+import {desktopRequest} from '../src/desktop-rpc.mjs';
 const source=await readFile(new URL('../docs/examples/equation-lab-30-formulas.docx',import.meta.url)),original=await inspectDocx(source),zip=await JSZip.loadAsync(source),compact=new JSZip();
 for(const [name,entry]of Object.entries(zip.files))if(/\.(xml|rels|bin)$/i.test(name))compact.file(name,await entry.async('nodebuffer'),{createFolders:false});
 const bytes=await compact.generateAsync({type:'nodebuffer',compression:'DEFLATE'}),encoded=bytes.toString('base64');
@@ -7,6 +8,34 @@ let session=98001000n;const body=index=>({session:String(session++),native:inspe
 test('Compact saved Word snapshots preserve all native objects and exact owner/index binding',async()=>{
  const data=await checkedWordSnapshotZip(encoded),doc=await inspectDocx(data);assert.deepEqual(doc.objects.map(o=>o.nativeSha256),original.objects.map(o=>o.nativeSha256));assert.ok(data.length<source.length);
  const opened=await nativeSessionOperation('native-open',body(25));try{const read=await nativeSessionOperation('native-read',{ticket:opened.ticket});assert.equal(read.document.index,25);const staged=await inspectDocx(await readFile(read.document.path));assert.equal(staged.objects[25].nativeSha256,original.objects[25].nativeSha256);}finally{await nativeSessionOperation('native-cancel',{ticket:opened.ticket});await nativeSessionOperation('native-poll',{ticket:opened.ticket});}
+});
+test('A saved Word directory supplies searchable numbers and its active equation before full editor details',async()=>{
+ const fetch=globalThis.fetch;
+ globalThis.fetch=async(url,options)=>({ok:true,json:()=>nativeSessionOperation(new URL(url).pathname,JSON.parse(options.body))});
+ let ticket;
+ try{
+  ({ticket}=await nativeSessionOperation('native-open',body(25)));
+  const initial=await desktopRequest({action:'wordSessionRead',payload:{ticket}});
+  assert.equal(initial.savedCatalogue,true);
+  assert.equal(initial.documentLoading,true);
+  assert.equal(initial.activeIndex,25);
+  assert.ok(initial.objects[25].typography);
+  assert.equal(initial.objects[0].editorDetailsLoaded,false);
+  assert.deepEqual(initial.objects.map(row=>[row.nativeSha256,row.layout.numberText]),original.objects.map(row=>[row.nativeSha256,row.layout.numberText]));
+  const full=await desktopRequest({action:'wordSessionDocument',payload:{ticket}});
+  assert.equal(full.state,'available');
+  assert.equal(full.document.documentLoading,undefined);
+  assert.equal(full.document.documentSnapshot,initial.documentSnapshot);
+  await nativeSessionOperation('native-cancel',{ticket});
+  await nativeSessionOperation('native-poll',{ticket});
+  ({ticket}=await nativeSessionOperation('native-open',body(18)));
+  const warm=await desktopRequest({action:'wordSessionRead',payload:{ticket}});
+  assert.equal(warm.savedCatalogue,undefined);
+  assert.equal(warm.activeIndex,18);
+ }finally{
+  globalThis.fetch=fetch;
+  if(ticket){await nativeSessionOperation('native-cancel',{ticket}).catch(()=>{});await nativeSessionOperation('native-poll',{ticket}).catch(()=>{});}
+ }
 });
 test('A changed live count or wrong selected native value cannot use a saved document snapshot',async()=>{
  const count=body(0);count.document.count=29;await assert.rejects(nativeSessionOperation('native-open',count),/equation count/);

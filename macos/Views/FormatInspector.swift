@@ -1,10 +1,51 @@
 import SwiftUI
 import CoreText
 
+enum DocumentToolAvailability: Equatable {
+    case ready, noDocument, loading, loadFailed, disconnected, unconfirmedSave, staleNumbers, busy
+
+    init(state: WorkbenchState) {
+        if state.wordOutcomeUnknown { self = .unconfirmedSave }
+        else if state.wordDocumentUnavailable { self = .disconnected }
+        else if state.wordDocumentLoading || (state.documentPath.isEmpty && state.wordDocumentReadState == .loading) { self = .loading }
+        else if state.busy { self = .busy }
+        else if state.wordDocumentLoadFailed || (state.documentPath.isEmpty && state.wordDocumentReadState == .failed) { self = .loadFailed }
+        else if state.documentPath.isEmpty { self = .noDocument }
+        else if state.objects.contains(where: { $0.numberStatus == "stale" }) { self = .staleNumbers }
+        else { self = .ready }
+    }
+
+    var refreshAction: String? {
+        switch self {
+        case .loadFailed: "nativeRetryWordDocumentRead"
+        case .staleNumbers: "nativeRefreshWordWorkspace"
+        default: nil
+        }
+    }
+
+    func message(english: Bool) -> String? {
+        let text: (zh: String, en: String)
+        switch self {
+        case .ready: return nil
+        case .noDocument: text = ("在 Word 中打开文档或打开 DOCX 副本后可用。", "Open a Word document or a DOCX copy to use these tools.")
+        case .loading: text = ("正在载入完整文档…", "Loading the full document…")
+        case .loadFailed: text = ("完整文档载入失败，可重试。", "The document did not finish loading. Try again.")
+        case .disconnected: text = ("Word 文档连接已结束，请重新打开文档。", "The Word connection ended. Reopen the document.")
+        case .unconfirmedSave: text = ("请先确认上次 Word 保存结果。", "Confirm the previous Word save in Word first.")
+        case .staleNumbers: text = ("Word 中的编号已更新，请先刷新文档快照。", "Numbers changed in Word. Refresh the document snapshot first.")
+        case .busy: text = ("正在处理当前操作…", "Finishing the current operation…")
+        }
+        return english ? text.en : text.zh
+    }
+}
+
 struct FormatInspector: View {
     @ObservedObject var bridge: DesktopBridge
     @State private var showAllFonts = false
     @State private var showExtraSizes = false
+    private let documentToolsAnchor = "document-tools"
+    private var english: Bool { bridge.language.usesEnglish }
+    private func label(_ zh: String, _ en: String) -> String { english ? en : zh }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -12,26 +53,55 @@ struct FormatInspector: View {
                 ForEach(InspectorTab.allCases) { Text(bridge.t($0.rawValue)).tag($0) }
             }.pickerStyle(.segmented).labelsHidden().padding(.horizontal, 16).padding(.top, 12).padding(.bottom, 10)
             Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    switch bridge.inspectorTab {
-                    case .style: styleSections
-                    case .spacing: spacingSections
-                    case .document: documentSections
+            ScrollViewReader { scroll in
+                VStack(spacing: 0) {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 18) {
+                            switch bridge.inspectorTab {
+                            case .style: styleSections
+                            case .spacing: spacingSections
+                            case .document: documentSections
+                            }
+                        }.padding(18)
                     }
-                }.padding(18)
+                    .id(bridge.inspectorTab)
+
+                    HStack(spacing: 8) {
+                        Button {
+                            if bridge.inspectorTab == .document {
+                                scroll.scrollTo(documentToolsAnchor, anchor: .top)
+                            } else {
+                                bridge.inspectorTab = .document
+                            }
+                        } label: {
+                            Label(label("文档工具", "Document tools"), systemImage: "doc.text.magnifyingglass")
+                        }
+                        .buttonStyle(WorkbenchButtonStyle(surface: true))
+                        .fixedSize()
+                        .help(bridge.t("文档检查与批量处理"))
+
+                        presetMenu
+                    }
+                    .font(.caption)
+                    .padding(.horizontal, 16)
+                    .modifier(WorkbenchFooter())
+                }
             }
-            Menu {
-                Button(bridge.t("恢复 MathType 默认")) { bridge.action("click", ["id": "desktop-factory-fonts"]) }.disabled(!bridge.state.canFactoryReset)
-                Button(bridge.t("恢复此公式原始设置")) { bridge.action("click", ["id": "desktop-reset-fonts"]) }
-                Button(bridge.t("设为新公式默认")) { bridge.action("click", ["id": "desktop-default-fonts"]) }.disabled(!bridge.state.valid)
-            } label: { Label(bridge.t("原版默认与预设"), systemImage: "slider.horizontal.3").frame(maxWidth: .infinity) }
-                .menuStyle(.borderlessButton).controlSize(.small)
-                .disabled(bridge.state.busy)
-                .modifier(WorkbenchMenuSurface()).padding(.horizontal, 16)
-                .modifier(WorkbenchFooter())
         }
         .background(.regularMaterial)
+    }
+
+    private var presetMenu: some View {
+        Menu {
+            Button(bridge.t("恢复 MathType 默认")) { bridge.action("click", ["id": "desktop-factory-fonts"]) }.disabled(!bridge.state.canFactoryReset)
+            Button(bridge.t("恢复此公式原始设置")) { bridge.action("click", ["id": "desktop-reset-fonts"]) }
+            Button(bridge.t("设为新公式默认")) { bridge.action("click", ["id": "desktop-default-fonts"]) }.disabled(!bridge.state.valid)
+        } label: {
+            Label(bridge.t("原版默认与预设"), systemImage: "slider.horizontal.3").frame(maxWidth: .infinity)
+        }
+        .menuStyle(.borderlessButton).controlSize(.small)
+        .disabled(bridge.state.busy)
+        .modifier(WorkbenchMenuSurface())
     }
 
     private var styleSections: some View {
@@ -78,7 +148,10 @@ struct FormatInspector: View {
     }
 
     private var documentSections: some View {
-        Group {
+        let availability = DocumentToolAvailability(state: bridge.state)
+        return Group {
+            documentTools(availability).id(documentToolsAnchor)
+            Divider()
             InspectorSection("Word 编排") {
                 ForEach(bridge.state.layout.filter { $0.id != "layout-format" }) { field in
                     if field.disabled && bridge.wordSessionActive {
@@ -100,7 +173,7 @@ struct FormatInspector: View {
                     }
                 }
                 if let format = bridge.state.layout.first(where: { $0.id == "layout-format" }) {
-                    NumberingFormatEditor(bridge: bridge, field: format).id(bridge.state.selected)
+                    NumberingFormatEditor(bridge: bridge, field: format, documentTools: availability).id(bridge.state.selected)
                 }
                 if bridge.state.canArrange {
                     Toggle(bridge.t("应用到文档全部独立公式"), isOn: Binding(get: { bridge.state.arrangeAll }, set: { bridge.action("arrangeAll", ["value": $0]) }))
@@ -109,23 +182,6 @@ struct FormatInspector: View {
                         .controlSize(.small).disabled(bridge.state.busy)
                 }
             }
-            Divider()
-            InspectorSection("文档检查与批量处理") {
-                Button(bridge.language.usesEnglish ? "Check numbering and references…" : "检查编号与引用…") { bridge.invoke("nativeDocumentAudit") }
-                Menu(bridge.language.usesEnglish ? "Apply current formula style…" : "应用当前公式样式…") {
-                    Button(bridge.language.usesEnglish ? "Load document preset into draft" : "将文档预设载入当前草稿") { bridge.invoke("nativeUseDocumentTypography") }
-                    Button(bridge.language.usesEnglish ? "Current equation" : "当前公式") { bridge.invoke("nativeDocumentTypographyPlan", argument: "current") }
-                    Button(bridge.language.usesEnglish ? "All equations in a copy" : "全文公式（另存副本）") { bridge.invoke("nativeDocumentTypographyPlan", argument: "all") }
-                    Button(bridge.language.usesEnglish ? "Store document preset in a copy" : "保存文档预设（另存副本）") { bridge.invoke("nativeDocumentTypographyPlan", argument: "future") }
-                }
-                Menu(bridge.language.usesEnglish ? "Apply numbering format to a copy…" : "将编号格式应用到副本…") {
-                    Button(bridge.language.usesEnglish ? "Current equation" : "当前公式") { bridge.invoke("nativeDocumentNumberingPlan", argument: "current") }
-                    Button(bridge.language.usesEnglish ? "Existing numbered equations" : "全部已有编号") { bridge.invoke("nativeDocumentNumberingPlan", argument: "all") }
-                    Button(bridge.language.usesEnglish ? "Future equations only" : "仅后续新增公式") { bridge.invoke("nativeDocumentNumberingPlan", argument: "future") }
-                }
-                Text(bridge.language.usesEnglish ? "Checks use the loaded snapshot. Batch changes are previewed and saved to a new copy." : "检查已载入的文档快照；批量修改先预检，再另存副本。")
-                    .font(.caption2).foregroundStyle(.secondary)
-            }.controlSize(.small).disabled(bridge.state.busy || bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed || bridge.state.wordDocumentUnavailable || bridge.state.documentPath.isEmpty || bridge.state.wordOutcomeUnknown)
             Divider()
             InspectorSection("复制与导出") {
                 Button { bridge.action("click", ["id": "copy-latex"]) } label: { Label(bridge.t("复制 LaTeX"), systemImage: "doc.on.doc") }
@@ -146,6 +202,75 @@ struct FormatInspector: View {
             }
             Button(bridge.t("查看兼容性说明…")) { bridge.showCompatibility = true }.buttonStyle(.borderless).font(.caption)
         }
+    }
+
+    private func documentTools(_ availability: DocumentToolAvailability) -> some View {
+        InspectorSection("文档检查与批量处理", icon: "doc.text.magnifyingglass") {
+            if let message = availability.message(english: english) {
+                Text(message)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text(label("检查读取文档快照。批量修改先预检，再另存副本。", "Checks read the document snapshot. Preview batch changes before saving a copy."))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            VStack(spacing: 6) {
+                Button { bridge.invoke("nativeDocumentAudit") } label: {
+                    toolLabel(label("检查编号与引用…", "Check numbering and references…"), icon: "checklist")
+                }
+                .buttonStyle(WorkbenchButtonStyle(surface: true, horizontalPadding: 8))
+
+                Menu {
+                    Button(label("当前公式", "Current equation")) { bridge.invoke("nativeDocumentTypographyPlan", argument: "current") }
+                        .disabled(bridge.state.selected == nil)
+                    Button(label("全文公式（另存副本）", "All equations in a copy")) { bridge.invoke("nativeDocumentTypographyPlan", argument: "all") }
+                    Button(label("保存文档预设（另存副本）", "Store document preset in a copy")) { bridge.invoke("nativeDocumentTypographyPlan", argument: "future") }
+                    Divider()
+                    Button(label("将文档预设载入当前草稿", "Load document preset into draft")) { bridge.invoke("nativeUseDocumentTypography") }
+                } label: {
+                    toolLabel(label("应用当前公式样式…", "Apply current formula style…"), icon: "textformat")
+                }
+                .menuStyle(.borderlessButton)
+                .modifier(WorkbenchMenuSurface())
+
+                Menu {
+                    Button(label("当前公式", "Current equation")) { bridge.invoke("nativeDocumentNumberingPlan", argument: "current") }
+                        .disabled(bridge.state.selected == nil)
+                    Button(label("全部已有编号", "Existing numbered equations")) { bridge.invoke("nativeDocumentNumberingPlan", argument: "all") }
+                    Button(label("仅后续新增公式", "Future equations only")) { bridge.invoke("nativeDocumentNumberingPlan", argument: "future") }
+                } label: {
+                    toolLabel(label("将编号格式应用到副本…", "Apply numbering format to a copy…"), icon: "list.number")
+                }
+                .menuStyle(.borderlessButton)
+                .modifier(WorkbenchMenuSurface())
+                .help(label("编号格式在下方 Word 编排中设置。", "Set the number format under Word layout below."))
+            }
+            .font(.caption)
+            .disabled(availability != .ready)
+
+            if let action = availability.refreshAction {
+                Button(availability == .loadFailed ? label("重试载入", "Retry loading") : label("刷新文档快照", "Refresh snapshot")) {
+                    bridge.invoke(action)
+                }
+                .controlSize(.small)
+            } else if availability == .noDocument && !bridge.wordSessionActive {
+                Button(bridge.t("打开文件副本…")) { bridge.invoke("nativeOpen") }
+                    .controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.38), in: RoundedRectangle(cornerRadius: WorkbenchMetrics.cornerRadius))
+    }
+
+    private func toolLabel(_ title: String, icon: String) -> some View {
+        Label(title, systemImage: icon)
+            .lineLimit(2)
+            .multilineTextAlignment(.leading)
+            .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -178,12 +303,17 @@ private struct InspectorDisclosure<Content: View>: View {
 private struct InspectorSection<Content: View>: View {
     @EnvironmentObject private var bridge: DesktopBridge
     let title: String
+    let icon: String?
     @ViewBuilder var content: Content
-    init(_ title: String, @ViewBuilder content: () -> Content) { self.title = title; self.content = content() }
+    init(_ title: String, icon: String? = nil, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.icon = icon
+        self.content = content()
+    }
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label { Text(bridge.t(title)) } icon: {
-                Image(systemName: title.contains("字体") ? "textformat" : title.contains("字号") ? "textformat.size" : title.contains("Word") ? "doc.text" : title.contains("复制") ? "square.and.arrow.up" : title.contains("矩阵") ? "square.grid.2x2" : "arrow.left.and.right")
+                Image(systemName: icon ?? (title.contains("字体") ? "textformat" : title.contains("字号") ? "textformat.size" : title.contains("Word") ? "doc.text" : title.contains("复制") ? "square.and.arrow.up" : title.contains("矩阵") ? "square.grid.2x2" : "arrow.left.and.right"))
                     .symbolRenderingMode(.hierarchical).foregroundStyle(.tint)
             }.font(.system(size: 12, weight: .semibold))
             content

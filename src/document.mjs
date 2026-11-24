@@ -8,7 +8,7 @@ import { SVG } from 'mathjax-full/js/output/svg.js';
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js';
-import { inspectOle, oleLatex, characters, editCharacters, replaceOleLatex,patchRuler,readRuler } from './native.mjs';
+import { inspectOle, nativeLatex, oleLatex, characters, editCharacters, replaceOleLatex,patchRuler,nativeRuler } from './native.mjs';
 import {makeNewOle} from './new-formula.mjs';
 import {equationLayout, equationReference, chapterBreak, standaloneNumber,previewNumberFormat} from './layout.mjs';
 import {readTypography,patchTypography} from './typography-native.mjs';
@@ -210,7 +210,7 @@ function bookmarkNumberFormat(bookmark){
  return !failed&&!depth&&result.includes('#E')?result:null;
 }
 
-function mathTypeNumberLayout(scan,element){
+function mathTypeNumberLayout(scan,element,displayOnly=false){
  const object=scan.objects.find(item=>item.node===element);if(!object)return null;
  const candidates=scan.bookmarks.filter(bookmark=>bookmark.end!==null&&bookmark.location.paragraph===object.location.paragraph&&bookmark.endParagraph===object.location.paragraph&&bookmark.numberFormat?.includes('#E')&&!scan.objects.some(o=>o.order>bookmark.start&&o.order<bookmark.end));
  if(candidates.length>1)return null;
@@ -225,6 +225,7 @@ function mathTypeNumberLayout(scan,element){
  try{previewNumberFormat(bookmark.numberFormat);}catch{return null;}
  const equation=fields.filter(f=>f.instruction.role==='equation'&&!f.instruction.hidden);
  if(equation.length!==1||fields.some(f=>f.instruction.unknownSwitches.length||f.reviewState!=='unchanged'))return null;
+ if(displayOnly)return {numberText:bookmark.cachedText};
  const context={chapter:null,section:null};
  for(const field of scan.fields){
   if(field.start>=object.order||field.reviewState!=='unchanged')continue;
@@ -236,8 +237,12 @@ function mathTypeNumberLayout(scan,element){
  return {bookmarkName:bookmark.name,numberText:bookmark.cachedText,numberFormat:bookmark.numberFormat,numberingFamily:'mathtype',mode:bookmark.start<object.order?'numbered-left':'numbered-right',...context,equation:/^\d+$/.test(cached)&&Number.isSafeInteger(Number(cached))?Number(cached):null,...increments.length===1&&increments[0].instruction.reset!==null?{equationReset:increments[0].instruction.reset}:{}};
 }
 
-export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) {
-  const zip = await JSZip.loadAsync(buffer);
+export async function inspectDocx(buffer,options) {
+  return inspectWordPackage(await JSZip.loadAsync(buffer),options);
+}
+
+async function inspectWordPackage(zip,{checkpoint,nativeIndexOnly=false,wordCatalogueOnly=false,wordDirectoryActiveIndex}={}) {
+  const wordDirectory=wordDirectoryActiveIndex!==undefined;
   // A pending editor preview can run before parsing the main document XML.
   if(checkpoint)await checkpoint();
   const rootRelationships=zip.file('_rels/.rels');
@@ -254,7 +259,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   const objects = [];
   let mainRelationships=null;
   let hasLegacyNumbering=false;
-  const parts=[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
+  const parts=wordCatalogueOnly||wordDirectory?[mainPart]:[mainPart,...Object.keys(zip.files).filter(p=>p!==mainPart&&/^word\/(header\d+|footer\d+|footnotes|endnotes)\.xml$/.test(p))];
   for (const part of parts) {
   const partDoc=part===mainPart?doc:parseXml(await zip.file(part).async('string'));
   const relPart=part.replace(/([^/]+)$/, '_rels/$1.rels');
@@ -262,9 +267,15 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
   const rels = parseXml(await zip.file(relPart).async('string'));
   if(part===mainPart)mainRelationships=rels;
   const numberingScan=nativeIndexOnly?null:scanWordNumberingPart(partDoc,part);
+  const catalogueLocations=new Map(),catalogueCounts=new Map();
+  if(wordCatalogueOnly||wordDirectory)for(const object of numberingScan.objects){
+    const paragraph=object.location.paragraph;
+    catalogueLocations.set(object.node,paragraph);
+    catalogueCounts.set(paragraph,(catalogueCounts.get(paragraph)??0)+1);
+  }
   if(part===mainPart&&numberingScan)hasLegacyNumbering=numberingScan.fields.some(({instruction})=>instruction.type==='SEQ'&&instruction.family==='equationlab');
   if(checkpoint)await checkpoint();
-  const references=new Map();if(!nativeIndexOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
+  const references=new Map();if(numberingScan&&!wordCatalogueOnly)for(const code of currentFieldCodes(partDoc.documentElement)){const match=/^\s*REF\s+(\S+)/i.exec(code);if(match)references.set(match[1],(references.get(match[1])??0)+1);}
   const byId = new Map(Array.from(rels.documentElement.childNodes).filter(n=>n.nodeType===1).map(n=>[n.getAttribute('Id'),n]));
   for(const e of Array.from(partDoc.getElementsByTagNameNS(NS.o,'OLEObject'))) {
     const progId = e.getAttribute('ProgID'); if(!['Equation.DSMT4','Equation.3'].includes(progId)) continue;
@@ -272,19 +283,31 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
     const path=partPath(rel.getAttribute('Target'),part); if(!zip.file(path)) throw Error('Missing embedded object part');
     const ole=await zip.file(path).async('nodebuffer'); let inspected,parseError;
     try {inspected=inspectOle(ole);}catch(error){parseError=error.message;}
+    const nativeSha256=inspected?hash(inspected.native):null;
     if(nativeIndexOnly){
-      objects.push({part,mainDocument:part===mainPart,parseError,nativeSha256:inspected?hash(inspected.native):null});
+      objects.push({part,mainDocument:part===mainPart,parseError,nativeSha256});
       if(checkpoint)await checkpoint();
       continue;
     }
-    const shape=e.parentNode.getElementsByTagNameNS(NS.v,'shape')[0], image=shape?.getElementsByTagNameNS(NS.v,'imagedata')[0], imageRel=image ? byId.get(image.getAttributeNS(NS.r,'id')) : null;
-    let latex,previewError;try {latex=oleLatex(ole);}catch(error){previewError=error.message;}
+    let latex,previewError;
+    try{if(inspected)latex=nativeLatex(inspected.parsed);else previewError=parseError;}catch(error){previewError=error.message;}
     let paragraph=e;while(paragraph&&!(paragraph.namespaceURI===NS.w&&paragraph.localName==='p'))paragraph=paragraph.parentNode;
     const owned=paragraph?.getElementsByTagNameNS(NS.w,'pStyle')[0]?.getAttributeNS(NS.w,'val')==='EquationLab';
     const visible=paragraph?currentNodes(paragraph):[];
     const bookmark=owned?visible.find(b=>b.namespaceURI===NS.w&&b.localName==='bookmarkStart'&&/^EL_/.test(b.getAttributeNS(NS.w,'name'))):null;
-    const fields=owned?currentFieldCodes(paragraph):[];
     const numberText=bookmark?numberBookmarkNodes(bookmark).filter(n=>n.namespaceURI===NS.w&&n.localName==='t').map(n=>n.textContent).join(''):null;
+    if(wordCatalogueOnly||wordDirectory&&objects.length!==wordDirectoryActiveIndex){
+      // Read the visible field result only. The live chunk may start after
+      // chapter/section counters, and may contain incomplete or ambiguous fields.
+      const unambiguous=catalogueCounts.get(catalogueLocations.get(e))===1;
+      const display=unambiguous?(mathTypeNumberLayout(numberingScan,e,true)?.numberText??(bookmark&&bookmarkNumberFormat(bookmark)?numberText:null)):null;
+      objects.push({index:objects.length,part,mainDocument:true,path,progId,nativeSha256,latex,numberText:display,parseError,previewError,
+        layout:{numberText:display,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null}});
+      if(checkpoint)await checkpoint();
+      continue;
+    }
+    const shape=e.parentNode.getElementsByTagNameNS(NS.v,'shape')[0], image=shape?.getElementsByTagNameNS(NS.v,'imagedata')[0], imageRel=image ? byId.get(image.getAttributeNS(NS.r,'id')) : null;
+    const fields=owned?currentFieldCodes(paragraph):[];
     const context=priorCounters(partDoc,paragraph);
     const layout={owned,bookmarkName:bookmark?.getAttributeNS(NS.w,'name')??null,numberText,chapter:context.ELChapter,section:context.ELSection};
     layout.mode=fields.some(code=>/SEQ EquationLab/.test(code))?(visible.indexOf(bookmark)<visible.indexOf(e)?'numbered-left':'numbered-right'):owned&&paragraph.getElementsByTagNameNS(NS.w,'jc')[0]?.getAttributeNS(NS.w,'val')==='center'?'display':'inline';
@@ -298,11 +321,12 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
     }
     const mathTypeLayout=mathTypeNumberLayout(numberingScan,e);
     if(mathTypeLayout){Object.assign(layout,mathTypeLayout);layout.referenceCount=references.get(layout.bookmarkName)??0;}
-    let typography,typographyError;try{typography=readTypography(ole);}catch(error){typographyError=error.message;}
-    objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?readRuler(ole):[],nativeSha256:inspected?hash(inspected.native):null,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
+    let typography,typographyError;try{typography=readTypography(ole,inspected);}catch(error){typographyError=error.message;}
+    objects.push({index:objects.length,path,part,mainDocument:part===mainPart,progId,ole,latex,previewError,parseError,layout,typography,typographyError,ruler:inspected?nativeRuler(inspected.parsed):[],nativeSha256,characters:inspected?characters(inspected.parsed):[],application:inspected?.parsed.application,element:e,shape,image,imagePath:imageRel?partPath(imageRel.getAttribute('Target'),part):null,partDoc,rels,relPart});
     if(checkpoint)await checkpoint();
   }
   }
+  if(wordCatalogueOnly)return {objects};
   let numberFormat=null,numberingRevision=0;
   const settingsEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'settings','word/settings.xml');
   if(settingsEntry){
@@ -322,7 +346,7 @@ export async function inspectDocx(buffer,{checkpoint,nativeIndexOnly=false}={}) 
     // The full inspector may legitimately ignore this part when an Equation
     // Lab numbering default is already authoritative. Preserve that exact
     // acceptance boundary without doing numbering scans on the common path.
-    if(nativeIndexOnly)return inspectDocx(buffer,{checkpoint});
+    if(nativeIndexOnly)return inspectWordPackage(zip,{checkpoint});
     throw error;
    }
    const property=Array.from(custom.getElementsByTagName('*')).find(n=>n.localName==='property'&&n.getAttribute('name')==='MTEquationNumber2');
@@ -548,7 +572,7 @@ export async function flatOpc(buffer) {
 }
 
 export const MAX_FLAT_OPC_BYTES=128*1024*1024;
-export async function fromFlatOpc(xml) {
+function flatOpcPackage(xml) {
   if(typeof xml!=='string'||xml.length>MAX_FLAT_OPC_BYTES||Buffer.byteLength(xml,'utf8')>MAX_FLAT_OPC_BYTES || /<!DOCTYPE|<!ENTITY/i.test(xml)) throw Error('Invalid or oversized OOXML');
   const doc=parseXml(xml),zip=new JSZip(),types=[];
   for(const part of Array.from(doc.getElementsByTagNameNS(NS.pkg,'part'))) {
@@ -561,5 +585,11 @@ export async function fromFlatOpc(xml) {
     types.push(`<Override PartName="/${esc(name)}" ContentType="${esc(type)}"/>`);
   }
   zip.file('[Content_Types].xml',`<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">${types.join('')}</Types>`);
-  return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
+  return zip;
+}
+export async function fromFlatOpc(xml) {
+  return flatOpcPackage(xml).generateAsync({type:'nodebuffer',compression:'DEFLATE'});
+}
+export async function inspectFlatOpcWordCatalogue(xml) {
+  return inspectWordPackage(flatOpcPackage(xml),{wordCatalogueOnly:true});
 }

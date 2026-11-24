@@ -26,6 +26,28 @@ test('A progressive 112-row directory preserves position IDs when real metadata 
  const full={objects:Array.from({length:112},(_,index)=>({index,latex:'x_'+index}))};
  assert.deepEqual(Array.from(p.snapshot(full).objects,row=>row.id),Array.from(first.objects,row=>row.id));
 });
+test('Early Word catalogue numbers and text replace placeholders without disabling live selection',()=>{
+ const owner={index:0,latex:'x',layout:{numberText:'(2.3)'}};
+ const document={catalogProof:'proof',documentTotal:4,documentPosition:1,activeIndex:0,documentLoading:true,objects:[owner]};
+ const p=publisher();
+ const first=p.snapshot(document).delta;
+ document.catalogueRows=[{latex:'first',numberText:'(2-1)'},{latex:'another',numberText:'(2-2)'},{latex:null,numberText:'(2-4)'}];
+ p.invalidateCatalogue(document,0,3);
+ const {delta,objects}=p.snapshot(document);
+ assert.equal(delta.generation,first.generation);
+ assert.equal(delta.reset,undefined);
+ assert.deepEqual(Array.from(delta.upserts,row=>[row.id,row.latex,row.readOnly,row.numberText,row.numberStatus]),[
+  [0,'first',false,'(2-1)','catalogue'],[2,'',false,'(2-4)','catalogue'],
+ ]);
+ assert.equal(objects[3].numberStatus,'pending');
+ assert.equal(objects[1].latex,'x');
+ assert.equal(objects[1].readOnly,false);
+ assert.equal(objects[1].numberText,'(2.3)');
+ const next={...document,objects:[{...owner,latex:'new'}],catalogueRows:undefined};
+ p.snapshot(next);
+ p.invalidateCatalogue(document,0,3);
+ assert.equal(p.snapshot(next).delta,null);
+});
 test('500-row sidebar does no row work while only editor state changes; a thumbnail updates one row',()=>{
  let reads=0;const doc={objects:Array.from({length:500},(_,index)=>({index,get latex(){reads++;return 'x_'+index;},application:'MathType',image:null}))};
  const p=publisher(),first=p.snapshot(doc);assert.equal(first.delta.reset.length,500);assert.equal(reads,500);

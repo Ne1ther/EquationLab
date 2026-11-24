@@ -164,7 +164,7 @@ struct AICoordinationControl: View {
                     Label(copied ? label("已复制", "Copied") : label("复制示例", "Copy example"), systemImage: copied ? "checkmark" : "doc.on.doc")
                 }
                 Spacer(minLength: 4)
-                Button(label("安装或导出 Skill…", "Install or Export Skill…")) {
+                Button(label("设置与检测 Skill…", "Set Up and Check Skill…")) {
                     handoff.trigger(dismissPopover: { showingPanel = false }) {
                         openSkillSetup()
                     }

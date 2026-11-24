@@ -627,10 +627,11 @@ function rebuildNative(sourceNative,latex){
 }
 /** RULER record7 uses count then (type:uint8,position:uint16) entries.
  * Positions retain original 1/32 pt wire coordinates, not view pixels. */
-export function readRuler(ole){
- const {parsed}=inspectOle(ole),owner=parsed.records.find(n=>n.type===1||n.type===4);
+export function nativeRuler(parsed){
+ const owner=parsed.records.find(n=>n.type===1||n.type===4);
  return (owner?.ruler?.tabs||[]).map(({position,type})=>({position,type}));
 }
+export function readRuler(ole){return nativeRuler(inspectOle(ole).parsed);}
 export function patchRuler(ole,tabs){
  if(!Array.isArray(tabs)||tabs.length>255)throw Error('Invalid ruler tab list');
  const values=tabs.map(t=>{if(!Number.isInteger(t.position)||t.position<0||t.position>32767||!Number.isInteger(t.type)||t.type<0||t.type>4)throw Error('Invalid ruler tab position or type');return {position:t.position,type:t.type};}).sort((a,b)=>a.position-b.position);
@@ -1005,7 +1006,8 @@ function renderNodes(nodes,ctx,{top=false}={}){
   }
   return out.join('');
 }
-export function oleLatex(ole){const {parsed}=inspectOle(ole);return renderNodes(parsed.records,decoderContext(parsed),{top:true});}
+export function nativeLatex(parsed){return renderNodes(parsed.records,decoderContext(parsed),{top:true});}
+export function oleLatex(ole){return nativeLatex(inspectOle(ole).parsed);}
 /** Render-only glyph callback, separate from editable LaTeX. Font and size
  * metadata is consumed by the native-font renderer rather than discarded. */
 export function oleRenderLatex(ole,fontToken,options={}){const {parsed}=inspectOle(ole),ctx={...decoderContext(parsed),...options,fontToken};return renderNodes(parsed.records,ctx,{top:true});}

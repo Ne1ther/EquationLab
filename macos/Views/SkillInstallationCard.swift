@@ -3,6 +3,7 @@ import SwiftUI
 
 struct SkillInstallationCard: View {
     let english: Bool
+    @Environment(\.colorScheme) private var colorScheme
 
     private enum LoadState {
         case loading
@@ -15,6 +16,9 @@ struct SkillInstallationCard: View {
     @State private var feedbackIsError = false
     @State private var showingOtherClients = false
     @State private var copied = false
+    @State private var guidedClient: Client?
+    @State private var copiedInvocation = false
+    @State private var checking = false
     @State private var operationInFlight = false
     @State private var stateGeneration = 0
     @State private var activeOperation: Task<Void, Never>?
@@ -32,21 +36,12 @@ struct SkillInstallationCard: View {
             }
         }
 
-        var icon: NSImage? {
+        func icon(dark: Bool) -> NSImage? {
             switch self {
             case .codex: WorkbenchArtwork.codex
             case .antigravity: WorkbenchArtwork.antigravity
             case .claude: WorkbenchArtwork.claudeCode
-            case .dsh: WorkbenchArtwork.deepSeekHarness
-            }
-        }
-
-        var tint: Color {
-            switch self {
-            case .codex: .indigo
-            case .antigravity: .blue
-            case .claude: .orange
-            case .dsh: .cyan
+            case .dsh: dark ? WorkbenchArtwork.deepSeekHarnessDark : WorkbenchArtwork.deepSeekHarness
             }
         }
 
@@ -59,12 +54,16 @@ struct SkillInstallationCard: View {
         }
     }
 
+    private enum ClientStatus: Equatable {
+        case checking, ready, notInstalled, notLinked, unverified, needsUpdate, conflict
+    }
+
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
                 switch loadState {
                 case .loading:
-                    header(nil)
+                    header(nil, shared: nil)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         ForEach(Client.allCases, id: \.self) { client in
                             clientButton(client, installer: nil, snapshot: nil)
@@ -72,7 +71,7 @@ struct SkillInstallationCard: View {
                     }
                     otherClientsButton(nil)
                 case .ready(let installer, let snapshot):
-                    header(installer)
+                    header(installer, shared: snapshot.shared)
                     LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 8) {
                         ForEach(Client.allCases, id: \.self) { client in
                             clientButton(client, installer: installer, snapshot: snapshot)
@@ -85,6 +84,9 @@ struct SkillInstallationCard: View {
                             .foregroundStyle(feedbackIsError ? Color.orange : Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .textSelection(.enabled)
+                    }
+                    if let guidedClient {
+                        clientGuide(guidedClient)
                     }
                 case .unavailable:
                     Text("Equation Lab Skill").font(.headline)
@@ -105,7 +107,10 @@ struct SkillInstallationCard: View {
         }
     }
 
-    private func header(_ installer: EquationLabSkillInstallation?) -> some View {
+    private func header(
+        _ installer: EquationLabSkillInstallation?,
+        shared: EquationLabSkillInstallation.Existing?
+    ) -> some View {
         HStack(alignment: .center, spacing: 10) {
             VStack(alignment: .leading, spacing: 4) {
                 Label("Equation Lab Skill", systemImage: "sparkles").font(.headline)
@@ -115,13 +120,40 @@ struct SkillInstallationCard: View {
                     .textSelection(.enabled)
             }
             Spacer(minLength: 8)
-            Button(label("安装共享 Skill", "Install Shared Skill")) {
-                if let installer { prepare(installer) }
+            Button {
+                if let installer { checkStatus(installer) }
+            } label: {
+                HStack(spacing: 5) {
+                    if checking {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(checking ? label("检测中…", "Checking…") : label("检测 Skill", "Check Skill"))
+                }
+                .fixedSize()
             }
-            .buttonStyle(.borderedProminent)
+            .buttonStyle(.bordered)
             .controlSize(.small)
-            .fixedSize()
             .disabled(installer == nil || operationInFlight)
+            .help(label("重新检查本机共享 Skill 与客户端链接", "Recheck the shared Skill and client links on this Mac"))
+
+            if shared == .current || shared == .linked {
+                Label(label("已安装", "Installed"), systemImage: "checkmark.circle.fill")
+                    .font(.callout.weight(.semibold))
+                    .foregroundStyle(.green)
+                    .fixedSize()
+            } else {
+                Button(
+                    shared == .upgrade || shared == .relink
+                        ? label("更新共享 Skill", "Update Shared Skill")
+                        : label("安装共享 Skill", "Install Shared Skill")
+                ) {
+                    if let installer { prepare(installer) }
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.small)
+                .fixedSize()
+                .disabled(installer == nil || operationInFlight || shared == .conflict)
+            }
         }
     }
 
@@ -130,56 +162,114 @@ struct SkillInstallationCard: View {
         installer: EquationLabSkillInstallation?,
         snapshot: EquationLabSkillInstallation.StatusSnapshot?
     ) -> some View {
-        let linkStatus = client.link.map { snapshot?.linkStatus(for: $0) ?? .notLinked }
-        let action: String = switch linkStatus {
-        case nil: label("使用共享 Skill", "Use shared Skill")
-        case .linked: label("已链接", "Linked")
-        case .unverifiedLink: label("已有链接（待核验）", "Link unverified")
-        case .conflict: label("已有同名项", "Name conflict")
+        let status = clientStatus(client, snapshot: snapshot)
+        let action: String = switch status {
+        case .checking: label("正在检测…", "Checking…")
+        case .ready: client.link == nil ? label("共享 Skill 已安装", "Shared Skill installed") : label("共享 Skill 已链接", "Shared Skill linked")
+        case .notInstalled: label("安装共享 Skill", "Install shared Skill")
         case .notLinked: label("链接共享 Skill", "Link shared Skill")
+        case .unverified: label("已有链接 · 待核验", "Link unverified")
+        case .needsUpdate: label("共享 Skill 待更新", "Shared Skill needs update")
+        case .conflict: label("已有同名项", "Name conflict")
         }
-        let symbol: String = switch linkStatus {
-        case nil: "chevron.right"
-        case .linked: "checkmark.circle.fill"
-        case .unverifiedLink: "link.circle"
-        case .conflict: "exclamationmark.triangle.fill"
+        let symbol: String = switch status {
+        case .checking: "ellipsis"
+        case .ready: "checkmark.circle.fill"
+        case .notInstalled: "arrow.down"
         case .notLinked: "link"
+        case .unverified: "questionmark.circle"
+        case .needsUpdate: "arrow.clockwise"
+        case .conflict: "exclamationmark.triangle.fill"
         }
-        let symbolColor: Color = switch linkStatus {
-        case .linked: .green
+        let symbolColor: Color = switch status {
+        case .ready: .green
         case .conflict: .orange
-        case nil, .notLinked, .unverifiedLink: .secondary
+        default: .secondary
         }
         return Button {
-            if let installer { prepare(installer, for: client) }
+            if status == .ready {
+                showClientGuide(client)
+            } else if let installer {
+                prepare(installer, for: client)
+            }
         } label: {
             HStack(spacing: 8) {
-                Color.clear
-                    .frame(width: 30, height: 30)
-                    .background(client.tint.opacity(0.10), in: RoundedRectangle(cornerRadius: 7))
-                    .overlay {
-                        if let icon = client.icon {
-                            Image(nsImage: icon).resizable().renderingMode(.original).scaledToFit()
-                                .frame(width: 24, height: 24)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                        }
+                Group {
+                    if let icon = client.icon(dark: colorScheme == .dark) {
+                        Image(nsImage: icon)
+                            .resizable()
+                            .renderingMode(client == .codex ? .template : .original)
+                            .scaledToFit()
+                            .frame(width: 20, height: 20)
                     }
-                    .accessibilityHidden(true)
+                }
+                .frame(width: 28, height: 28)
+                .foregroundStyle(.primary)
+                .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(client.name).font(.callout.weight(.semibold))
-                    Text(action).font(.caption).foregroundStyle(linkStatus == .conflict ? Color.orange : Color.secondary)
+                    Text(action).font(.caption).foregroundStyle(status == .conflict ? Color.orange : Color.secondary)
                 }
                 Spacer(minLength: 4)
                 Image(systemName: symbol)
-                    .font(.system(size: 10, weight: .semibold))
+                    .font(.system(size: 13, weight: .semibold))
                     .foregroundStyle(symbolColor)
                     .accessibilityHidden(true)
             }
             .padding(.vertical, 5)
         }
-        .buttonStyle(WorkbenchButtonStyle(tint: client.tint, surface: true, horizontalPadding: 8))
+        .buttonStyle(WorkbenchButtonStyle(tint: .accentColor, surface: true, horizontalPadding: 8))
         .disabled(installer == nil || operationInFlight)
         .accessibilityLabel(client.name + ", " + action)
+        .accessibilityHint(status == .ready ? label("显示用法并提供可复制的指令", "Show usage and a command to copy") : action)
+    }
+
+    private func clientStatus(_ client: Client, snapshot: EquationLabSkillInstallation.StatusSnapshot?) -> ClientStatus {
+        guard let snapshot else { return .checking }
+        if snapshot.shared == .conflict { return .conflict }
+        if let target = client.link {
+            switch snapshot.linkStatus(for: target) {
+            case .conflict: return .conflict
+            case .unverifiedLink: return .unverified
+            case .notLinked:
+                return snapshot.shared == .available ? .notInstalled : .notLinked
+            case .linked: break
+            }
+        }
+        switch snapshot.shared {
+        case .current, .linked: return .ready
+        case .available: return .notInstalled
+        case .relink, .upgrade: return .needsUpdate
+        case .unverifiedLink: return .unverified
+        case .conflict: return .conflict
+        }
+    }
+
+    private func clientGuide(_ client: Client) -> some View {
+        let instruction: String = switch client {
+        case .codex: label("在 Codex 新会话里粘贴指令。", "Paste the command in a new Codex session.")
+        case .antigravity: label("打开新会话，或先在 agy 里运行 /skills reload。", "Start a new session or run /skills reload in agy first.")
+        case .claude: label("在 Claude Code 新会话里粘贴指令。", "Paste the command in a new Claude Code session.")
+        case .dsh: label("在 Harness 新会话里粘贴。使用自定义配置时，在 customSkillDirs 中加入共享目录。", "Paste in a new Harness session. For a custom profile, add the shared folder to customSkillDirs.")
+        }
+        let invocation: String = switch client {
+        case .codex: "$equation-lab"
+        case .claude: "/equation-lab"
+        case .antigravity, .dsh: label("请使用 equation-lab Skill，先说明你能做哪些 Word 公式操作。", "Use the equation-lab Skill and list the Word equation actions you can perform.")
+        }
+        return HStack(alignment: .top, spacing: 8) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(client.name).font(.callout.weight(.semibold))
+                Text(instruction).font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 4)
+            Button(copiedInvocation ? label("已复制", "Copied") : label("复制指令", "Copy command")) {
+                NSPasteboard.general.clearContents()
+                copiedInvocation = NSPasteboard.general.setString(invocation, forType: .string)
+            }
+            .controlSize(.small)
+            .fixedSize()
+        }
     }
 
     private func otherClientsButton(_ installer: EquationLabSkillInstallation?) -> some View {
@@ -189,9 +279,10 @@ struct SkillInstallationCard: View {
             showingOtherClients.toggle()
         } label: {
             HStack(spacing: 8) {
-                Text("🧠").font(.system(size: 17))
-                    .frame(width: 30, height: 30)
-                    .background(Color.pink.opacity(0.09), in: RoundedRectangle(cornerRadius: 7))
+                Image(systemName: "terminal")
+                    .font(.system(size: 16, weight: .medium))
+                    .frame(width: 28, height: 28)
+                    .foregroundStyle(.secondary)
                     .accessibilityHidden(true)
                 Text(label("其他客户端", "Other clients")).font(.callout.weight(.semibold))
                 Spacer(minLength: 6)
@@ -265,30 +356,67 @@ struct SkillInstallationCard: View {
         }
         loadState = .ready(installer, snapshot)
         guard feedback == nil else { return }
+        showStatus(snapshot, checked: false)
+    }
+
+    @MainActor
+    private func checkStatus(_ installer: EquationLabSkillInstallation) {
+        guard !operationInFlight else { return }
+        operationInFlight = true
+        checking = true
+        stateGeneration += 1
+        let generation = stateGeneration
+        activeOperation = Task { @MainActor in
+            let snapshot = await Task.detached(priority: .userInitiated) {
+                installer.statusSnapshot()
+            }.value
+            operationInFlight = false
+            checking = false
+            activeOperation = nil
+            guard !Task.isCancelled, generation == stateGeneration else { return }
+            loadState = .ready(installer, snapshot)
+            if let guidedClient, clientStatus(guidedClient, snapshot: snapshot) != .ready {
+                self.guidedClient = nil
+            }
+            showStatus(snapshot, checked: true)
+        }
+    }
+
+    private func showStatus(_ snapshot: EquationLabSkillInstallation.StatusSnapshot, checked: Bool) {
         switch snapshot.shared {
         case .current, .linked:
-            feedback = label("共享 Skill 已就绪。", "Shared Skill is ready.")
+            if checked {
+                show(label("绿勾表示本机 Skill 已安装或已链接。选择客户端查看用法。",
+                           "A green check confirms a local Skill or link. Select a client to see how to use it."))
+            }
         case .unverifiedLink:
-            feedback = label(
-                "共享目录已有链接（待核验）。未读取目标内容，也不会自动修改。",
-                "The shared folder already has a link (unverified). Its target was not read and will not be changed automatically."
-            )
+            show(label("共享目录使用手工链接。目标内容待核验。",
+                       "The shared folder uses a manual link. Its target is unverified."))
         case .relink:
-            feedback = label("App 位置已变化。重新安装即可更新连接。", "The app moved. Reinstall the Skill to update its connection.")
+            show(label("App 位置已变化。更新共享 Skill 即可恢复连接。", "The app moved. Update the shared Skill to restore its connection."))
         case .upgrade:
-            feedback = label("共享 Skill 有可用更新。", "A shared Skill update is available.")
+            show(label("共享 Skill 有可用更新。", "A shared Skill update is available."))
         case .conflict:
-            feedback = label("共享目录已有同名 Skill。可保留现有版本或导出此版本。", "The shared folder already contains a Skill with this name. Keep it or export this version.")
-            feedbackIsError = true
+            show(label("共享目录已有同名 Skill。可从「其他客户端」导出此版本。",
+                       "The shared folder already contains a Skill with this name. Export this version from Other clients."), error: true)
         case .available:
-            break
+            if checked {
+                show(label("本机还没有安装共享 Skill。", "The shared Skill is not installed on this Mac."))
+            }
         }
+    }
+
+    private func showClientGuide(_ client: Client) {
+        feedback = nil
+        guidedClient = client
+        copiedInvocation = false
     }
 
     @MainActor
     private func prepare(_ installer: EquationLabSkillInstallation, for client: Client? = nil) {
         guard !operationInFlight else { return }
         operationInFlight = true
+        guidedClient = nil
         stateGeneration += 1
         let generation = stateGeneration
         let linkTarget = client?.link
@@ -314,17 +442,13 @@ struct SkillInstallationCard: View {
             loadState = .ready(installer, outcome.1)
             switch outcome.0 {
             case .success:
-                switch client {
-                case .codex:
-                    show(label("Codex 已就绪。请在会话中使用 $equation-lab。", "Ready for Codex. Use $equation-lab in a session."))
-                case .antigravity:
-                    show(label("已链接 Antigravity。打开新会话，或在 agy 中运行 /skills reload。", "Linked for Antigravity. Start a new session or run /skills reload in agy."))
-                case .claude:
-                    show(label("已链接 Claude Code。请在新会话中使用 /equation-lab。", "Linked for Claude Code. Use /equation-lab in a new session."))
-                case .dsh:
-                    show(label("DSH 默认读取共享目录。使用自定义配置时，请将共享目录加入 customSkillDirs。", "DSH reads shared Skills by default. For a custom profile, add the shared Skills folder to customSkillDirs."))
-                case nil:
-                    show(label("共享 Skill 已就绪。", "Shared Skill is ready."))
+                if let client {
+                    showClientGuide(client)
+                } else if outcome.1.shared != .unverifiedLink {
+                    show(label("共享 Skill 已安装。选择客户端查看用法。", "Shared Skill installed. Select a client to see how to use it."))
+                }
+                if outcome.1.shared == .unverifiedLink {
+                    showStatus(outcome.1, checked: false)
                 }
             case .failure(let conflict as EquationLabSkillInstallation.Conflict):
                 show(label("这个位置已有同名 Skill。\n\(conflict.destination.path)",

@@ -4,7 +4,7 @@
 
 I built Equation Lab so I could keep editing existing MathType equations in Word on an Apple Silicon Mac. Double-click a Word equation to open it in the editor and save it back to the same place. You can also open the app on its own to write equations with templates or LaTeX.
 
-**[Download 0.7.7 Installer (build 111)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.7/Equation-Lab-0.7.7.pkg)** · [Release Notes](docs/releases.md) · [Install & Troubleshooting](docs/install.md) · [All Releases](https://github.com/Ne1ther/EquationLab/releases)
+**[Download 0.7.10 Installer (build 114)](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.10/Equation-Lab-0.7.10.pkg)** · [Release Notes](docs/releases.md) · [Install & Troubleshooting](docs/install.md) · [All Releases](https://github.com/Ne1ther/EquationLab/releases)
 
 > Requires an **Apple Silicon Mac with macOS 14 or later**. Word integration uses **desktop Word for Mac**. The installer includes the app, Word plugin, fonts, and runtime. MathType is optional.
 
@@ -59,7 +59,7 @@ The sample includes radicals, sums, integrals, matrices, numbers, and cross-refe
 ## Install, compatibility, and troubleshooting
 
 1. Save your open documents and quit both Word and Equation Lab.
-2. Run `Equation-Lab-0.7.7.pkg` (download from GitHub Releases and verify against the release `SHA256SUMS`).
+2. Run `Equation-Lab-0.7.10.pkg` (download from GitHub Releases and verify against the release `SHA256SUMS.txt`).
 3. Open Equation Lab first, grant Office folder access if prompted, and run **Install / Update Word plugin**.
 4. Reopen Word to use the **Equation Lab** ribbon at the top.
 

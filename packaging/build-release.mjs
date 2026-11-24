@@ -35,6 +35,9 @@ if (args.includes('--help')) {
 if(process.platform!=='darwin'||process.arch!=='arm64')throw Error('This release builder currently targets Apple Silicon on macOS.');
 if(!/^\d+\.\d+\.\d+(?:[-.][A-Za-z0-9.-]+)?$/.test(version)||!/^\d+$/.test(build)||!/^v\d+\.\d+\.\d+$/.test(nodeVersion))throw Error('Invalid release version.');
 if(!['qa','release'].includes(purpose))throw Error('Purpose must be qa or release.');
+// macOS Installer owns the payload as root. The console user must be able to
+// traverse the installed bundle and launch its app and background runtime.
+process.umask(0o022);
 const exists = path=>access(path).then(()=>true,()=>false);
 function run(binary, argv, options={}) {
   return execFileSync(binary,argv,{cwd:root,encoding:'utf8',maxBuffer:12_000_000,stdio:['pipe','pipe','pipe'],...options});
@@ -196,6 +199,10 @@ try {
   for(const file of files){
     const stat=await lstat(file);
     if(stat.isSymbolicLink()){const target=await realpath(file);if(!target.startsWith(canonicalStage+sep)){externalLinks++;throw Error(`External symlink: ${relative(stage,file)}`);}continue;}
+    // Copying a file can preserve its original mode, including dependencies
+    // previously installed with a private umask. Normalize only the staged app.
+    const mode=stat.isDirectory()||(stat.mode&0o111)!==0?0o755:0o644;
+    if((stat.mode&0o777)!==mode)await chmod(file,mode);
     if(!stat.isFile())continue;
     const rel=relative(stage,file);
     if(/(?:^|\/)(?:\.local|vendor-artifacts|\.git|\.env)(?:\/|$)/.test(rel)||/(?:localhost-(?:key|cert)\.pem|\.p12|\.pfx|\.key)$/.test(rel))throw Error(`Private artifact in bundle: ${rel}`);
@@ -250,6 +257,12 @@ try {
     report.wordPackageDelivery={mode:'on-demand',builder:'installer/word-native-installer/build-automatic-pkg.mjs',kinds:['word','remove']};
   }
   await writeFile(join(resources,'release-manifest.json'),JSON.stringify({equationlabBundle:true,...report},null,2)+'\n');
+
+  for(const file of [stage,...await walk(stage)]){
+    const {mode}=await lstat(file);
+    const required=mode&0o100?0o005:0o004;
+    if((mode&required)!==required)throw Error(`Installed app payload is inaccessible to other users: ${relative(stage,file)||'Equation Lab.app'}`);
+  }
 
   progress(`Signing the application (${report.signing.kind})`);
   run('/usr/bin/codesign',[...signingBase,...timeOptions,stage]);

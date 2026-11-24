@@ -5,6 +5,7 @@
 namespace {std::int32_t testGeneration=0;}
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState(){return 0;}
 void EquationLabDocumentContextDidCapture(){}
+void EquationLabPublishDocumentCataloguePart(NSDictionary*){}
 void EquationLabDocumentContextDidClear(){}
 void EquationLabDocumentContextDidClearSelection(){}
 void EquationLabDocumentContextWillCapture(){}

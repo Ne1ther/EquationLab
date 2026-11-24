@@ -1,5 +1,13 @@
 # 版本记录
 
+## 0.7.10 · build114
+
+修复带大型嵌入对象的长 Word 文档在侧栏停在第一条公式的问题。侧栏分批显示公式和已读到的正文编号，全文核对期间可以搜索已载入的条目。核对结束后，进度提示变成勾选。更新还整理了文档工具入口和 AI Skill 安装面板。
+
+Long Word documents with large embedded objects now display equations and available numbers in batches. You can search loaded rows while Equation Lab checks the full document. A checkmark appears when the check finishes. This update also reorganizes the document tools and AI Skill setup.
+
+[下载 0.7.10 · Download 0.7.10](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.10)
+
 ## 0.7.7 · build111
 
 修复不同版本 WebKit 下的 Word 排版预览缩放。放大宽公式或高公式后，可以横向和纵向滚动查看完整公式。

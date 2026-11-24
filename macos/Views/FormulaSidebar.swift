@@ -1,7 +1,7 @@
 import SwiftUI
 
 struct FormulaSidebar: View {
-    private enum SelectionDocumentKey: Equatable {
+    private enum SelectionDocumentKey: Hashable {
         case word(String)
         case standalone(String)
     }
@@ -102,6 +102,10 @@ struct FormulaSidebar: View {
                 !bridge.state.wordCatalogAvailable && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentLoadFailed))
     }
     private var documentSwitchUnavailable: Bool { bridge.state.busy || bridge.state.wordOutcomeUnknown }
+    private var wordListLoading: Bool {
+        !showingFavorites && !bridge.state.wordDocumentUnavailable &&
+            (bridge.state.wordDocumentLoading || bridge.state.wordDocumentReadState == .loading)
+    }
     private var documentOrdinals: [String: Int] {
         var counts: [String: Int] = [:]
         var ordinals: [String: Int] = [:]
@@ -118,9 +122,18 @@ struct FormulaSidebar: View {
         let isFiltering = !terms.isEmpty
         let items = isFiltering ? allItems.filter { $0.matchesSearch(terms: terms) } : allItems
         let totalCount = showingFavorites ? allItems.count : max(allItems.count, bridge.state.wordDocumentTotal)
-        let isPartiallyLoaded = !showingFavorites && bridge.state.wordDocumentLoading && !allItems.isEmpty && allItems.count < totalCount
-        let countLabel = isFiltering ? "\(items.count) / \(allItems.count)" : isPartiallyLoaded ? "\(allItems.count) / \(totalCount)" : "\(totalCount)"
+        let countLabel = isFiltering ? "\(items.count) / \(totalCount)" : "\(totalCount)"
         let hasStaleNumbers = !showingFavorites && allItems.contains { $0.numberStatus == "stale" }
+        let listComplete = !showingFavorites && !wordListLoading && !bridge.state.wordDocumentUnavailable &&
+            !bridge.state.wordDocumentLoadFailed && bridge.state.wordDocumentReadState == nil &&
+            !bridge.state.wordCatalogAvailable && bridge.state.wordDocumentIdentity != nil &&
+            bridge.state.fileCopyGeneration == nil && !hasStaleNumbers && allItems.count == totalCount && totalCount > 0
+        // Word can publish one clickable placeholder for every position before
+        // reading its contents. Only use rows with data in the progress count.
+        let availableCount = wordListLoading ? allItems.lazy.filter { item in
+            item.numberStatus == "catalogue" || item.numberStatus == "snapshot" ||
+                item.readOnly || !item.latex.isEmpty || item.numberText != nil || item.image != nil
+        }.count : allItems.count
         let selectedID = showingFavorites ? nil : bridge.state.selected
         let selectionIsLoaded = selectedID.map { id in allItems.contains { $0.id == id } } ?? false
         let selectionIsInResults = isFiltering ? (selectedID.map { id in items.contains { $0.id == id } } ?? false) : selectionIsLoaded
@@ -218,7 +231,7 @@ struct FormulaSidebar: View {
                     .monospacedDigit()
                     .fixedSize()
                     .accessibilityLabel(isFiltering
-                        ? label("\(items.count) 项匹配，共 \(allItems.count) 项", "\(items.count) \(items.count == 1 ? "match" : "matches") out of \(allItems.count)")
+                        ? label("\(items.count) 项匹配，共 \(totalCount) 项", "\(items.count) \(items.count == 1 ? "match" : "matches") out of \(totalCount)")
                         : countLabel)
                 if !showingFavorites && bridge.state.fileCopyGeneration == nil {
                     Button { bridge.invoke("nativeRefreshWordWorkspace") } label: {
@@ -236,26 +249,18 @@ struct FormulaSidebar: View {
                         : bridge.t(allItems.isEmpty ? "刷新当前 Word 文档" : "编号来自文档快照；在 Word 更新后请刷新。"))
                 }
             }.padding(.horizontal, 14).padding(.vertical, 8)
-            if !showingFavorites && !allItems.isEmpty {
-                freshnessBanner(allItems: allItems, totalCount: totalCount, isPartiallyLoaded: isPartiallyLoaded, hasStaleNumbers: hasStaleNumbers)
+            if wordListLoading || listComplete {
+                wordListProgress(availableCount: availableCount, totalCount: totalCount, complete: listComplete)
+                    .id(currentSelectionDocumentKey)
+            } else if !showingFavorites && !allItems.isEmpty {
+                freshnessBanner(allItems: allItems, hasStaleNumbers: hasStaleNumbers)
             }
             if !allItems.isEmpty || isFiltering {
                 searchField(isFiltering: isFiltering)
             }
             if items.isEmpty {
-                if !showingFavorites && allItems.isEmpty && (bridge.state.wordDocumentLoading || bridge.state.wordDocumentReadState == .loading) {
-                    VStack(spacing: 10) {
-                        ProgressView().controlSize(.regular)
-                        Text(label("正在载入文档中的公式…", "Loading equations from Word…"))
-                            .font(.callout.weight(.medium))
-                        if totalCount > 0 {
-                            Text(label("共 \(totalCount) 个公式，当前可继续编辑。", "\(totalCount) equations in this document. You can keep editing."))
-                                .font(.caption).foregroundStyle(.secondary)
-                                .multilineTextAlignment(.center)
-                        }
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .padding(.horizontal, 18)
+                if allItems.isEmpty && wordListLoading {
+                    Spacer(minLength: 0)
                 } else if !showingFavorites && allItems.isEmpty && !bridge.state.wordDocumentUnavailable &&
                             (bridge.state.wordDocumentReadState == .failed || bridge.state.wordDocumentLoadFailed) {
                     ContentUnavailableView {
@@ -272,7 +277,7 @@ struct FormulaSidebar: View {
                         .font(.callout)
                 } else if isFiltering {
                     ContentUnavailableView {
-                        Label(!showingFavorites && bridge.state.wordCatalogAvailable
+                        Label(wordListLoading
                             ? label("已读取内容中没有匹配", "No matches in loaded content")
                             : bridge.t("没有匹配的公式"), systemImage: "magnifyingglass")
                     } description: {
@@ -298,7 +303,8 @@ struct FormulaSidebar: View {
                 List {
                     ForEach(items) { item in
                         let catalogPlaceholder = !showingFavorites && bridge.state.wordCatalogAvailable &&
-                            item.latex.isEmpty && item.image == nil && item.numberStatus == "pending" && !item.readOnly
+                            item.latex.isEmpty && item.image == nil && item.numberText == nil &&
+                            item.numberStatus == "pending" && !item.readOnly
                         Button {
                             if !showingFavorites,
                                bridge.state.selected != item.id,
@@ -452,7 +458,8 @@ struct FormulaSidebar: View {
     }
 
     private func numberText(for item: SidebarFormula) -> String {
-        item.numberText ?? bridge.t(item.numberStatus == "pending" ? "编号待载入" : "无已读编号")
+        let waiting = item.numberStatus == "pending" || item.numberStatus == "catalogue"
+        return item.numberText ?? bridge.t(waiting ? "编号待载入" : "无已读编号")
     }
 
     private func rowAccessibilityLabel(_ item: SidebarFormula, selected: Bool) -> String {
@@ -513,6 +520,11 @@ struct FormulaSidebar: View {
                                     .font(.caption2)
                                     .foregroundStyle(.secondary)
                                     .accessibilityHidden(true)
+                            } else if item.numberStatus == "catalogue" && !selectionUnavailable {
+                                Image(systemName: "chevron.right")
+                                    .font(.caption2.weight(.semibold))
+                                    .foregroundStyle(.secondary)
+                                    .accessibilityHidden(true)
                             }
                         }
                     }
@@ -536,7 +548,9 @@ struct FormulaSidebar: View {
                         HStack(spacing: 6) {
                             Image(systemName: "function").font(.callout)
                             if item.latex.isEmpty {
-                                Text(bridge.t(item.readOnly || !bridge.wordSessionActive ? "未能预览" : "正在生成预览"))
+                                Text(item.numberStatus == "catalogue"
+                                    ? label("打开公式", "Open equation")
+                                    : bridge.t(item.readOnly || !bridge.wordSessionActive ? "未能预览" : "正在生成预览"))
                                     .font(.caption)
                             } else {
                                 Text(item.latex)
@@ -551,31 +565,60 @@ struct FormulaSidebar: View {
                 }
             }
         }
-        .frame(maxWidth: .infinity, minHeight: catalogPlaceholder ? 26 : showingFavorites ? 50 : 66, alignment: .leading)
+        .frame(maxWidth: .infinity, minHeight: showingFavorites ? 50 : 66, alignment: .leading)
         .contentShape(Rectangle())
     }
 
-    @ViewBuilder
-    private func freshnessBanner(allItems: [SidebarFormula], totalCount: Int, isPartiallyLoaded: Bool, hasStaleNumbers: Bool) -> some View {
-        let pendingCount = allItems.lazy.filter { $0.numberStatus == "pending" }.count
-        if bridge.state.wordDocumentLoading {
-            HStack(alignment: .top, spacing: 7) {
-                ProgressView().controlSize(.small).padding(.top, 1)
-                Text(
-                    bridge.state.wordCatalogAvailable
-                        ? label("目录可点选，编号和公式内容正在加载。", "Open any row while equation text and numbers load.")
-                        : isPartiallyLoaded
-                        ? label("当前公式可编辑，后台载入其余公式（\(allItems.count)/\(totalCount)）…", "Current equation ready; loading others (\(allItems.count)/\(totalCount))…")
-                        : label("正在后台同步列表快照，已有公式仍可查看与编辑…", "Syncing list snapshot in background; loaded equations stay visible…")
-                )
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+    private func wordListProgress(availableCount: Int, totalCount: Int, complete: Bool) -> some View {
+        let title = complete
+            ? label("载入完成", "Equations loaded")
+            : availableCount == totalCount && totalCount > 0
+            ? label("正在核对全文", "Checking document")
+            : label("正在载入公式", "Loading equations")
+        let count = "\(availableCount) / \(totalCount)"
+        return HStack(spacing: 7) {
+            ZStack {
+                if complete {
+                    Image(systemName: "checkmark.circle.fill")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.green)
+                        .transition(.scale(scale: 0.72).combined(with: .opacity))
+                } else if totalCount > 0 {
+                    Circle().strokeBorder(.quaternary, lineWidth: 2)
+                    Circle()
+                        .trim(from: 0, to: CGFloat(availableCount) / CGFloat(totalCount))
+                        .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                        .rotationEffect(.degrees(-90))
+                        .padding(1)
+                } else {
+                    ProgressView().controlSize(.mini)
+                }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.horizontal, 10).padding(.vertical, 7)
-            .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .padding(.horizontal, 14).padding(.bottom, 8)
-        } else if bridge.state.wordDocumentLoadFailed {
+            .frame(width: 15, height: 15)
+            .animation(complete && !reduceMotion ? .easeOut(duration: 0.22) : nil, value: complete)
+            .accessibilityHidden(true)
+            Text(title).lineLimit(1)
+            Spacer(minLength: 3)
+            if totalCount > 0 {
+                Text(count).monospacedDigit().fixedSize()
+            }
+        }
+        .font(.caption)
+        .foregroundStyle(.secondary)
+        .padding(.horizontal, 8)
+        .frame(height: 25)
+        .background(.quaternary.opacity(0.42), in: RoundedRectangle(cornerRadius: 7))
+        .padding(.horizontal, 14)
+        .padding(.bottom, 8)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(title)
+        .accessibilityValue(totalCount > 0 ? count : "")
+    }
+
+    @ViewBuilder
+    private func freshnessBanner(allItems: [SidebarFormula], hasStaleNumbers: Bool) -> some View {
+        let pendingCount = allItems.lazy.filter { $0.numberStatus == "pending" }.count
+        if bridge.state.wordDocumentLoadFailed {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .top, spacing: 6) {
                     Image(systemName: "exclamationmark.triangle.fill")

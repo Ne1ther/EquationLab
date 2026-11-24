@@ -4,7 +4,7 @@
 
 做这个项目，是想在 M 系列 Mac 的 Word 里把原来的 MathType 公式接着写下去。在 Word 里双击公式打开编辑器，改完写回原位置。也可以单独打开 App，用模板或 LaTeX 写公式。
 
-**[下载 0.7.7 安装包（build 111）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.7/Equation-Lab-0.7.7.pkg)** · [更新记录](docs/releases.md) · [安装与排查](docs/install.md) · [全部 Releases](https://github.com/Ne1ther/EquationLab/releases)
+**[下载 0.7.10 安装包（build 114）](https://github.com/Ne1ther/EquationLab/releases/download/v0.7.10/Equation-Lab-0.7.10.pkg)** · [更新记录](docs/releases.md) · [安装与排查](docs/install.md) · [全部 Releases](https://github.com/Ne1ther/EquationLab/releases)
 
 > 适用 **Apple Silicon（M 系列）Mac，macOS 14 及以上**。Word 联动需要**桌面版 Word for Mac**。安装包已包含 App、Word 插件、字体和运行时，无需另装 MathType。
 
@@ -59,7 +59,7 @@
 ## 安装、兼容性与排查
 
 1. 保存正在写的文档，完全退出 Word 和 Equation Lab。
-2. 双击 `Equation-Lab-0.7.7.pkg` 完成安装（请从 GitHub Releases 下载并核对同版本 `SHA256SUMS`）。
+2. 双击 `Equation-Lab-0.7.10.pkg` 完成安装（请从 GitHub Releases 下载并核对同版本 `SHA256SUMS.txt`）。
 3. 先打开 Equation Lab，按提示授予 Office 文件夹访问权限并完成 **安装 / 更新 Word 插件**。
 4. 重新打开 Word，即可在顶部看到 **Equation Lab** 功能区。
 

@@ -152,10 +152,14 @@ async function checkedDocumentToolsSource(payload){
  const snapshot=payload.sourceSha256===undefined?input:await readDocumentBytes(input,payload.sourceSha256);
  return {input,snapshot};
 }
-async function readWordSession(ticket,execution={}){
+async function readWordSession(ticket,execution={},initial=false){
  const session=await wordSession('native-read',{ticket});checkedWordSource(session,ticket);
  const insertion=session.insertion===true,activeIndex=insertion?null:session.document?.index??0;
- const useOptions={...execution,wordMainStoryOnly:true,...session.document?.identity&&session.document.snapshot!=null?{wordActiveIndex:activeIndex}:{}};
+ // Read the directory and one selected equation from the exact checked
+ // saved snapshot. An existing full parse is cheaper than making a directory.
+ const savedSha256=initial?session.document?.savedSha256:null;
+ const savedCatalogue=!!savedSha256&&!documentCache.hasContent(savedSha256);
+ const useOptions={...execution,wordMainStoryOnly:true,...session.document?.identity&&session.document.snapshot!=null?{wordActiveIndex:activeIndex}:{},...savedCatalogue?{wordDirectorySha256:savedSha256}:{}};
  const result=await desktopRequest({action:'inspect',payload:{path:session.document?.path??session.path,thumbnails:false}},useOptions);
  if(insertion){
   if(session.document?.index!==-1||!session.layout)throw Error('Word 插入会话源数据无效');
@@ -164,7 +168,9 @@ async function readWordSession(ticket,execution={}){
   try{if(!selected||selected.mainDocument!==true||native.length===0||native.toString('base64')!==session.native||selected.nativeSha256!==hash(native))throw Error('Word 文档快照与当前公式不一致，请重新打开公式');}finally{native.fill(0);}
  }
  const documentIdentity=session.document?.identity??null;
- return {...result,documentNumberingRevision:session.document?.numberingRevision??result.documentNumberingRevision,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},...session.document?.scope==='selection'&&typeof session.catalogProof==='string'?{catalogProof:session.catalogProof}:{},documentContext:session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null},hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,wordNumberingExistingSupported:session.numberingExistingSupport===true&&session.acknowledgement===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
+ const documentContext=session.documentContext??{state:session.document?'available':'missing',reason:session.document?'legacy-capture':'not-captured',identity:documentIdentity,snapshot:null,count:session.document?result.objects.filter(object=>object.mainDocument===true).length:0,index:session.document?activeIndex:null};
+ if(savedCatalogue&&result.objects.length!==documentContext.count)throw Error('Word directory count changed while reading');
+ return {...result,documentNumberingRevision:session.document?.numberingRevision??result.documentNumberingRevision,...insertion&&session.document?.scope==='insertion'?{objects:[]}: {},activePath:session.path,activeIndex,documentName:session.document?.name??null,documentIdentity,documentSnapshot:session.document?.snapshot??null,...['selection','insertion'].includes(session.document?.scope)?{documentLoading:true,documentPosition:session.document.position,documentTotal:session.document.count}:{},...savedCatalogue?{savedCatalogue:true,documentLoading:true,documentPosition:activeIndex,documentTotal:documentContext.count}:{},...session.document?.scope==='selection'&&typeof session.catalogProof==='string'?{catalogProof:session.catalogProof,cataloguePreviewAvailable:session.cataloguePreviewAvailable===true}:{},documentContext,hasDocumentContext:!!session.document,wordNumberingSupported:session.numberingSupport===true,wordNumberingContextSupported:session.numberingContextSupport===true,wordNumberingExistingSupported:session.numberingExistingSupport===true&&session.acknowledgement===true,...insertion?{insertion:true,insertionLayout:session.layout}:{},wordTicket:ticket};
 }
 
 function insertionLayout(value,retained){
@@ -293,9 +299,9 @@ export async function desktopRequest(request,execution={}) {
   else await writeFile(output,bytes);
   return {path:payload.output,bytes:bytes.length};
  }
- if(action==='wordSessionRead')return readWordSession(payload.ticket);
+ if(action==='wordSessionRead')return readWordSession(payload.ticket,{},true);
  if(action==='wordSessionDocument'){
-  const status=await wordSession('native-enrich-request',{ticket:payload.ticket});
+  const status=await wordSession('native-enrich-request',{ticket:payload.ticket,...payload.catalogueCount!==undefined?{catalogueCount:payload.catalogueCount}:{}});
   return status.state==='available'?{state:'available',document:await readWordSession(payload.ticket,execution)}:status;
  }
  if(action==='wordSessionObject'){
@@ -395,7 +401,15 @@ export async function desktopRequest(request,execution={}) {
   return {images:result.objects.map(({index,image})=>({index,image}))};
  }
  if(action==='inspect') {
-  const {document:{objects,numberFormat,numberingRevision,typographyPreset,hasLegacyNumbering},contentHash}=await documentCache.get(payload.path,{checkpoint:execution.snapshotCheckpoint});
+  const directoryHash=execution.wordDirectorySha256;
+  let snapshot;
+  if(directoryHash){
+   const bytes=await readDocumentBytes(payload.path,directoryHash);
+   const directory=await inspectDocx(bytes,{wordDirectoryActiveIndex:execution.wordActiveIndex});
+   const typographyPreset=await readTypographyPresetFromPackage(directory).catch(()=>null);
+   snapshot={document:{...directory,typographyPreset},contentHash:directoryHash};
+  }else snapshot=await documentCache.get(payload.path,{checkpoint:execution.snapshotCheckpoint});
+  const {document:{objects,numberFormat,numberingRevision,typographyPreset,hasLegacyNumbering},contentHash}=snapshot;
   checkDocumentHash(payload.sourceSha256,contentHash);
   // Old Word documents commonly carry EMF/WMF previews. Render their real
   // native equation instead of showing LaTeX in the macOS formula sidebar.

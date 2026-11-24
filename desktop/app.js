@@ -190,7 +190,8 @@ async function validate(){
    const characterEdit=editSource&&mode==='characters';
    try{
     const patch=window.desktopTypographyPatch?.();
-    const r=editSource?await native('editPreview',{previewOnly:true,input:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:selected.index,mode:sourceEditMode(),latex,replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])),typography:patch,...rulerPatch()}):await native('validate',{previewOnly:true,latex,typography:patch,...rulerPatch()});
+    const savedOwner=source?.savedCatalogue&&selected?.index===source.activeIndex;
+    const r=editSource?await native('editPreview',{previewOnly:true,input:savedOwner?source.activePath:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:savedOwner?0:selected.index,mode:sourceEditMode(),latex,replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value])),typography:patch,...rulerPatch()}):await native('validate',{previewOnly:true,latex,typography:patch,...rulerPatch()});
     if(rev!==revision)continue;
     // The previous image stays visible while the replacement decodes. Do not
     // let that older preview authorize insertion of the newly checked data.
@@ -349,7 +350,7 @@ $('add-favorite').onclick=()=>{if(!mf.value.trim())return;favorites=[mf.value,..
 function syncSidebar(ended=false,navigating=false,switching=false,endedWordTicket=null){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordSessionIsInsertion:source?.insertion===true,wordDocumentRequestPending:!!window.wordDocumentWorkspace?.pending,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,...endedWordTicket?{endedWordTicket}:{}}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
 window.nativeSelectObject=async index=>{
  if(busy||wordNavigating||window.wordDocumentWorkspace?.pending)return;
- if(wordTicket&&source?.catalogProof)return window.wordDocumentWorkspace?.select(index);
+ if(wordTicket&&(source?.catalogProof||source?.savedCatalogue))return window.wordDocumentWorkspace?.select(index);
  if(selected?.index===index)return;
  if(source?.documentLoading||source?.documentLoadFailed)return;
  if(window.wordDocumentWorkspace?.wordDocumentUnavailable){message('文档连接已结束，无法再选择原文档公式。草稿已保留。',true);return;}
@@ -482,9 +483,21 @@ async function loadWordDocument(ticket,initial){
  try{
   while(current()&&Date.now()<deadline){
    if(!busy&&!wordSaveQueued&&!wordOutcomeUnknown&&!wordCommitRunning&&!validationRunning&&!validationPending){
-    const result=await native('wordSessionDocument',{ticket});
+    const canPreview=initial.cataloguePreviewAvailable===true;
+    const catalogueCount=initial.catalogueRows?.length??0;
+    const result=await native('wordSessionDocument',{ticket,...canPreview?{catalogueCount}:{}});
     if(!current())return;
     if(result.state==='failed')break;
+    const preview=result.catalogue;
+    if(canPreview&&preview?.start===catalogueCount&&Array.isArray(preview.rows)&&preview.rows.length&&
+       catalogueCount+preview.rows.length<=Math.min(initial.documentTotal,256)&&preview.rows.every(row=>row&&
+        (row.latex===null||typeof row.latex==='string'&&row.latex.length<=4096)&&
+        (row.numberText===null||typeof row.numberText==='string'&&row.numberText.length<=128)&&
+        (row.nativeSha256===null||typeof row.nativeSha256==='string'&&/^[a-f0-9]{64}$/.test(row.nativeSha256)))){
+     initial.catalogueRows=(initial.catalogueRows??[]).concat(preview.rows);
+     window.sidebarPublisher?.invalidateCatalogue(initial,catalogueCount,initial.catalogueRows.length);
+     requestWorkbenchSync();
+    }
     if(result.state==='available'){
      const full=result.document,owner=full?.objects?.[full.activeIndex],old=selected;
      if(initial.insertion){
@@ -521,6 +534,9 @@ async function loadWordDocument(ticket,initial){
   }
  }catch{/* A list failure never discards or reloads the active draft. */}
  if(current()){
+  if(initial.catalogueRows||initial.retainedCatalogueRows){
+   delete initial.catalogueRows;delete initial.retainedCatalogueRows;window.sidebarPublisher?.invalidate(initial);
+  }
   initial.documentLoadFailed=true;initial.documentLoading=false;requestWorkbenchSync();
   if($('message').textContent==='当前公式已就绪，正在加载文档中的其他公式…')message('未能载入完整文档；当前公式仍可编辑，编号设置暂不可更改。请刷新文档后重试。',true);
  }
@@ -842,7 +858,7 @@ function publishWorkbenchState(){
   wordNumberingRestarts:!!source?.wordNumberingContextSupported&&(source.insertion&&(source.insertionLayout?.contextEstablished===false&&$('layout-mode').value.startsWith('numbered-')&&/#[CS]/.test($('layout-format').value)||['chapter','section'].some(key=>$('layout-'+key).value!==String(source.insertionLayout?.[key]??'')))||!source.insertion&&wordCounterContextRestarts()),
   wordDocumentLoading:!!documentSource?.documentLoading,wordDocumentLoadFailed:!!documentSource?.documentLoadFailed,wordDocumentTotal:documentSource?.documentTotal??sidebar.objects.length,
   wordDocumentReadState:window.wordDocumentWorkspace?.documentReadState??null,
-  wordCatalogAvailable:!!source?.catalogProof,
+  wordCatalogAvailable:!!(source?.catalogProof||source?.savedCatalogue),
 
   activeCategory:[...$('categories').children].find(b=>b.classList.contains('selected'))?.textContent||'常用结构',
   fonts:workbenchFields('desktop-fonts','font'),sizes:workbenchFields('desktop-sizes','sizes'),extraSizes:workbenchFields('desktop-extra-sizes','extraSizes'),spaces:workbenchFields('desktop-spaces','spaces'),layout,

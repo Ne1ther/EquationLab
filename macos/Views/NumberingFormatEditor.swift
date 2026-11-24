@@ -3,6 +3,7 @@ import SwiftUI
 struct NumberingFormatEditor: View {
     @ObservedObject var bridge: DesktopBridge
     let field: EditorField
+    let documentTools: DocumentToolAvailability
     @State private var draft = ""
     @State private var preview = ""
     @State private var invalid = false
@@ -23,32 +24,10 @@ struct NumberingFormatEditor: View {
         return draft != (number.format ?? field.value) || bridge.state.wordNumberingRestarts
     }
     private var hasLoadedDocument: Bool { !bridge.state.documentPath.isEmpty }
-    private var hasStaleNumbering: Bool {
-        bridge.state.objects.contains { $0.numberStatus == "stale" }
-    }
-    private var canRefreshWorkspace: Bool {
-        !bridge.state.busy && !bridge.state.wordDocumentLoading && !bridge.state.wordOutcomeUnknown && !bridge.state.wordDocumentUnavailable
-    }
-    private var canInspectDocument: Bool {
-        hasLoadedDocument && !bridge.state.busy && !bridge.state.wordDocumentLoading && !bridge.state.wordDocumentLoadFailed && !bridge.state.wordDocumentUnavailable && !bridge.state.wordOutcomeUnknown && !hasStaleNumbering
-    }
+    private var canInspectDocument: Bool { documentTools == .ready }
     private var canRunBatchNumbering: Bool { canInspectDocument && !invalid && !draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
     private var batchUnavailableReason: String? {
-        if bridge.state.wordDocumentLoading {
-            return label("正在载入完整文档，完成后可预检批量重编。", "Loading the full document. Batch preview unlocks once loaded.")
-        }
-        if bridge.state.wordDocumentLoadFailed {
-            return label("完整文档载入失败。刷新文档后可预检批量重编。", "The document could not be fully loaded. Refresh it before running a batch preview.")
-        }
-        if bridge.state.wordDocumentUnavailable {
-            return label("文档连接已结束，暂不能基于原文档预检。", "Document connection ended. Preflight is unavailable.")
-        }
-        if bridge.state.wordOutcomeUnknown {
-            return label("请先确认上次 Word 保存结果，再进行批量操作。", "Confirm the previous Word save before running batch tools.")
-        }
-        if hasStaleNumbering {
-            return label("Word 中的编号已更新，请先刷新文档快照后再修改编号或预检。", "Word numbers changed. Refresh the document snapshot before applying numbering or running preflight.")
-        }
+        if let reason = documentTools.message(english: english) { return reason }
         if invalid {
             return label("请先修正上方编号格式，再进行批量预检。", "Fix the number format above before running a batch preview.")
         }
@@ -341,12 +320,11 @@ struct NumberingFormatEditor: View {
                     Text(reason)
                         .font(.caption2).foregroundStyle(.orange)
                         .fixedSize(horizontal: false, vertical: true)
-                    if hasStaleNumbering {
-                        Button(label("刷新文档快照", "Refresh snapshot")) {
-                            bridge.invoke("nativeRefreshWordWorkspace")
+                    if let action = documentTools.refreshAction {
+                        Button(documentTools == .loadFailed ? label("重试载入", "Retry loading") : label("刷新文档快照", "Refresh snapshot")) {
+                            bridge.invoke(action)
                         }
                         .controlSize(.mini)
-                        .disabled(!canRefreshWorkspace)
                     }
                 }
             }

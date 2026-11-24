@@ -5,6 +5,31 @@ import XCTest
 
 @MainActor
 final class WorkbenchInteractionTests: XCTestCase {
+    func testDocumentToolsWaitForCompleteFreshSourceAndOfferAppropriateRecovery() throws {
+        var state = WorkbenchState()
+        XCTAssertEqual(DocumentToolAvailability(state: state), .noDocument)
+        state.wordDocumentReadState = .loading
+        XCTAssertEqual(DocumentToolAvailability(state: state), .loading)
+        state.wordDocumentReadState = .failed
+        let failed = DocumentToolAvailability(state: state)
+        XCTAssertEqual(failed, .loadFailed)
+        XCTAssertEqual(failed.refreshAction, "nativeRetryWordDocumentRead")
+
+        state.documentPath = "/tmp/document-copy.docx"
+        XCTAssertEqual(DocumentToolAvailability(state: state), .ready, "A prior Word open failure does not block an active DOCX copy")
+        state.objects = [try JSONDecoder().decode(SidebarFormula.self, from: Data(#"{"id":0,"numberStatus":"stale"}"#.utf8))]
+        let stale = DocumentToolAvailability(state: state)
+        XCTAssertEqual(stale, .staleNumbers)
+        XCTAssertEqual(stale.refreshAction, "nativeRefreshWordWorkspace")
+
+        state.busy = true
+        XCTAssertEqual(DocumentToolAvailability(state: state), .busy)
+        XCTAssertNil(DocumentToolAvailability(state: state).refreshAction)
+        state.wordOutcomeUnknown = true
+        XCTAssertEqual(DocumentToolAvailability(state: state), .unconfirmedSave)
+        XCTAssertNil(DocumentToolAvailability(state: state).refreshAction)
+    }
+
     func testCommandSearchReturnUsesVisibleTemplateBeforeMatchingCatalogEntry() {
         let template = FormulaTemplate(id: "basic-fraction", label: "分式", hint: "普通分式", category: "分式", latex: #"\frac{#0}{#1}"#)
         let catalog = CatalogItem(id: "compact-fraction", category: "分式", group: "small", label: "紧凑分式",

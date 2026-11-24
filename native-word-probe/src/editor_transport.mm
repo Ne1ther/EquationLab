@@ -29,6 +29,10 @@ BOOL EquationLabPreCapturedActivationIsPending();
 namespace {
 constexpr NSUInteger MaxBlob=16*1024*1024;
 constexpr NSUInteger MaxResponse=46*1024*1024;
+constexpr NSUInteger MaxCataloguePart=16*1024*1024;
+constexpr NSUInteger MaxCatalogueBytes=128*1024*1024;
+constexpr NSUInteger MaxCatalogueParts=256;
+constexpr NSUInteger LegacyCataloguePart=1500000;
 constexpr auto WrongThread=static_cast<bridge_probe::HResult>(0x8001010eu);
 std::atomic<std::uint32_t> lastError{0};
 // Counts/states only; never expose a document name, path, ticket or equation.
@@ -40,6 +44,12 @@ NSDate* documentCapturedAt;
 void logOpenPhase(const char* phase,CFAbsoluteTime started){
     static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
     os_log_info(logger,"word_open phase=%{public}s elapsed_ms=%.2f",phase,(CFAbsoluteTimeGetCurrent()-started)*1000);
+}
+void logCataloguePhase(const char* phase,NSUInteger ordinal,NSUInteger bytes,NSUInteger queued,NSInteger errorCode=0){
+    static os_log_t logger=os_log_create("app.equationlab.mac","WordHostPerformance");
+    os_log_info(logger,"WordHostCatalogue phase=%{public}s ordinal=%lu bytes=%lu queued=%lu error=%ld",
+                phase,static_cast<unsigned long>(ordinal),static_cast<unsigned long>(bytes),
+                static_cast<unsigned long>(queued),static_cast<long>(errorCode));
 }
 NSString* nativeDigest(NSData* data){
     unsigned char digest[CC_SHA256_DIGEST_LENGTH];CC_SHA256(data.bytes,static_cast<CC_LONG>(data.length),digest);
@@ -111,6 +121,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @property(nonatomic) BOOL measureOpen;
 @property(nonatomic,strong) NSDate* requestStartedAt;
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion;
+- (instancetype)initWithURL:(NSURL*)url jsonBody:(NSData*)body completion:(ProbeReply)completion;
 - (void)cancel;
 @end
 @interface ProbeHttpSession : NSObject <NSURLSessionDataDelegate>
@@ -153,6 +164,9 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
 @end
 @implementation ProbeJsonRequest
 - (instancetype)initWithURL:(NSURL*)url body:(NSDictionary*)body completion:(ProbeReply)completion {
+    return [self initWithURL:url jsonBody:[NSJSONSerialization dataWithJSONObject:body options:0 error:nullptr] completion:completion];
+}
+- (instancetype)initWithURL:(NSURL*)url jsonBody:(NSData*)body completion:(ProbeReply)completion {
     if((self=[super init])){
         _response=[NSMutableData data];_completion=[completion copy];
         _measureOpen=[url.path isEqualToString:@"/api/native-open"];
@@ -160,7 +174,7 @@ typedef void(^ProbeReply)(NSDictionary*,NSError*);
         ProbeHttpSession* client=[ProbeHttpSession shared];_session=client.session;
         NSMutableURLRequest* request=[NSMutableURLRequest requestWithURL:url];
         request.HTTPMethod=@"POST";[request setValue:@"application/json" forHTTPHeaderField:@"Content-Type"];
-        request.HTTPBody=[NSJSONSerialization dataWithJSONObject:body options:0 error:nullptr];
+        request.HTTPBody=body;
         _task=[_session dataTaskWithRequest:request];client.requests[@(_task.taskIdentifier)]=self;[_task resume];
     }return self;
 }
@@ -229,6 +243,12 @@ void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
 @property(nonatomic) BOOL enrichingDocument;
 @property(nonatomic) BOOL enrichmentStarted;
 @property(nonatomic,strong) ProbeJsonRequest* enrichmentRequest;
+@property(nonatomic) BOOL cataloguePreview;
+@property(nonatomic) BOOL compressedCatalogue;
+@property(nonatomic) BOOL encodingCataloguePart;
+@property(nonatomic) NSUInteger catalogueBytes;
+@property(nonatomic,strong) NSMutableArray<NSDictionary*>* catalogueParts;
+@property(nonatomic,strong) ProbeJsonRequest* catalogueRequest;
 @property(nonatomic) BOOL reopenRequested;
 @property(nonatomic) NSUInteger pollGeneration;
 @property(nonatomic) BOOL pollScheduled;
@@ -336,6 +356,7 @@ static NSString* editorLaunchURL(ProbeEditState* state){
 - (NSDictionary*)documentForOwner:(ProbeEditState*)state;
 - (void)rememberCaptureOwner:(std::uint64_t)owner context:(NSDictionary*)context digest:(NSString*)digest;
 - (void)requestCapture:(ProbeEditState*)state;
+- (void)stopCataloguePreview:(ProbeEditState*)state;
 - (BOOL)captureFailed:(ProbeEditState*)state;
 - (std::int32_t)takeCaptureRequest;
 - (std::int32_t)finishCaptureRequest:(BOOL)success;
@@ -350,7 +371,11 @@ static ProbeEditorTransport* transport=nil;
 }return self;}
 - (void)invalidateDocuments {
     ++self.documentEpoch;self.documentBytes=0;[self.ownerDocuments removeAllObjects];[self.ownerDocumentOrder removeAllObjects];[self.documentSnapshots removeAllObjects];[self.documentSnapshotOrder removeAllObjects];
-    self.captureRequest=nil;for(ProbeEditState* state in self.edits.allValues)if(state.awaitingDocument)state.captureRequested=NO;
+    self.captureRequest=nil;
+    for(ProbeEditState* state in self.edits.allValues){
+        if(state.awaitingDocument)state.captureRequested=NO;
+        if(state.cataloguePreview)[self stopCataloguePreview:state];
+    }
     self.cacheGeneration=bridge_probe::diagnosticValue(static_cast<std::uint32_t>(bridge_probe::Metric::EditGeneration));
 }
 - (void)expireWrittenDocuments {
@@ -440,6 +465,10 @@ static ProbeEditorTransport* transport=nil;
     if(!matches){
         os_log_info(OS_LOG_DEFAULT,"WordHostCapture rejected by host=%d fresh=%d bound=%d enrichment=%d",
                     !success,commonMatch,hasBinding,state.enrichingDocument);
+        if(state.catalogueBytes){
+            logCataloguePhase("capture_retry",0,state.catalogueBytes,state.catalogueParts.count);
+            [self stopCataloguePreview:state];
+        }
         state.captureRequested=NO;
         if(state.activation==self.activation&&state.captureAttempts<3){[self requestCapture:state];return -3;}
         [self captureFailed:state];return -3;
@@ -475,7 +504,96 @@ static ProbeEditorTransport* transport=nil;
     os_log_info(OS_LOG_DEFAULT,"WordHostCapture retry anchored live XML after saved snapshot rejection");
     [self requestCapture:state];[self scheduleCaptureDeadline:state];return YES;
 }
+- (void)stopCataloguePreview:(ProbeEditState*)state {
+    state.cataloguePreview=NO;state.encodingCataloguePart=NO;state.catalogueParts=nil;state.catalogueBytes=0;
+    [state.catalogueRequest cancel];state.catalogueRequest=nil;
+}
+- (void)sendCataloguePart:(NSData*)packet state:(ProbeEditState*)state ordinal:(NSUInteger)ordinal {
+    NSURL* url=[NSURL URLWithString:[self.baseURL stringByAppendingString:@"/api/native-catalogue-part"]];
+    __weak ProbeEditState* weak=state;
+    state.catalogueRequest=[[ProbeJsonRequest alloc] initWithURL:url jsonBody:packet completion:^(NSDictionary* result,NSError* error){
+        ProbeEditState* current=weak;
+        if(!current||![self active:current]||!current.cataloguePreview)return;
+        current.catalogueRequest=nil;
+        if(error||![result[@"ok"] isEqual:@YES]){
+            logCataloguePhase("rejected",ordinal,packet.length,current.catalogueParts.count,error.code);
+            [self stopCataloguePreview:current];
+            return;
+        }
+        const BOOL more=[result[@"more"] isEqual:@YES];
+        const char* phase=[result[@"state"] isEqual:@"superseded"]?"superseded":more?"accepted":"complete";
+        logCataloguePhase(phase,ordinal,packet.length,current.catalogueParts.count);
+        if(more)[self pumpCataloguePreview:current];else [self stopCataloguePreview:current];
+    }];
+}
+- (void)pumpCataloguePreview:(ProbeEditState*)state {
+    if(!state.cataloguePreview||state.catalogueRequest||state.encodingCataloguePart||!state.catalogueParts.count)return;
+    if(state.activation!=self.activation){[self stopCataloguePreview:state];return;}
+    NSDictionary* part=state.catalogueParts.firstObject;
+    [state.catalogueParts removeObjectAtIndex:0];
+    NSDictionary* body=@{
+        @"ticket":state.ticket,@"session":[NSString stringWithFormat:@"%llu",static_cast<unsigned long long>(state.sessionId)],
+        @"initialSnapshot":state.bindingContext[@"snapshot"],@"snapshot":part[@"snapshot"],@"ordinal":part[@"ordinal"],@"ooxml":part[@"ooxml"]
+    };
+    const BOOL compressed=state.compressedCatalogue;
+    const NSUInteger ordinal=[part[@"ordinal"] unsignedIntegerValue];
+    const NSUInteger bytes=[part[@"bytes"] unsignedIntegerValue];
+    state.encodingCataloguePart=YES;
+    __weak ProbeEditState* weak=state;
+    // Compression, base64, and JSON serialization can all outlast a Word
+    // event. Only the queue and URL session are owned by the Word main thread.
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED,0),^{
+        @autoreleasepool {
+            NSDictionary* wireBody=body;
+            if(compressed){
+                NSData* utf8=[body[@"ooxml"] dataUsingEncoding:NSUTF8StringEncoding];
+                NSData* packed=[utf8 compressedDataUsingAlgorithm:NSDataCompressionAlgorithmZlib error:nullptr];
+                if(packed.length&&packed.length<=MaxCataloguePart){
+                    NSMutableDictionary* encoded=[body mutableCopy];
+                    encoded[@"ooxml"]=[packed base64EncodedStringWithOptions:0];
+                    encoded[@"encoding"]=@"deflate-base64";
+                    wireBody=encoded;
+                }else wireBody=nil;
+            }
+            NSData* packet=wireBody?[NSJSONSerialization dataWithJSONObject:wireBody options:NSJSONWritingWithoutEscapingSlashes error:nullptr]:nil;
+            dispatch_async(dispatch_get_main_queue(),^{
+                ProbeEditState* current=weak;
+                if(!current||![self active:current]||!current.cataloguePreview)return;
+                current.encodingCataloguePart=NO;
+                if(!packet.length||current.activation!=self.activation){
+                    logCataloguePhase(packet.length?"superseded":"encoding_failed",ordinal,bytes,current.catalogueParts.count);
+                    [self stopCataloguePreview:current];
+                    return;
+                }
+                [self sendCataloguePart:packet state:current ordinal:ordinal];
+            });
+        }
+    });
+}
+- (void)publishCataloguePart:(NSDictionary*)part {
+    ProbeCaptureRequest* capture=self.captureRequest;
+    ProbeEditState* state=capture.state;
+    if(!state.cataloguePreview||!state.enrichingDocument||!capture.claimed||capture.activation!=self.activation||
+       capture.epoch!=self.documentEpoch||[part[@"captureToken"] intValue]!=capture.token||![self active:state])return;
+    const NSUInteger bytes=[part[@"bytes"] unsignedIntegerValue];
+    const NSUInteger ordinal=[part[@"ordinal"] unsignedIntegerValue];
+    const NSUInteger maxPart=state.compressedCatalogue?MaxCataloguePart:LegacyCataloguePart;
+    if(!bytes||bytes>maxPart){
+        logCataloguePhase("oversized",ordinal,bytes,state.catalogueParts.count);
+        [self stopCataloguePreview:state];return;
+    }
+    const NSUInteger maxQueued=state.compressedCatalogue?MaxCatalogueParts:3;
+    if(ordinal>=MaxCatalogueParts||state.catalogueParts.count>=maxQueued||bytes>MaxCatalogueBytes-state.catalogueBytes){
+        logCataloguePhase("queue_limit",ordinal,bytes,state.catalogueParts.count);
+        [self stopCataloguePreview:state];return;
+    }
+    state.catalogueBytes+=bytes;
+    [state.catalogueParts addObject:part];
+    logCataloguePhase("queued",ordinal,bytes,state.catalogueParts.count);
+    [self pumpCataloguePreview:state];
+}
 - (BOOL)captureFailed:(ProbeEditState*)state {
+    [self stopCataloguePreview:state];
     if(!state.enrichingDocument){if([self openRetainedOwner:state])return YES;lastCaptureState=CaptureRejected;[self fail:state code:InvalidReply];return NO;}
     // Metadata failure must never cancel an already editable OLE transaction.
     // The user can continue writing or save the original owner immediately.
@@ -486,6 +604,7 @@ static ProbeEditorTransport* transport=nil;
     return NO;
 }
 - (void)enrichDocument:(ProbeEditState*)state {
+    if(!state.compressedCatalogue)[self stopCataloguePreview:state];
     NSDictionary* context=state.documentContext;
     if([context[@"scope"] isEqual:@"selection"]||![context[@"identity"] isEqual:state.bindingContext[@"identity"]]||![context[@"index"] isEqual:state.bindingContext[@"index"]]){[self captureFailed:state];return;}
     NSMutableDictionary* document=[context mutableCopy];[document removeObjectForKey:@"captureToken"];
@@ -493,6 +612,7 @@ static ProbeEditorTransport* transport=nil;
         state.enrichmentRequest=nil;
         if(![self active:state])return;
         if(error||![result[@"ok"] boolValue]){state.documentContext=nil;[self captureFailed:state];return;}
+        [self stopCataloguePreview:state];
         [self rememberDocument:state];NSMutableDictionary* binding=[context mutableCopy];[binding removeObjectForKey:@"ooxml"];state.bindingContext=binding;
         state.documentContext=nil;state.enrichingDocument=NO;logOpenPhase("document-list-ready",state.started);
     }];
@@ -534,6 +654,7 @@ static ProbeEditorTransport* transport=nil;
     ProbeEditState* state=self.edits[@(sessionId)];if(!state)return;
     if(self.captureRequest.state==state)self.captureRequest=nil;
     state.terminal=YES;state.openNative=nil;state.documentContext=nil;
+    [self stopCataloguePreview:state];
     [state.enrichmentRequest cancel];state.enrichmentRequest=nil;
     if(!state.opening){[state.request cancel];state.request=nil;}
     [self.edits removeObjectForKey:@(sessionId)];
@@ -844,6 +965,11 @@ static ProbeEditorTransport* transport=nil;
         if([status isEqual:@"editing"]){
             if([json[@"loadDocument"] boolValue]&&!current.enrichmentStarted&&[current.bindingContext[@"scope"] isEqual:@"selection"]){
                 current.enrichmentStarted=YES;current.enrichingDocument=YES;current.awaitingDocument=YES;current.requiresDocumentCapture=YES;current.captureRequested=NO;current.captureAttempts=0;
+                current.cataloguePreview=[json[@"cataloguePreview"] isEqual:@YES];
+                if(current.cataloguePreview){
+                    current.compressedCatalogue=[json[@"catalogueEncoding"] isEqual:@"deflate-base64"];
+                    current.catalogueParts=[NSMutableArray array];
+                }
                 current.activationBinding=current.bindingContext;current.documentDeadline=[NSDate dateWithTimeIntervalSinceNow:60];
                 if(current.activation==self.activation){[self requestCapture:current];[self scheduleCaptureDeadline:current];}else [self captureFailed:current];
             }
@@ -1015,6 +1141,7 @@ extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureRequiresLiveXML(){return NSThread.isMainThread&&transport.captureRequest.claimed&&transport.captureRequest.state.retryingLiveCapture?1:0;}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureRequestToken(){return NSThread.isMainThread&&transport.captureRequest.claimed?transport.captureRequest.token:0;}
+void EquationLabPublishDocumentCataloguePart(NSDictionary* part){if(NSThread.isMainThread)[transport publishCataloguePart:part];}
 extern "C" __attribute__((visibility("default")))
 std::int32_t MathTypeBridgeDocumentCaptureSnapshot(){return NSThread.isMainThread&&transport.captureRequest.claimed?[transport.captureRequest.binding[@"snapshot"] intValue]:0;}
 extern "C" __attribute__((visibility("default")))
