@@ -5,11 +5,11 @@
 namespace bridge_probe {
 
 std::int32_t installWordDocumentRequests();
-void publishWordWorkspace(NSDictionary* active,NSArray<NSDictionary*>* documents);
+void publishWordWorkspace(NSDictionary* active,NSArray<NSDictionary*>* documents,BOOL revealRequestSupport=NO);
 NSNumber* wordWorkspaceNumberingRevision(NSString* identity);
 void closeWordWorkspaceIdentity(NSString* identity);
 std::uint32_t wordDocumentRequestWatch();
-std::int32_t takeWordDocumentRequest();
+std::int32_t takeWordDocumentRequest(BOOL revealOnly=NO);
 NSDictionary* wordDocumentRequestEnvelope(std::int32_t token);
 BOOL beginWordDocumentRequest(std::int32_t token);
 BOOL wordDocumentRequestIsCurrent(std::int32_t token);

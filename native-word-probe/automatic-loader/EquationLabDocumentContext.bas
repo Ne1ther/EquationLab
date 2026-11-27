@@ -32,6 +32,7 @@ Private mKnownDocuments As Collection
 Private mKnownDocumentIds As Collection
 Private mBoundDocuments As Collection
 Private mBoundRanges As Collection
+Private mBoundShapes As Collection
 Private mBoundTokens As Collection
 Private mNumberedSaveDocument As Document
 Private mNumberedSaveSnapshot As Long
@@ -42,6 +43,9 @@ Private mNumberedSaveShapes As Long
 Private mInsertionDocument As Document
 Private mInsertionRange As Range
 Private mInsertionToken As Long
+Private mInsertionCompletionToken As Long
+Private mInsertionCompletionCommand As String
+Private mInsertionCompletionAttempts As Long
 Private mInsertionLeadingParagraph As Boolean
 Private mRequestedInsertionAfter As Range
 Private mRequestedInsertionIndex As Long
@@ -189,7 +193,7 @@ Private Sub PublishDocumentWorkspace(ByVal Doc As Document, ByVal identity As Lo
     Dim documentIdentity As Long, candidate As Document, documentName As String, readOnly As String
     If identity <= 0 Then Exit Sub
     If Application.Documents.Count > 128 Then Exit Sub
-    content = "ELWORK3" & vbLf & CStr(identity) & vbLf & CStr(Application.Documents.Count) & vbLf
+    content = "ELWORK4" & vbLf & CStr(identity) & vbLf & CStr(Application.Documents.Count) & vbLf
     For Each candidate In Application.Documents
         documentIdentity = EnsureKnownDocumentIdentity(candidate)
         If documentIdentity <= 0 Then Exit Sub
@@ -203,6 +207,12 @@ Private Sub PublishDocumentWorkspace(ByVal Doc As Document, ByVal identity As Lo
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     ELWriteUtf8 directory & "/.EquationLab/active-document.txt", content
     result = EquationLabNativeCommand("MathTypeBridgePublishWordWorkspace")
+    If result <> 0 Then
+        ' A helper from an older installation still understands the same
+        ' numbering metadata without advertising the reveal capability.
+        ELWriteUtf8 directory & "/.EquationLab/active-document.txt", "ELWORK3" & Mid$(content, 8)
+        result = EquationLabNativeCommand("MathTypeBridgePublishWordWorkspace")
+    End If
     If result = 0 Then
         mPublishedIdentity = identity
         mPublishedName = ELWorkspaceSafeName(Doc.Name)
@@ -234,27 +244,31 @@ Private Sub RememberSnapshot(ByVal anchors As Collection)
     If mBoundDocuments Is Nothing Then
         Set mBoundDocuments = New Collection
         Set mBoundRanges = New Collection
+        Set mBoundShapes = New Collection
         Set mBoundTokens = New Collection
     End If
     If anchors Is Nothing Then Err.Raise vbObjectError + 7381, "Equation Lab", "Missing equation anchors."
     If anchors.Count <> mEquations.Count Then Err.Raise vbObjectError + 7381, "Equation Lab", "Equation anchors no longer match."
-    RememberDocumentRanges mDocument, mSnapshotToken, anchors
+    RememberDocumentRanges mDocument, mSnapshotToken, anchors, mEquations
 End Sub
 
-Private Sub RememberDocumentRanges(ByVal Doc As Document, ByVal snapshotToken As Long, ByVal anchors As Collection)
+Private Sub RememberDocumentRanges(ByVal Doc As Document, ByVal snapshotToken As Long, ByVal anchors As Collection, ByVal shapes As Collection)
     If mBoundDocuments Is Nothing Then
         Set mBoundDocuments = New Collection
         Set mBoundRanges = New Collection
+        Set mBoundShapes = New Collection
         Set mBoundTokens = New Collection
     End If
     mBoundDocuments.Add Doc, CStr(snapshotToken)
     mBoundRanges.Add anchors, CStr(snapshotToken)
+    mBoundShapes.Add shapes, CStr(snapshotToken)
     mBoundTokens.Add snapshotToken
     ' Keep only live Range anchors for recent editing sessions. An evicted or
     ' deleted anchor fails rather than falling back to ActiveDocument.
     If mBoundDocuments.Count > 32 Then
         mBoundDocuments.Remove 1
         mBoundRanges.Remove 1
+        mBoundShapes.Remove 1
         mBoundTokens.Remove 1
     End If
 End Sub
@@ -292,6 +306,7 @@ Public Sub ELCloseDocumentContext(ByVal Doc As Document)
             If Doc Is mBoundDocuments(i) Then
                 mBoundDocuments.Remove i
                 mBoundRanges.Remove i
+                mBoundShapes.Remove i
                 mBoundTokens.Remove i
             End If
         Next
@@ -946,8 +961,11 @@ Private Sub ClearInsertion()
     Set mInsertionDocument = Nothing
     Set mInsertionRange = Nothing
     Set mInsertionAfter = Nothing
+    mInsertionAfterIndex = -1
     mInsertionAfterXml = ""
     mInsertionIdentity = 0
+    mInsertionCount = 0
+    mInsertionEnd = 0
     mInsertionSaved = False
     mInsertionFullName = ""
     mInsertionText = ""
@@ -1011,6 +1029,12 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
         Err.Raise vbObjectError + 7358, "Equation Lab", "Please finish or cancel the current equation first."
     End If
     On Error GoTo Failed
+    Dim completionSupport As Long
+    On Error Resume Next
+    completionSupport = EquationLabNativeCommand("MathTypeBridgeInsertionCompletionSupport")
+    Err.Clear
+    On Error GoTo Failed
+    If completionSupport <> 1 Then Err.Raise vbObjectError + 7364, "Equation Lab", "Update the Equation Lab Word add-in before inserting an equation."
     If Selection.Start <> Selection.End Or Selection.Range.StoryType <> wdMainTextStory Then
         Err.Raise vbObjectError + 7359, "Equation Lab", "Please place an empty cursor in the document body."
     End If
@@ -1038,7 +1062,7 @@ Public Sub ELBeginEquationInsertion(ByVal kind As String, Optional ByVal leading
         Set anchor = shape.Range.Duplicate
         insertionAnchors.Add anchor
     Next
-    RememberDocumentRanges mInsertionDocument, mInsertionToken, insertionAnchors
+    RememberDocumentRanges mInsertionDocument, mInsertionToken, insertionAnchors, insertionEquations
     mInsertionCount = insertionEquations.Count
     mInsertionEnd = mInsertionDocument.Content.End
     directory = Options.DefaultFilePath(wdStartupPath)
@@ -1108,12 +1132,12 @@ End Function
 
 Private Sub ApplyInsertion(ByVal token As Long)
     On Error GoTo Failed
-    Dim Doc As Document, candidate As Document, isOpen As Boolean, result As Long
+    Dim Doc As Document, candidate As Document, isOpen As Boolean
     Dim start As Long, beforeEnd As Long, target As Range, insertedRange As Range
     Dim existingFragmentBookmark As Range, hadFragmentBookmark As Boolean
     Dim advanceCursor As Boolean
     Dim inlineMode As Long, mutationAttempted As Boolean, mutationCompleted As Boolean
-    Dim cleanupFailed As Boolean, numberUpdateFailed As Boolean, finishAttempted As Boolean
+    Dim cleanupFailed As Boolean, numberUpdateFailed As Boolean
     Dim failureNumber As Long, failureDescription As String
     Dim transaction As Collection, recovery As String
     Dim numberFormat As String, codeUnit As Long, insertionFileName As String
@@ -1215,11 +1239,7 @@ Private Sub ApplyInsertion(ByVal token As Long)
     EquationLabRibbon.ELCommitNumberingTransaction transaction: Set transaction = Nothing
     ' Completion does not select or activate the new OLE object. Its content
     ' has already been edited; opening it again causes focus and sizing-frame races.
-    On Error Resume Next
-    finishAttempted = True
-    result = EquationLabNativeCommand("MathTypeBridgeFinishInsertion")
-    Err.Clear
-    On Error GoTo Failed
+    ELQueueInsertionCompletion token, "MathTypeBridgeFinishInsertionV2"
     GoTo Finished
 Failed:
     failureNumber = Err.Number
@@ -1228,31 +1248,63 @@ Failed:
         recovery = EquationLabRibbon.ELTransactionRecoveryMessage(Doc, transaction)
         Set transaction = Nothing
         If recovery = "" Then mutationAttempted = False: mutationCompleted = False
+    ElseIf failureNumber = vbObjectError + 7381 Then
+        ' Opening our undo record failed after a Word mutation may have run.
+        mutationAttempted = True
     End If
     On Error Resume Next
     If recovery <> "" Then
         ELInvalidateDocumentSnapshot
-        result = EquationLabNativeCommand("MathTypeBridgeUncertainInsertion")
+        ELQueueInsertionCompletion token, "MathTypeBridgeUncertainInsertionV2"
         MsgBox failureDescription & " " & recovery, vbExclamation, "Equation Lab"
     ElseIf mutationCompleted Then
         ELInvalidateDocumentSnapshot
-        If Not finishAttempted Then
-            finishAttempted = True
-            result = EquationLabNativeCommand("MathTypeBridgeFinishInsertion")
-        End If
+        ELQueueInsertionCompletion token, "MathTypeBridgeFinishInsertionV2"
         MsgBox "The equation was inserted, but Word's paragraph layout could not be confirmed. Check the paragraph layout in Word.", vbExclamation, "Equation Lab"
     ElseIf mutationAttempted Then
         ELInvalidateDocumentSnapshot
-        result = EquationLabNativeCommand("MathTypeBridgeUncertainInsertion")
+        ELQueueInsertionCompletion token, "MathTypeBridgeUncertainInsertionV2"
         MsgBox "Word may have inserted the equation. Check the document; Equation Lab will not automatically repeat this insertion.", vbExclamation, "Equation Lab"
     Else
-        result = EquationLabNativeCommand("MathTypeBridgeFailInsertion")
+        ELQueueInsertionCompletion token, "MathTypeBridgeFailInsertionV2"
         If failureDescription <> "" Then MsgBox failureDescription, vbExclamation, "Equation Lab"
     End If
     Debug.Print "Equation Lab insertion error: "; failureNumber; failureDescription
     Err.Clear
 Finished:
     ClearInsertion
+End Sub
+
+Private Sub ELQueueInsertionCompletion(ByVal token As Long, ByVal command As String)
+    mInsertionCompletionToken = token
+    mInsertionCompletionCommand = command
+    mInsertionCompletionAttempts = 0
+    ELRetryInsertionCompletion
+End Sub
+
+Private Sub ELRetryInsertionCompletion()
+    Const MaximumAttempts As Long = 3
+    Dim result As Long, failureNumber As Long
+    If mInsertionCompletionToken <= 0 Then Exit Sub
+    mInsertionCompletionAttempts = mInsertionCompletionAttempts + 1
+    On Error Resume Next
+    Err.Clear
+    result = EquationLabNativeCommand(mInsertionCompletionCommand, mInsertionCompletionToken)
+    failureNumber = Err.Number
+    Err.Clear
+    On Error GoTo 0
+    If failureNumber <> 0 Or result <> 0 Then Debug.Print "Equation Lab insertion completion attempt="; mInsertionCompletionAttempts; "; result="; result; "; VBA error="; failureNumber
+    ' Native can report an obsolete token if the first call already completed
+    ' or a cleanup deadline retired the claim. The document was handled once.
+    If (failureNumber = 0 And (result = 0 Or result = 1)) Or mInsertionCompletionAttempts >= MaximumAttempts Then
+        mInsertionCompletionToken = 0
+        mInsertionCompletionCommand = ""
+        mInsertionCompletionAttempts = 0
+        Exit Sub
+    End If
+    On Error Resume Next
+    SchedulePoll
+    Err.Clear
 End Sub
 
 Private Sub ELAdvanceInsertionCursor(ByVal Doc As Document, ByVal inserted As Range)
@@ -1271,11 +1323,17 @@ Public Sub ELPollNavigation()
     On Error GoTo Failed
     mPollScheduled = False
     ELReconcileKnownDocuments
-    Dim insertionToken As Long, workspaceRefreshResult As Long
+    ELRetryInsertionCompletion
+    Dim insertionToken As Long, insertionError As Long, workspaceRefreshResult As Long
     insertionToken = EquationLabNativeCommand("MathTypeBridgeTakeInsertionV2")
     If mWorkspaceRefreshRecheck Then
+        ' Workspace publication is optional. Once taken, the fragment must
+        ' reach ApplyInsertion even if this independent command raises.
+        On Error Resume Next
         mWorkspaceRefreshRecheck = False
         workspaceRefreshResult = EquationLabNativeCommand("MathTypeBridgeQueueWorkspaceRefresh")
+        Err.Clear
+        On Error GoTo Failed
     End If
     If insertionToken > 0 Then
         ApplyInsertion insertionToken
@@ -1295,13 +1353,32 @@ Public Sub ELPollNavigation()
     End If
     If mInsertionToken > 0 Then
         ClearInsertion
-        If EquationLabNativeCommand("MathTypeBridgeInsertionError") <> 0 Then MsgBox "Equation Lab could not complete this insertion. The document was not changed.", vbExclamation, "Equation Lab"
+        insertionError = EquationLabNativeCommand("MathTypeBridgeInsertionError")
+        If insertionError = 7 Then
+            Debug.Print "Equation Lab insertion outcome unconfirmed"
+            MsgBox "Equation Lab could not confirm the insertion. Check the document before trying again.", vbExclamation, "Equation Lab"
+        ElseIf insertionError <> 0 Then
+            Debug.Print "Equation Lab insertion stopped before applying the fragment; native error="; insertionError
+            MsgBox "Equation Lab could not complete this insertion. The document was not changed." & vbCrLf & "Bridge error: " & CStr(insertionError) & ". You can try inserting again.", vbExclamation, "Equation Lab"
+        End If
     End If
     Dim saveToken As Long
     saveToken = EquationLabNativeCommand("MathTypeBridgeTakeBackgroundSave")
     If saveToken > 0 Then
         ApplyBackgroundSave saveToken
         ELWatchNativeSession
+        Exit Sub
+    End If
+    Dim revealToken As Long
+    ' Yield between document capture chunks for an explicit navigation. Older
+    ' helpers never claim a reveal and need no change to ordinary polling.
+    On Error Resume Next
+    revealToken = EquationLabNativeCommand("MathTypeBridgeTakeWordRevealRequest")
+    Err.Clear
+    On Error GoTo Failed
+    If revealToken > 0 Then
+        ApplyWordDocumentRequest revealToken
+        SchedulePoll
         Exit Sub
     End If
     If mChunkToken > 0 Then
@@ -1412,6 +1489,7 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     Dim digest As String, separator As Long, Doc As Document, candidate As Document, anchors As Collection, anchor As Range, shape As InlineShape
     Dim isOpen As Boolean, result As Long, insertionMode As String, insertionKind As String, insertionCall As Boolean
     Dim insertionPoint As Range, paragraphRange As Range, needsParagraph As Boolean
+    Dim reveal As Boolean
     directory = Options.DefaultFilePath(wdStartupPath)
     Do While Right$(directory, 1) = "/": directory = Left$(directory, Len(directory) - 1): Loop
     path = directory & "/.EquationLab/native-document-request.txt"
@@ -1421,6 +1499,7 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
     If Len(content) = 0 Then GoTo Failed
     Get #fileNumber, , content
     Close #fileNumber
+    fileNumber = 0
     fields = Split(content, vbLf)
     If fields(0) = "ELDREQ3" Then
         If UBound(fields) <> 9 Or fields(9) <> "" Then GoTo Failed
@@ -1433,6 +1512,9 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
             Case Else: GoTo Failed
         End Select
         If fields(3) <> "1" And fields(3) <> "2" Then GoTo Failed
+    ElseIf fields(0) = "ELDREQ4" Then
+        If UBound(fields) <> 8 Or fields(3) <> "1" Or fields(8) <> "" Then GoTo Failed
+        reveal = True
     ElseIf UBound(fields) <> 8 Or fields(0) <> "ELDREQ2" Or fields(8) <> "" Then
         GoTo Failed
     End If
@@ -1507,6 +1589,10 @@ Private Sub ApplyWordDocumentRequest(ByVal requestToken As Long)
         If Not ELIsUnsignedInteger(Mid$(identity, separator + 1)) Then GoTo Failed
         identityToken = CLng(Mid$(identity, separator + 1))
         If identityToken <= 0 Then GoTo Failed
+        If reveal Then
+            ApplyWordReveal identityToken, snapshot, targetIndex + 1
+            Exit Sub
+        End If
         stage = "find-document"
         If insertionMode = "" And snapshot = mNumberedSaveSnapshot And targetIndex + 1 = mNumberedSaveIndex Then
             Set Doc = mNumberedSaveDocument
@@ -1597,6 +1683,83 @@ Failed:
     Else
         ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestFailed"
     End If
+End Sub
+
+Private Sub ApplyWordReveal(ByVal identity As Long, ByVal snapshot As Long, ByVal index As Long)
+    On Error GoTo Failed
+    Dim Doc As Document, candidate As Document, shape As InlineShape
+    For Each candidate In Application.Documents
+        If KnownDocumentIdentity(candidate) = identity Then
+            Set Doc = candidate
+            Exit For
+        End If
+    Next
+    If Doc Is Nothing Then
+        ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestNoDocument"
+        Exit Sub
+    End If
+    Set shape = ResolveWordRevealEquation(Doc, snapshot, index)
+    If shape Is Nothing Then GoTo Failed
+    If EquationLabNativeCommand("MathTypeBridgeBeginWordDocumentRequest") = 0 Then GoTo Failed
+    ELRevealEquationInWindow Doc, shape.Range.Duplicate
+    ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestRevealed"
+    Exit Sub
+Failed:
+    ELFinishWordDocumentRequest "MathTypeBridgeFinishWordDocumentRequestFailed"
+End Sub
+
+Private Function ResolveWordRevealEquation(ByVal Doc As Document, ByVal snapshot As Long, ByVal index As Long) As InlineShape
+    On Error GoTo Missing
+    Dim bound As Document, anchors As Collection, shapes As Collection, anchor As Range
+    Dim shape As InlineShape, retained As InlineShape, retainedRange As Range
+    If mBoundDocuments Is Nothing Or mBoundRanges Is Nothing Or mBoundShapes Is Nothing Then Exit Function
+    Set bound = mBoundDocuments(CStr(snapshot))
+    If Not (bound Is Doc) Then Exit Function
+    Set anchors = mBoundRanges(CStr(snapshot))
+    Set shapes = mBoundShapes(CStr(snapshot))
+    If index > anchors.Count Or index > shapes.Count Then Exit Function
+    Set anchor = anchors(index)
+    Set retained = shapes(index)
+    Set retainedRange = retained.Range
+    ' A range alone can survive a deletion or replacement. Require the
+    ' retained shape as well as the live range and original ordinal.
+    Set shape = ResolveBoundEquation(Doc, anchor, index, True)
+    If shape Is Nothing Then Exit Function
+    If Not (retainedRange.Document Is Doc) Or Not Supported(retained) Then Exit Function
+    If retainedRange.StoryType <> wdMainTextStory Or retainedRange.InlineShapes.Count <> 1 Then Exit Function
+    If retainedRange.Start <> shape.Range.Start Or retainedRange.End <> shape.Range.End Then Exit Function
+    Set ResolveWordRevealEquation = retained
+Missing:
+End Function
+
+Private Sub ELRevealEquationInWindow(ByVal Doc As Document, ByVal target As Range)
+    On Error GoTo Failed
+    Dim previousWindow As Window, previousSelection As Range, number As Long, description As String
+    Set previousWindow = ActiveWindow
+    ELBeginRibbonNavigation
+    mRibbonNavigationSelecting = True
+    If Not (Doc Is ActiveDocument) Then Doc.Activate
+    If Not (Doc Is ActiveDocument) Then Err.Raise vbObjectError + 7381, "Equation Lab", "Word could not activate the document."
+    Set previousSelection = Selection.Range.Duplicate
+    target.Select
+    If Not (Selection.Document Is Doc) Or Selection.Start <> target.Start Or Selection.End <> target.End Then
+        Err.Raise vbObjectError + 7381, "Equation Lab", "Word could not select the equation."
+    End If
+    ' Range.Select also brings the result into view. ScrollIntoView can be
+    ' unavailable in some views (e.g. Outline), so keep the valid selection.
+    On Error Resume Next
+    ActiveWindow.ScrollIntoView target, True
+    mRibbonNavigationSelecting = False
+    Err.Clear
+    Exit Sub
+Failed:
+    number = Err.Number: description = Err.Description
+    On Error Resume Next
+    If Not previousSelection Is Nothing Then previousSelection.Select
+    If Not previousWindow Is Nothing Then previousWindow.Activate
+    mRibbonNavigationSelecting = False
+    On Error GoTo 0
+    Err.Raise number, "Equation Lab", description
 End Sub
 
 Private Function KnownDocumentIdentity(ByVal Doc As Document) As Long
@@ -2024,7 +2187,7 @@ Private Sub ELContinueDocumentChunks()
     For Each shape In mChunkEquations
         anchors.Add shape.Range.Duplicate
     Next
-    RememberDocumentRanges mChunkDocument, mChunkSnapshot, anchors
+    RememberDocumentRanges mChunkDocument, mChunkSnapshot, anchors, mChunkEquations
     ' This segmented snapshot is intentionally not reusable by an ordinary
     ' selection event; every future activation still gets its own fresh nonce.
     mSnapshotReady = False

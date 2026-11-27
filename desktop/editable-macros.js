@@ -35,6 +35,67 @@
     throw Error('Unclosed editable macro argument');
   }
 
+  // Interchange text uses standard LaTeX. The editor and structured clipboard
+  // retain native embellishments and explicit per-character font bindings.
+  const primeCount = {mtembD:1,mtembE:2,mtembQ:3};
+  const control = /^\\(?:[A-Za-z]+|[^\n])/u;
+  function latexArgument(text, offset) {
+    const start = offset + (text.slice(offset).match(/^\s*/)?.[0].length ?? 0);
+    const group = groupAt(text,start);
+    if (group) return group;
+    const value = text[start] === '\\' ? text.slice(start).match(control)?.[0] : Array.from(text.slice(start, start + 2))[0];
+    return value && !'{}^_&%'.includes(value) ? {value,end:start + value.length} : null;
+  }
+  function publicEquationLatex(text) {
+    if (typeof text !== 'string' || !/\\(?:mtemb[DEQ]|mtstix)(?![A-Za-z])/.test(text)) return text;
+    let result = '', index = 0;
+    while (index < text.length) {
+      if (text[index] === '%') {
+        const end = text.indexOf('\n',index);
+        if (end < 0) return result + text.slice(index);
+        result += text.slice(index,end + 1); index = end + 1; continue;
+      }
+      if (text[index] !== '\\') { result += text[index++]; continue; }
+      const command = text.slice(index).match(control)?.[0] ?? '\\';
+      index += command.length;
+      const name = command.slice(1), count = primeCount[name];
+      if (!Object.hasOwn(primeCount,name) && !['text','textrm','mtstix'].includes(name)) { result += command; continue; }
+      try {
+        const argument = latexArgument(text,index);
+        if (!argument) { result += command; continue; }
+        if (name === 'mtstix') {
+          const style = latexArgument(text,argument.end);
+          const position = style && latexArgument(text,style.end);
+          const glyph = position && latexArgument(text,position.end);
+          if (!glyph) { result += command; continue; }
+          const body = publicEquationLatex(glyph.value);
+          result += body;
+          if (/\\[A-Za-z]+$/.test(body) && /[A-Za-z]/.test(text[glyph.end] ?? '')) result += ' ';
+          index = glyph.end;
+          continue;
+        }
+        if (!count) { result += command + text.slice(index,argument.end); index = argument.end; continue; }
+        const body = publicEquationLatex(argument.value).trim();
+        const base = /^(?:[\p{L}\p{N}]|\\[A-Za-z]+)$/u.test(body) ? body : `{${body}}`;
+        let end = argument.end, lower = null, upper = null;
+        for (let slot = 0; slot < 2; slot++) {
+          const token = text.slice(end).match(/^\s*([_^])/);
+          if (!token || (token[1] === '_' ? lower : upper)) break;
+          const script = latexArgument(text,end + token[0].length);
+          if (!script) break;
+          if (token[1] === '_') lower = script; else upper = script;
+          end = script.end;
+        }
+        const sub = lower ? `_{${publicEquationLatex(lower.value)}}` : '';
+        const replacement = upper ? `${base}${sub}^{${'\\prime '.repeat(count)}${publicEquationLatex(upper.value)}}` : base + "'".repeat(count) + sub;
+        result += /[\^_]\s*$/.test(result) ? `{${replacement}}` : replacement;
+        index = end;
+      } catch { result += command; }
+    }
+    return result;
+  }
+  host.publicEquationLatex = publicEquationLatex;
+
   function originalArguments(text, count) {
     const values = []; let index = 0;
     for (let arg = 0; arg < count; arg++) {

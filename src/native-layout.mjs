@@ -9,6 +9,7 @@ import {SVGmrow} from 'mathjax-full/js/output/svg/Wrappers/mrow.js';
 import {SVGmo} from 'mathjax-full/js/output/svg/Wrappers/mo.js';
 import {nativeDimension32} from './native-dimensions.mjs';
 import {radicalContour} from './radical-contour.mjs';
+import {outlineLetterClearance} from './outline-clearance.mjs';
 import {readFileSync} from 'node:fs';
 const {tables}=JSON.parse(readFileSync(new URL('./native-spacing-tables.json',import.meta.url)));
 const {jstat,integralOverlays,jointGeometry}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
@@ -16,6 +17,7 @@ const text=n=>n.getText?.()??n.childNodes?.map(text).join('')??'';
 function nativeRatio(n){const own=n.getProperty?.('equationNativeSize')??n.getProperty?.('elNativeBoxRatio');if(own)return own;for(const child of n.childNodes??[]){const r=nativeRatio(child);if(r)return r;}return 1;}
 function tokenClass(node){
  const kind=node.kind,value=text(node);
+ if(node.getProperty('elNativePrime'))return tokenClass(node.childNodes[0]);
  if(['msup','msub','msubsup','mmultiscripts'].includes(kind))return tokenClass(node.childNodes[0]);
  if(['mfrac','msqrt','mroot','mtable','menclose'].includes(kind))return 10;
  if(['munderover','mover','munder'].includes(kind)){if(node.attributes.get('accent')||node.attributes.get('accentunder'))return tokenClass(node.childNodes[0]);return 4;}
@@ -41,15 +43,25 @@ export function createNativeLayout(prefs,full,nativeFaces){
  // Function Full probes include style: Variable Italic often appears first
  // with the same family and must not replace Function Regular metrics.
  const functionStyle=prefs?.styles[1],functionFace=nativeFaces.find(f=>f.font===functionStyle?.font&&f.style===functionStyle?.style);
- const boundaryGap=(a,b,ratio)=>{
+ const boundaryGap=(a,b,ratio,spacing)=>{
   if(!a||!b)return 0;
-  const ef=tables[ratio<.9?1:0]?.[a-1]?.[b-1]??1,coefficient={2:16,3:22,4:27,5:100,6:200,7:8}[ef];if(!coefficient)return 0;
+  const ef=spacing??tables[ratio<.9?1:0]?.[a-1]?.[b-1]??1,coefficient={2:16,3:22,4:27,5:100,6:200,7:8}[ef];if(!coefficient)return 0;
   const baseAdvance=(functionFace?.glyphs?.[32]?.advance??250)*full32/1000;
   const advance=Math.trunc(baseAdvance*Math.trunc(full32*ratio)/full32),scaled=Math.trunc(advance*coefficient*4/100),factor=G([a,b].some(c=>c===5||c===6)?16:17)??3200;
   return Q((Math.trunc(factor*scaled/100)>>5)/(32*full));
  };
  const metric=functionFace?.metrics??nativeFaces[0]?.metrics;
  const M0=(metric?.ascent??750)/1000,M1=(metric?.descent??250)/1000;
+ const glyphMetrics=node=>{
+  if(!node?.getProperty?.('equationNativeSize'))return null;
+  const variant=node.attributes?.get('mathvariant');
+  if(!variant)return null;
+  return nativeFaces[Number(variant.slice(2))]?.glyphs[text(node).codePointAt(0)];
+ };
+ function baseGlyph(node){
+  while(node?.getProperty('elNativePrime')||node?.childNodes?.length===1&&!node.getProperty('equationNativeSize'))node=node.childNodes[0];
+  return node;
+ }
  const factory=new SVGWrapperFactory();
  if(!prefs)return {factory,postFilter:()=>{},spacing:null};
  class NativeOperator extends SVGmo{
@@ -169,6 +181,17 @@ export function createNativeLayout(prefs,full,nativeFaces){
   if(type===3||type===4)return find(wrapper,type)??0;return 0;
  }
  class RulerRow extends SVGmrow{
+  primeGeometry(){
+   const [base,mark]=this.childNodes.map(child=>child.getOuterBBox()),ratio=nativeRatio(this.node);
+   // The original 12 pt Symbol prime in Identity′ starts 5.625 pt right
+   // and 0.6875 pt above the italic y origin. Keep the base advance/ink
+   // shoulder and scale that clearance, while honoring PrimeHeight changes.
+   const shoulder=.025*ratio,referenceLift=22/384,referencePrimeHeight=.45;
+   const x=base.w*base.rscale+shoulder;
+   const y=referenceLift*ratio+((P(24,ratio)??referencePrimeHeight*ratio)-referencePrimeHeight*ratio)
+    +Math.max(0,base.h*base.rscale-(metric?.xHeight??447)/1000*ratio);
+   return {base,mark,x,y};
+  }
   barGeometry(){const bar=this.node.getProperty('elNativeBar');if(!bar)return null;const box=this.childNodes[0].getOuterBBox(),r=nativeRatio(this.node),t=Math.max(0,P(12,r)??.04),gap=P(23,r)??0;return {...bar,box,t,gap};}
   drawBar(parent,p){const svg=this.standardSVGnode(parent),base=this.childNodes[0];base.toSVG(svg);base.place(0,0);for(let i=0;i<p.count;i++)this.adaptor.append(svg,this.svg('rect',{x:0,y:this.fixed(p.under?-p.box.d*p.box.rscale-p.gap-p.t-i*3*p.t:p.box.h*p.box.rscale+p.gap+i*3*p.t),width:this.fixed(p.box.w*p.box.rscale),height:this.fixed(p.t)}));}
 
@@ -204,14 +227,25 @@ export function createNativeLayout(prefs,full,nativeFaces){
 
   whiteGeometry(){const flags=this.node.getProperty('elWhiteFence');if(!flags)return null;const box=this.childNodes[0].getOuterBBox(),r=nativeRatio(this.node),w=(this.font.getChar('normal',0x5b)?.[2]??.278)*r,over=P(15,r)??0;return {flags,box,w,top:box.h*box.rscale+over,bottom:-box.d*box.rscale-over,t:Math.max(0,P(12,r)??.04)};}
   positions(){const tabs=this.node.getProperty('elRuler');if(!tabs)return null;let current=0;const result=[];for(let i=0;i<this.childNodes.length;i++){const child=this.childNodes[i],box=child.getOuterBBox();let x=current;if(i){const tab=tabs.positions.findIndex(p=>p>current*full*32+1e-7),position=tab<0?(Math.trunc(current*full*32/1152)+1)*1152:tabs.positions[tab],type=tab<0?0:tabs.types[tab];x=position/(32*full)-anchor(child,type);}result.push(x);current=Math.max(current,x+(box.L+box.w+box.R)*box.rscale);}return result;}
-  computeBBox(bbox,recompute){const bar=this.barGeometry();if(bar){bbox.empty();bbox.append(bar.box);if(bar.under)bbox.d+=bar.gap+bar.t+(bar.count-1)*3*bar.t;else bbox.h+=bar.gap+bar.t+(bar.count-1)*3*bar.t;bbox.clean();this.setChildPWidths(recompute);return;}const integral=this.integralGeometry();if(integral){bbox.empty();for(const[child,x,y,visible,,custom]of integral.items)if(visible)bbox.combine(custom??child.getOuterBBox(),x,y);if(integral.overlay){bbox.h=Math.max(bbox.h,integral.overlayY+integral.overlay.bounds[3]*integral.r/1000);bbox.d=Math.max(bbox.d,-integral.overlayY-integral.overlay.bounds[1]*integral.r/1000);}bbox.clean();this.setChildPWidths(recompute);return;}const joint=this.jstatGeometry();if(joint){bbox.h=joint.h;bbox.d=joint.box.d*joint.box.rscale;bbox.w=joint.w;this.setChildPWidths(recompute);return;}const double=this.doubleGeometry();if(double){bbox.empty();for(const [child,x,y,visible]of double.items)if(visible)bbox.combine(child.getOuterBBox(),x,y);bbox.w=double.w;bbox.clean();this.setChildPWidths(recompute);return;}const white=this.whiteGeometry();if(white){bbox.h=white.top;bbox.d=-white.bottom;bbox.w=white.box.w*white.box.rscale+((white.flags&1?1:0)+(white.flags&2?1:0))*white.w;this.setChildPWidths(recompute);return;}const positions=this.positions();if(!positions)return super.computeBBox(bbox,recompute);bbox.empty();this.childNodes.forEach((child,i)=>bbox.combine(child.getOuterBBox(),positions[i],0));bbox.clean();this.setChildPWidths(recompute);}
-  toSVG(parent){const bar=this.barGeometry();if(bar)return this.drawBar(parent,bar);const integral=this.integralGeometry();if(integral)return this.drawIntegral(parent,integral);const joint=this.jstatGeometry();if(joint)return this.drawJstat(parent,joint);const double=this.doubleGeometry();if(double){const svg=this.standardSVGnode(parent);for(const [child,x,y,visible]of double.items)if(visible){child.toSVG(svg);child.place(x,y);}return;}const white=this.whiteGeometry();if(white){const svg=this.standardSVGnode(parent),base=this.childNodes[0],left=white.flags&1?white.w:0;base.toSVG(svg);base.place(left,0);const draw=(x,sign)=>{const t=white.t,top=white.top,bottom=white.bottom,w=white.w;for(const dx of [0,w/3])this.adaptor.append(svg,this.svg('rect',{x:this.fixed(x+sign*dx-(sign<0?t:0)),y:this.fixed(bottom),width:this.fixed(t),height:this.fixed(top-bottom)}));for(const y of [top-t,bottom])this.adaptor.append(svg,this.svg('rect',{x:this.fixed(sign>0?x:x-w+t),y:this.fixed(y),width:this.fixed(w),height:this.fixed(t)}));};if(white.flags&1)draw(0,1);if(white.flags&2)draw(left+white.box.w*white.box.rscale+white.w-white.t,-1);return;}const positions=this.positions();if(!positions)return super.toSVG(parent);const svg=this.standardSVGnode(parent);this.childNodes.forEach((child,i)=>{child.toSVG(svg);child.place(positions[i],0);});}
+  computeBBox(bbox,recompute){
+   if(this.node.getProperty('elNativePrime')){
+    const {base,mark,x,y}=this.primeGeometry();bbox.empty();bbox.combine(base,0,0);bbox.combine(mark,x,y);bbox.clean();this.setChildPWidths(recompute);return;
+   }
+   const bar=this.barGeometry();if(bar){bbox.empty();bbox.append(bar.box);if(bar.under)bbox.d+=bar.gap+bar.t+(bar.count-1)*3*bar.t;else bbox.h+=bar.gap+bar.t+(bar.count-1)*3*bar.t;bbox.clean();this.setChildPWidths(recompute);return;}const integral=this.integralGeometry();if(integral){bbox.empty();for(const[child,x,y,visible,,custom]of integral.items)if(visible)bbox.combine(custom??child.getOuterBBox(),x,y);if(integral.overlay){bbox.h=Math.max(bbox.h,integral.overlayY+integral.overlay.bounds[3]*integral.r/1000);bbox.d=Math.max(bbox.d,-integral.overlayY-integral.overlay.bounds[1]*integral.r/1000);}bbox.clean();this.setChildPWidths(recompute);return;}const joint=this.jstatGeometry();if(joint){bbox.h=joint.h;bbox.d=joint.box.d*joint.box.rscale;bbox.w=joint.w;this.setChildPWidths(recompute);return;}const double=this.doubleGeometry();if(double){bbox.empty();for(const [child,x,y,visible]of double.items)if(visible)bbox.combine(child.getOuterBBox(),x,y);bbox.w=double.w;bbox.clean();this.setChildPWidths(recompute);return;}const white=this.whiteGeometry();if(white){bbox.h=white.top;bbox.d=-white.bottom;bbox.w=white.box.w*white.box.rscale+((white.flags&1?1:0)+(white.flags&2?1:0))*white.w;this.setChildPWidths(recompute);return;}const positions=this.positions();if(!positions)return super.computeBBox(bbox,recompute);bbox.empty();this.childNodes.forEach((child,i)=>bbox.combine(child.getOuterBBox(),positions[i],0));bbox.clean();this.setChildPWidths(recompute);
+  }
+  toSVG(parent){
+   if(this.node.getProperty('elNativePrime')){
+    const {x,y}=this.primeGeometry(),svg=this.standardSVGnode(parent),[base,mark]=this.childNodes;
+    base.toSVG(svg);base.place(0,0);mark.toSVG(svg);mark.place(x,y);return;
+   }
+   const bar=this.barGeometry();if(bar)return this.drawBar(parent,bar);const integral=this.integralGeometry();if(integral)return this.drawIntegral(parent,integral);const joint=this.jstatGeometry();if(joint)return this.drawJstat(parent,joint);const double=this.doubleGeometry();if(double){const svg=this.standardSVGnode(parent);for(const [child,x,y,visible]of double.items)if(visible){child.toSVG(svg);child.place(x,y);}return;}const white=this.whiteGeometry();if(white){const svg=this.standardSVGnode(parent),base=this.childNodes[0],left=white.flags&1?white.w:0;base.toSVG(svg);base.place(left,0);const draw=(x,sign)=>{const t=white.t,top=white.top,bottom=white.bottom,w=white.w;for(const dx of [0,w/3])this.adaptor.append(svg,this.svg('rect',{x:this.fixed(x+sign*dx-(sign<0?t:0)),y:this.fixed(bottom),width:this.fixed(t),height:this.fixed(top-bottom)}));for(const y of [top-t,bottom])this.adaptor.append(svg,this.svg('rect',{x:this.fixed(sign>0?x:x-w+t),y:this.fixed(y),width:this.fixed(w),height:this.fixed(t)}));};if(white.flags&1)draw(0,1);if(white.flags&2)draw(left+white.box.w*white.box.rscale+white.w-white.t,-1);return;}const positions=this.positions();if(!positions)return super.toSVG(parent);const svg=this.standardSVGnode(parent);this.childNodes.forEach((child,i)=>{child.toSVG(svg);child.place(positions[i],0);});
+  }
  }
  factory.setNodeClass('mfrac',Fraction);factory.setNodeClass('msqrt',rootClass(SVGmsqrt));factory.setNodeClass('mroot',rootClass(SVGmroot));factory.setNodeClass('mtable',Table);factory.setNodeClass('msub',scriptClass(SVGmsub));factory.setNodeClass('msup',scriptClass(SVGmsup));factory.setNodeClass('msubsup',scriptClass(SVGmsubsup));
  factory.setNodeClass('mover',markClass(SVGmover));factory.setNodeClass('munder',markClass(SVGmunder));factory.setNodeClass('munderover',markClass(SVGmunderover));
  factory.setNodeClass('mrow',RulerRow);
  // Native boundary spacing is supplied for every atom, not only MathML mo.
- for(const kind of factory.getKinds()){const Base=factory.getNodeClass(kind);factory.setNodeClass(kind,class extends Base{getSpace(){const gap=this.node.getProperty('elGap');if(gap===undefined)super.getSpace();else {this.bbox.L=gap;this.bbox.R=0;}} computeBBox(bbox,recompute){super.computeBBox(bbox,recompute);bbox.w+=this.node.getProperty('elCharWidth')??0;}});}
+ for(const kind of factory.getKinds()){const Base=factory.getNodeClass(kind);factory.setNodeClass(kind,class extends Base{getSpace(){const gap=this.node.getProperty('elGap');if(gap===undefined)super.getSpace();else {this.bbox.L=gap;this.bbox.R=0;}} computeBBox(bbox,recompute){super.computeBBox(bbox,recompute);bbox.w+=this.node.getProperty('elCharWidth')??0;const clearance=this.node.getProperty('elLetterClearance');if(clearance!==undefined)bbox.w+=clearance-bbox.ic;}});}
  const postFilter=({data})=>{
   data.root.walkTree(node=>{
    if(node.kind==='mo'){node.attributes.set('lspace','0em');node.attributes.set('rspace','0em');if(node.attributes.get('fence')){node.attributes.set('minsize',(100+2*(P(15)??0)*100)+'%');}}
@@ -221,7 +255,25 @@ export function createNativeLayout(prefs,full,nativeFaces){
    if(node.kind==='mrow'||node.kind==='inferredMrow'){
     const children=node.childNodes.filter(c=>c.kind!=='mspace'),classes=children.map(tokenClass);
     for(let i=0;i<classes.length;i++)if(classes[i]===5&&(!i||[4,5,6,7,9].includes(classes[i-1])||[6,8,9].includes(classes[i+1])))classes[i]=4;
-    children.forEach((child,i)=>{const gap=i?boundaryGap(classes[i-1],classes[i],nativeRatio(child)):0;
+    children.forEach((child,i)=>{
+     const ratio=nativeRatio(child),previous=children[i-1],previousGlyph=glyphMetrics(previous);
+     let gap=i?boundaryGap(classes[i-1],classes[i],ratio):0;
+     if(ratio>=.9&&classes[i]===1&&text(previous??{})==='='&&previousGlyph&&glyphMetrics(child)){
+      // WMF draws equals-to-number with the smaller clearance measured
+      // from the relation ink. Preserve operator spacing preferences.
+      const trailingBearing=Math.max(0,previousGlyph.advance-previousGlyph.right)/1000*nativeRatio(previous);
+      gap=Math.max(0,boundaryGap(6,1,ratio,2)-trailingBearing);
+     }
+     const next=children[i+1],nextLetter=next?.getProperty('elNativePrime')?baseGlyph(next):next;
+     // Consecutive same-face letters step by the glyph advance. The TeX
+     // italic correction is still useful for a letter carrying a script.
+     const glyph=glyphMetrics(child),nextGlyph=glyphMetrics(nextLetter);
+     const variant=glyph&&child.attributes.get('mathvariant');
+     if(classes[i]===2&&classes[i+1]===2&&glyph&&nextGlyph&&ratio===nativeRatio(nextLetter)&&variant===nextLetter.attributes.get('mathvariant')){
+      const widthAdjustment=P(18,ratio)??0,gapAfter=boundaryGap(2,2,ratio);
+      const advance=glyph.advance+1000*(gapAfter+widthAdjustment)/ratio;
+      child.setProperty('elLetterClearance',outlineLetterClearance(glyph,nextGlyph,advance)/1000);
+     }
      child.setProperty('elGap',gap);const width=P(18,nativeRatio(child));if(width&&child.getProperty('equationNativeSize'))child.setProperty('elCharWidth',width);
     });
    }

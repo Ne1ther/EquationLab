@@ -59,10 +59,13 @@
   for(const row of document.querySelectorAll('.preference-dimension')){if(row.querySelector('input').disabled)continue;({sizes,spaces,extraSizes})[row.dataset.kind][row.dataset.id]={unit:row.querySelector('select').value,value:row.querySelector('input').value};}
   return {styles,sizes,spaces,extraSizes};
  }
- function load(profile,preset=null){render(profile,preset);original=snapshot();}
+ function load(profile,preset=null){render(profile,preset);original=base?snapshot():null;}
  window.desktopTypographyLoad=profile=>load(profile);
  window.desktopTypographySnapshot=()=>base?snapshot():null;
- window.desktopTypographyRestorePatch=patch=>{if(base)load(base,patch);};
+ // Export compares with the native profile. Dirty state compares with what
+ // the editor actually loaded, including any inherited app or Word preset.
+ window.desktopTypographyChanged=()=>!!base&&JSON.stringify(snapshot())!==JSON.stringify(original);
+ window.desktopTypographyRestorePatch=patch=>{if(base)render(base,patch);};
  window.desktopImportPreferences=async()=>{
   const result=await native('preferencesImport');if(!result)return;
   importedText=result.originalText;
@@ -85,7 +88,7 @@
   requestWorkbenchSync();
  });
  window.desktopFontPreview=(svg,stillCurrent)=>swapPreview(svg?'data:image/svg+xml;base64,'+btoa(unescape(encodeURIComponent(svg))):null,stillCurrent);
- window.desktopTypographyNew=()=>{if(factory)load(factory,defaults);};
+ window.desktopTypographyNew=(preset=defaults)=>{if(factory)load(factory,preset);};
  $('desktop-reset-fonts').onclick=()=>{render(base,original);changed();};
  $('desktop-factory-fonts').onclick=()=>perform(async()=>{if(selected)throw Error('请先新建公式；已有公式可恢复其原始设置');if(!factory)throw Error('原厂偏好尚未载入');render(factory);changed();message('当前新公式已恢复原厂 Times+Symbol 12 偏好；已保存的自定义默认未改动。如需以后使用此设置，请再点“设为新公式默认”。');});
  $('desktop-default-fonts').onclick=()=>perform(async()=>{

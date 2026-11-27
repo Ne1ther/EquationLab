@@ -58,9 +58,17 @@ test('The Symbol outline alias does not replace the declared outlines of another
  const source=makeOle('\\ell\\ell'),original=inspectOle(source),native=Buffer.from(original.native);
  const glyphs=characters(original.parsed);assert.equal(glyphs.length,2);assert.ok(glyphs.every(n=>n.typeface<0));
  for(const [i,n]of glyphs.entries())native.writeUInt16LE(0x2329+i,28+n.offset);
- const stix=wrapNative(native,source),before=Buffer.from(stix),preview=await renderNative(stix,{raster:false});
+ const font=original.parsed.records.find(n=>n.type===17&&n.name==='Cambria Math');
+ assert.ok(font);
+ const legacyNative=Buffer.concat([native.subarray(0,28+font.start+2),Buffer.from('STIX Two Math\0'),native.subarray(28+font.end)]);
+ legacyNative.writeUInt32LE(legacyNative.length-28,8);
+ const stix=wrapNative(legacyNative,source),before=Buffer.from(stix),preview=await renderNative(stix,{raster:false});
  assert.match(preview.svg,/data-c="2329"/);assert.match(preview.svg,/data-c="232A"/);assert.doesNotMatch(preview.svg,/data-c="300[89]"/);
- assert.ok(preview.faces.some(face=>face.font==='STIX Two Math'));assert.equal(oleLatex(stix),'\\langle \\rangle ');assert.deepEqual(stix,before);
+ assert.ok(preview.faces.some(face=>face.font==='STIX Two Math'));
+ const latex=oleLatex(stix);assert.match(latex,/\\mtstix\{[^}]+\}\{0\}\{2329\}\{\\langle \}.*\\mtstix\{[^}]+\}\{0\}\{232a\}\{\\rangle \}/);
+ const rebuilt=replaceOleLatex(stix,latex+'+1');
+ assert.deepEqual(characters(inspectOle(rebuilt).parsed).slice(0,2).map(n=>n.code),[0x2329,0x232a]);
+ assert.deepEqual(stix,before);
 });
 
 test('DOCX readback and save preserve old bracket OLEs and unrelated formula objects',async()=>{

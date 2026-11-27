@@ -23,7 +23,7 @@ const context=vm.createContext({window:{}});
 vm.runInContext(await readFile(new URL('../desktop/catalog-macros.js',import.meta.url),'utf8'),context);
 vm.runInContext(await readFile(new URL('../desktop/editable-macros.js',import.meta.url),'utf8'),context);
 const sourceDefinitions={sfrac:{args:2,def:'{}^{#1}\\!/\\!{}_{#2}',expand:false},sout:{args:1,def:'\\enclose{horizontalstrike}{#1}',expand:false},overbracket:{args:1,def:'\\overbrace{#1}',expand:false},underbracket:{args:1,def:'\\underbrace{#1}',expand:false},eltab:{args:0,def:'\\hspace{1em}',expand:false},...context.window.equationCatalogMacros};
-sourceDefinitions.mtpile={args:3,def:'#3',expand:false};sourceDefinitions.mtmissing={args:5,def:'\\square',expand:false};
+sourceDefinitions.mtpile={args:3,def:'#3',expand:false};sourceDefinitions.mtmissing={args:5,def:'\\square',expand:false};sourceDefinitions.mtstix={args:4,def:'#4',expand:false};
 const definitions=context.window.prepareEquationMacros(sourceDefinitions);
 function parse(text){const root=mathlive.equationTestParse(context.window.safeEquationMacroLatex(text),definitions);return {root,mf:{_mathfield:{model:{root}}},value:()=>root.bodyToLatex({expandMacro:false})};}
 function direct(node){return [...Object.values(node._branches||{}).flat(),...(node._rows||[]).flat(2)].filter(Boolean);}
@@ -48,6 +48,46 @@ test('Prepared macro bodies expose editable argument regions while zero-argument
  const {root}=parse(tex`\mtmatrix{129}{129}{4}{\begin{matrix}a&b\\c&d\end{matrix}}`);
  const macro=all(root).find(n=>n.type==='macro'&&n.command==='\\mtmatrix');assert.equal(macro.captureSelection,false);
  const a=all(root).find(n=>n.value==='a');assert.equal(a.inCaptureSelection,false);
+});
+
+test('MathLive synchronization preserves the external STIX glyph metadata and keeps the visible argument editable',()=>{
+ const latex=tex`x+\mtstix{b1}{0}{2113}{\ell }`,state=parse(latex);
+ context.window.syncEquationMacros(state.mf);
+ const updated=state.value();
+ assert.match(updated,/\\mtstix\{b1\}\{0\}\{2113\}\{\\ell\s*\}/);
+ assert.deepEqual(inspectOle(makeOle(updated)).native,inspectOle(makeOle(latex)).native);
+ assert.match(definitions.mtstix.def,/equationlab-owner=mtstix,equationlab-arg=4/);
+});
+
+test('The Identity matrix keeps its native prime while 1 is edited to 10 in MathLive',()=>{
+ const source=makeOle(tex`\begin{matrix}Identity=x&Identity'=1\end{matrix}`),
+  latex=oleLatex(source),state=parse(latex);
+ assert.match(latex,/Identit\\mtembD\{y\}=1/);
+ context.window.syncEquationMacros(state.mf);
+ assert.deepEqual(replaceOleLatex(source,state.value()),source);
+
+ editLiteral(state.root,'1','10');
+ context.window.syncEquationMacros(state.mf);
+ const edited=replaceOleLatex(source,state.value()),line=inspectOle(edited).parsed.records.find(n=>n.type===1);
+ const matrix=line.children.find(n=>n.type===5),[original,changed]=matrix.children.filter(n=>n.type===1);
+ assert.equal(matrix.cols,2);
+ assert.equal(original.children.filter(n=>n.type===2).map(n=>String.fromCharCode(n.code)).join(''),'Identity=x');
+ const chars=changed.children.filter(n=>n.type===2);
+ assert.equal(chars.map(n=>String.fromCharCode(n.code)).join(''),'Identity=10');
+ assert.deepEqual(chars.find(n=>n.code===121).children.map(n=>n.embellishment),[5]);
+ assert.ok(changed.children.every(n=>n.type!==3));
+});
+
+test('Editable native single, double and triple primes coexist with subscript, star and explicit prime superscripts',()=>{
+ const source=makeOle(tex`x_i'+N'^{*}+y''+z'''+a^{\prime}+b^{\doubleprime}`),state=parse(oleLatex(source));
+ editLiteral(state.root,'y','v');
+ context.window.syncEquationMacros(state.mf);
+ const edited=replaceOleLatex(source,state.value()),line=inspectOle(edited).parsed.records.find(n=>n.type===1);
+ const chars=line.children.filter(n=>n.type===2&&n.children?.length);
+ assert.deepEqual(chars.map(n=>[String.fromCharCode(n.code),n.children.map(e=>e.embellishment)]),[['x',[5]],['N',[5]],['v',[6]],['z',[18]]]);
+ const scripts=line.children.filter(n=>n.type===3);
+ assert.deepEqual(scripts.map(n=>n.selector),[27,28,28,28]);
+ assert.deepEqual(scripts.map(n=>n.children.flatMap(n=>n.children??[]).filter(n=>n.type===2).map(n=>n.code)),[[0x69],[0x2217],[0x2032],[0x2032,0x2032]]);
 });
 
 test('Legacy piles and unmapped-character metadata survive actual MathLive serialization',async()=>{

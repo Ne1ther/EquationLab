@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {access,readFile} from 'node:fs/promises';
 import {deflateRawSync} from 'node:zlib';
 import {nativeSessionOperation as op} from '../src/word-native-session.mjs';
-import {createDocx,flatOpc,inspectDocx} from '../src/document.mjs';
+import {createDocx,flatOpc,inspectDocx,hash} from '../src/document.mjs';
 import {inspectOle} from '../src/native.mjs';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
 import {MAX_COMPRESSED_CATALOGUE_PAGE_BYTES} from '../src/word-catalogue-limits.mjs';
@@ -16,6 +16,32 @@ const context=(partial=true)=>({ooxml:partial?fragment:full,index,count:30,name:
 async function open(){return op('native-open',{session:String(seq++),native,document:context()});}
 async function close(ticket){await op('native-cancel',{ticket}).catch(()=>{});await op('native-poll',{ticket}).catch(()=>{});}
 async function local(fn){const old=globalThis.fetch;globalThis.fetch=async(url,options)=>{try{return {ok:true,json:()=>op(new URL(url).pathname,JSON.parse(options.body))};}catch(error){return {ok:false,json:async()=>({error:error.message})};}};try{return await fn();}finally{globalThis.fetch=old;}}
+
+test('A partial owner write retains its display binding through concurrent full-document enrichment',async()=>{
+ const owner=doc.objects[index];
+ for(const enriched of [false,true]){
+  const session=String(seq++);
+  const {ticket}=await op('native-open',{session,native,acknowledgement:true,document:{...context(),numberingRevision:3}});
+  try{
+   const staged=await op('native-read',{ticket});
+   if(enriched)await op('native-enrich',{ticket,session,initialSnapshot:100,document:{...context(false),numberingRevision:3}});
+   await local(()=>desktopRequest({action:'wordSessionSave',payload:{ticket,input:staged.path,mode:'rebuild',latex:'y^8'}}));
+   const status=()=>local(()=>desktopRequest({action:'wordSessionStatus',payload:{ticket}}));
+   assert.deepEqual(await status(),{state:'queued'});
+   const final=await op('native-poll',{ticket});
+   assert.equal(final.target,undefined,'a partial binding conveys no save destination');
+   assert.deepEqual(await status(),{state:'delivered'});
+   await op('native-ack',{ticket,session,ok:true});
+   const {thumbnail,...committed}=await status(),updatedHash=hash(Buffer.from(final.native,'base64'));
+   assert.deepEqual(committed,{state:'committed',change:{
+    documentIdentity:'live:42',documentSnapshot:enriched?101:100,index,previousNativeSha256:owner.nativeSha256,
+    nativeSha256:updatedHash,numberingChanged:false,...enriched?{selectionSnapshot:100}:{displayOnly:true}
+   }});
+   assert.equal(thumbnail.nativeSha256,updatedHash);
+   assert.match(thumbnail.image,/^data:image\/png;base64,iVBORw0KGgo/);
+  }finally{await close(ticket);}
+ }
+});
 
 test('The exact current owner is editable before the full list; enrichment retains its ticket and all native bytes',async()=>{
  const opened=await open(),ticket=opened.ticket;
@@ -213,6 +239,9 @@ test('An acknowledged numbering-only save uses the live owner before or after en
     previousNativeSha256:object.nativeSha256,nativeSha256:object.nativeSha256,numberingChanged:true,
     ...enriched?{}:{numberingLocal:true}
    }});
+   const receipt=await local(()=>desktopRequest({action:'wordSessionStatus',payload:{ticket}}));
+   assert.equal(receipt.thumbnail?.nativeSha256,object.nativeSha256,'a cold number-only save prepares the unchanged owner thumbnail');
+   assert.match(receipt.thumbnail?.image??'',/^data:image\/png;base64,iVBORw0KGgo/);
   }finally{await close(ticket);}
  }
 });

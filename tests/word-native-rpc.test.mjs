@@ -5,7 +5,9 @@ import JSZip from 'jszip';
 import {desktopRequest} from '../src/desktop-rpc.mjs';
 import {nativeSessionOperation as sessionOperation} from '../src/word-native-session.mjs';
 import {createDocx,flatOpc,inspectDocx,hash} from '../src/document.mjs';
-import {makeOle,inspectOle,characters,editCharacters,replaceOleLatex} from '../src/native.mjs';
+import {makeOle,inspectOle,characters,editCharacters,replaceOleLatex,wrapNative} from '../src/native.mjs';
+import {renderNative} from '../src/font-renderer.mjs';
+import {localLegacyOptions} from './helpers/local-legacy-evidence.mjs';
 
 // This process routes RPC HTTP calls directly to an isolated in-memory service.
 // It never connects to the live Word/App service or edits user documents.
@@ -112,6 +114,119 @@ async function openDocument(document,index,{identity='word-process-a:document-1'
 }
 const targetOf=(session,index)=>({index,expectedNativeSha256:session.objects[index].nativeSha256,documentIdentity:session.document.identity});
 
+test('live owner and sidebar saves fit the selected page and the existing Word run position',async()=>{
+ const bytes=await createDocx([{latex:'x'},{latex:'x'}],{fragment:true}),zip=await JSZip.loadAsync(bytes);
+ const xml=await zip.file('word/document.xml').async('string');
+ const firstBoundary='<w:p><w:pPr><w:sectPr><w:pgSz w:w="5000" w:h="16838"/><w:pgMar w:top="1440" w:bottom="1440" w:left="1440" w:right="1440"/></w:sectPr></w:pPr></w:p>';
+ let positionCount=0;
+ const twoSections=xml.replaceAll(/<w:position w:val="[^"\n]*"\/>/g,()=>`<w:position w:val="${++positionCount===2?-200:0}"/>`)
+  .replace('</w:p><w:p>','</w:p>'+firstBoundary+'<w:p>')
+  .replace('w:w="11906" w:h="16838"','w:w="11640" w:h="6200"');
+ zip.file('word/document.xml',twoSections);
+ const document=await zip.generateAsync({type:'nodebuffer'});
+ const row=Array.from({length:31},(_,i)=>`x_{${i+1}}`).join('+');
+ const latex=`\\begin{matrix}${Array(20).fill(row).join('\\\\')}\\end{matrix}`;
+ for(const [index,widthBudget,heightBudget] of [[0,106,673.4],[1,438,41.5]]){
+  const source=await openDocument(document,0),target=index===0?undefined:targetOf(source,index);
+  await save(source,{mode:'rebuild',latex,target});
+  const result=await sessionOperation('native-poll',{ticket:source.ticket});
+  const natural=await renderNative(wrapNative(Buffer.from(result.native,'base64')),{raster:false});
+  const factor=Math.min(1,widthBudget/natural.width,heightBudget/natural.height);
+  const width=natural.width*factor,height=natural.height*factor;
+  assert.ok(factor<1);
+  assert.equal(result.width,Math.round(width*2540/72),`target ${index} fitted width`);
+  assert.equal(result.height,Math.round(height*2540/72),`target ${index} fitted height`);
+  const mediaBox=/\/MediaBox\s*\[\s*0\s+0\s+([\d.]+)\s+([\d.]+)\s*\]/.exec(Buffer.from(result.pdf,'base64').toString('latin1'));
+  assert.ok(Math.abs(Number(mediaBox?.[1])-width)<.01&&Math.abs(Number(mediaBox?.[2])-height)<.01,`target ${index} PDF uses the fitted extents`);
+  live.delete(source.ticket);
+ }
+});
+
+test('a scoped number-only save preserves the Word preview even when its old baseline exceeds the redraw budget',async()=>{
+ const bytes=await createDocx([{latex:'v_{047}',layout:{mode:'numbered-right',numberFormat:'(#E1)'}}]);
+ const zip=await JSZip.loadAsync(bytes);
+ const xml=(await zip.file('word/document.xml').async('string'))
+  .replace('w:h="16838"','w:h="5760"').replace(/<w:position w:val="[^"]*"\/>/,'<w:position w:val="-242"/>');
+ zip.file('word/document.xml',xml);
+ const document=await zip.generateAsync({type:'nodebuffer'});
+ const {objects:[owner]}=await inspectDocx(document,{wordPreviewLimits:true});
+ assert.equal(owner.wordPreview.heightTwips,144*20);
+ assert.equal(owner.wordPreview.retainedPosition,-121);
+ assert.ok((await renderNative(owner.ole,{raster:false})).height+121<144,'the unchanged preview fits the actual body');
+ const session=String(next++),identity='short-numbered-section',numberingRevision=9;
+ const native=inspectOle(owner.ole).native.toString('base64');
+ const {ticket}=await sessionOperation('native-open',{session,native,acknowledgement:true,numberingSupport:true,numberingExistingSupport:true,
+  document:{ooxml:await flatOpc(document),index:0,name:'short-section.docx',identity,snapshot:1,numberingRevision}});
+ live.add(ticket);
+ const source=await sessionOperation('native-read',{ticket});
+ await assert.rejects(save(source),/原有基线位置超出页面/,'a replacement preview still has to satisfy its fit budget');
+ const target={index:0,expectedNativeSha256:owner.nativeSha256,documentIdentity:identity};
+ const numbering={format:'[#E1]',side:'right',existingRevision:numberingRevision};
+ assert.equal((await save(source,{target,numbering})).acknowledgement,true);
+ const delivery=await sessionOperation('native-poll',{ticket});
+ assert.deepEqual(delivery.target,target);
+ assert.deepEqual(delivery.numbering,numbering);
+ assert.equal(delivery.native,native,'a local number edit leaves the original Native bytes untouched');
+ assert.deepEqual([delivery.width,delivery.height],[35,35],'the unused wire preview is independent of page layout');
+ await sessionOperation('native-ack',{ticket,session,ok:true,numberingLocal:true});
+ const receipt=await desktopRequest({action:'wordSessionStatus',payload:{ticket}});
+ assert.equal(receipt.state,'committed');
+ assert.equal(receipt.thumbnail?.nativeSha256,owner.nativeSha256);
+ assert.match(receipt.thumbnail?.image??'',/^data:image\/png;base64,iVBORw0KGgo/,'the uncached sidebar row can still receive a freshly rendered PNG');
+});
+
+test('the historical 20-row Word formula budgets its verified retained run position during live PDF preparation',localLegacyOptions,async()=>{
+ const evidence=new URL('../.local/xhs-roundtrip/QA-XHS-Mac-after-Windows.docx',import.meta.url);
+ const bytes=await readFile(evidence);
+ assert.equal(hash(bytes),'0d88d76db6d7d2317ea8889aafc6e03c1a7743b23230a35cd05bf6bc6c3b47e9');
+ const source=await openDocument(bytes,2);
+ assert.equal(source.objects[2].nativeSha256,'a1c4ca6ccb3d871d41d82229f5a0c3703f2e277a45b1830b20d696cb45779658');
+ await save(source);
+ const result=await sessionOperation('native-poll',{ticket:source.ticket});
+ assert.equal(result.native,source.native);
+ assert.equal(result.height,Math.round(344.9*2540/72),'host keeps its -328.5 pt position, leaving 344.9 pt for the fitted picture');
+ assert.ok(result.width<=Math.round(451.3*2540/72));
+ live.delete(source.ticket);
+});
+
+test('selection fragment saves within its old frame and waits for actual section geometry before fitting an expanded edit',async()=>{
+ const ole=makeOle('x+1');
+ const fragmentBytes=await createDocx([{ole}],{fragment:true});
+ const fragment=await JSZip.loadAsync(fragmentBytes);
+ fragment.file('word/document.xml',(await fragment.file('word/document.xml').async('string')).replace(/<w:sectPr>[\s\S]*?<\/w:sectPr>/,''));
+ const fragmentXml=await flatOpc(await fragment.generateAsync({type:'nodebuffer'}));
+ const narrow=await JSZip.loadAsync(await createDocx([{ole},{latex:'y'}],{fragment:true}));
+ narrow.file('word/document.xml',(await narrow.file('word/document.xml').async('string')).replace('w:w="11906"','w:w="5000"'));
+ const narrowXml=await flatOpc(await narrow.generateAsync({type:'nodebuffer'}));
+ const native=inspectOle(ole).native.toString('base64');
+ async function openSelection(ooxml=fragmentXml){
+  const session=String(next++),document={identity:'word-process-a:fragment',snapshot:80,index:0,count:2,name:'fragment.docx',scope:'selection',ooxml};
+  const {ticket}=await sessionOperation('native-open',{session,native,document});live.add(ticket);
+  return await sessionOperation('native-read',{ticket});
+ }
+ const small=await openSelection();
+ await save(small,{mode:'rebuild',latex:'x'});
+ assert.equal((await sessionOperation('native-poll',{ticket:small.ticket})).state,'complete');live.delete(small.ticket);
+
+ const misleading=await openSelection(await flatOpc(fragmentBytes));
+ await assert.rejects(save(misleading,{mode:'rebuild',latex:'x+1+2'}),/此公式需要完整的 Word 页面信息/,'a range-exported A4 section does not establish the live page width');
+ await assertEditing(misleading);
+
+ const pending=await openSelection();
+ const latex=Array.from({length:34},(_,i)=>`x_{${i+1}}`).join('+');
+ await assert.rejects(save(pending,{mode:'rebuild',latex:'x+1+2'}),/此公式需要完整的 Word 页面信息/,'a small growth cannot assume wider space than the retained frame');
+ await assert.rejects(save(pending,{mode:'rebuild',latex}),/此公式需要完整的 Word 页面信息/);
+ assert.equal(calls.some(call=>call.operation==='native-complete'&&call.body.ticket===pending.ticket),false);
+ await assertEditing(pending);
+ const {identity,name}=pending.document;
+ await sessionOperation('native-enrich',{ticket:pending.ticket,session:pending.session,initialSnapshot:80,
+  document:{identity,name,index:0,count:2,snapshot:81,ooxml:narrowXml}});
+ await save(pending,{mode:'rebuild',latex});
+ const result=await sessionOperation('native-poll',{ticket:pending.ticket});
+ assert.equal(result.width,Math.round(106*2540/72));
+ live.delete(pending.ticket);
+});
+
 test('Live Word rows and editor details exclude header formulas while copy validation can still see their hashes',async()=>{
  const bytes=await createDocx([{latex:'x'},{latex:'y'}]),zip=await JSZip.loadAsync(bytes);
  const ole=makeOle('z');
@@ -145,7 +260,29 @@ test('A confirmed Word write returns the exact updated Native identity for its c
  const final=await sessionOperation('native-poll',{ticket:opened.ticket});live.delete(opened.ticket);
  assert.deepEqual(await status(),{state:'delivered'});
  await sessionOperation('native-ack',{ticket:opened.ticket,session,ok:true});
- assert.deepEqual(await status(),{state:'committed',change:{documentIdentity:identity,documentSnapshot:snapshot,index:0,previousNativeSha256:original.nativeSha256,nativeSha256:hash(Buffer.from(final.native,'base64')),numberingChanged:false}});
+ const {thumbnail,...committed}=await status();
+ const updatedHash=hash(Buffer.from(final.native,'base64'));
+ assert.deepEqual(committed,{state:'committed',change:{documentIdentity:identity,documentSnapshot:snapshot,index:0,previousNativeSha256:original.nativeSha256,nativeSha256:updatedHash,numberingChanged:false}});
+ assert.equal(thumbnail.nativeSha256,updatedHash);
+ assert.match(thumbnail.image,/^data:image\/png;base64,iVBORw0KGgo/);
+});
+
+test('Idle thumbnails use only the checked native row of a cached snapshot after the edit ticket closes',async()=>{
+ const source=await openDocument(await createDocx([{latex:'x^3'},{latex:'y^9'}]),0);
+ const read=await desktopRequest({action:'wordSessionRead',payload:{ticket:source.ticket}});
+ await desktopRequest({action:'wordSessionCancel',payload:{ticket:source.ticket}});
+ calls.length=0;
+ const payload={sourceSha256:read.sourceSha256,index:1,nativeSha256:read.objects[1].nativeSha256,requestId:1};
+ const thumbnail=patch=>desktopRequest({action:'wordDocumentThumbnail',payload:{...payload,...patch}});
+ assert.deepEqual(await thumbnail({sourceSha256:'d'.repeat(64)}),{unavailable:true});
+ assert.deepEqual(await thumbnail({nativeSha256:read.objects[0].nativeSha256}),{image:null});
+ assert.match((await thumbnail()).image,/^data:image\/png;base64,iVBORw0KGgo/);
+ assert.equal(calls.length,0,'no Word read or VBA capture is needed to render the cached bytes');
+ let run;
+ const cancelled=desktopRequest({action:'wordDocumentThumbnail',payload},{scheduleThumbnail:job=>new Promise(resolve=>{run=()=>resolve(job());})});
+ await desktopRequest({action:'wordDocumentThumbnailCancel',payload:{requestId:payload.requestId}});
+ run();
+ assert.deepEqual(await cancelled,{cancelled:true});
 });
 
 async function alternateMainPart(document){

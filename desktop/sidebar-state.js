@@ -1,13 +1,14 @@
 (function(root){
  // Input/selection updates do not walk or serialize document rows. Only list
  // replacement, row changes or number freshness updates produce a bridge payload.
- root.createSidebarPublisher=function(){
+ root.createSidebarPublisher=function(revealBinding){
   const origin=root.crypto?.randomUUID?.()??(Date.now().toString(36)+Math.random().toString(36).slice(2));
   let current,numberFreshness,rows=[],epoch=0,revision=0,reset=true;const dirty=new Set(),previewDirty=new Set();
   const numberStatus=(freshness,numberText)=>freshness==='stale'?'stale':freshness==='loading'&&!numberText?'pending':'snapshot';
   const row=(object,document,freshness,id=object.index)=>{
    const numberText=typeof object.layout?.numberText==='string'?object.layout.numberText.trim():'';
-   return {id,position:document.documentPosition===undefined||document.savedCatalogue?object.index+1:document.documentPosition+1,label:'公式 '+(id+1),detail:object.error||(document.savedCatalogue?'在 Word 中打开此公式':'原生 MathType · '+object.application),latex:object.latex||'',image:object.image||null,readOnly:!!object.error,numberText:numberText||null,numberStatus:document.savedCatalogue&&freshness!=='stale'?'catalogue':numberStatus(freshness,numberText)};
+   return {id,position:document.documentPosition===undefined||document.savedCatalogue?object.index+1:document.documentPosition+1,label:'公式 '+(id+1),detail:object.error||(document.savedCatalogue?'在 Word 中打开此公式':'原生 MathType · '+object.application),latex:object.latex||'',image:object.image||null,readOnly:!!object.error,numberText:numberText||null,numberStatus:document.savedCatalogue&&freshness!=='stale'?'catalogue':numberStatus(freshness,numberText),
+    ...revealBinding?{revealToken:revealBinding(document,id)}:{}};
   };
   function catalogueRow(document,freshness,id){
    const position=document.documentPosition,owner=document.objects?.[document.activeIndex];
@@ -16,7 +17,8 @@
     const active=row(owner,document,freshness,id);
     return !active.numberText&&preview?.numberText?{...active,numberText:preview.numberText,numberStatus:'catalogue'}:active;
    }
-   return {id,position:id+1,label:'公式 '+(id+1),detail:'在 Word 中打开此公式',latex:preview?.latex||'',image:null,readOnly:false,numberText:preview?.numberText??null,numberStatus:preview?'catalogue':'pending'};
+   return {id,position:id+1,label:'公式 '+(id+1),detail:'在 Word 中打开此公式',latex:preview?.latex||'',image:null,readOnly:false,numberText:preview?.numberText??null,numberStatus:preview?'catalogue':'pending',
+    ...revealBinding?{revealToken:revealBinding(document,id)}:{}};
   }
   function rowsFor(document,freshness){
    if(!document?.catalogProof)return (document?.objects||[]).map(object=>row(object,document,freshness));

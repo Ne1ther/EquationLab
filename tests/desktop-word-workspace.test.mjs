@@ -149,9 +149,10 @@ test('Dock still requests a fresh capture when the content acknowledgement or li
    connected:variant!=='disconnected',active:{identity,name:source.documentName},documents:variant==='missing catalog'?[]:[entry]
   }:undefined);
   assert.equal(await e.workspace.resume(),true,variant);
-  assert.equal(e.workspace.pending,true,variant);
-  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1,variant);
-  assert.equal(e.calls.find(call=>call.action==='wordDocumentOpen').payload.target,undefined,variant);
+  const waitingForPublication=variant==='numbering change';
+  assert.equal(e.workspace.pending,!waitingForPublication,variant);
+  assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,waitingForPublication?0:1,variant);
+  assert.equal(e.calls.find(call=>call.action==='wordDocumentOpen')?.payload.target,undefined,variant);
  }
 });
 
@@ -191,6 +192,52 @@ test('A confirmed same-side number format save keeps all 112 rows fresh and skip
   const changedCount={...partial,documentTotal:113};
   assert.equal(e.workspace.visibleSource(changedCount),changedCount);
  }
+});
+
+test('A number-only acknowledgement fills a missing image without replacing a good image',()=>{
+ const png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX4kAAAAASUVORK5CYII=';
+ for(const [previous,hash,image,expected] of [[null,digest,png,png],['older image',digest,png,'older image'],[null,'f'.repeat(64),png,null],[null,digest,'bad image',null]]){
+  const {workspace}=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  source.objects[0].image=previous;source.objects[1].image='unchanged';
+  source.objects[0].layout={mode:'numbered-right',numberText:'(1)',numberFormat:'(#E1)'};
+  const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,
+   previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true,numberingLocal:true};
+  workspace.rememberAfterSave(source,0,ack,'x+1',{format:'[#E1]',side:'right',previewText:'[1]'},{nativeSha256:hash,image});
+  const rows=workspace.visibleSource(null).objects;
+  assert.equal(rows[0].image,expected);
+  assert.equal(rows[0].nativeSha256,digest);
+  assert.equal(rows[0].layout.numberText,'[1]');
+  assert.equal(rows[1].image,'unchanged');
+ }
+});
+
+test('A Dock numbering readback rejects a capture of the previous revision',async()=>{
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ const ack={documentIdentity:source.documentIdentity,documentSnapshot:source.documentSnapshot,index:0,
+  previousNativeSha256:digest,nativeSha256:digest,numberingChanged:true};
+ e.workspace.rememberAfterSave(source,0,ack,'x+1',{format:'[#E1]',side:'right'});
+ const {documentIdentity:identity,documentName:name}=source;
+ let revision=3,connected=true,entry=true;
+ e.behavior(action=>action==='wordWorkspaceStatus'?{connected,revision,active:connected?{identity,name}:null,
+  documents:entry?[{identity,name,readOnly:false,numberingRevision:revision}]:[]}:undefined);
+ for(const [online,catalogued] of [[true,true],[false,false],[true,false]]){
+  connected=online;entry=catalogued;
+  assert.equal(await e.workspace.resume(),true);
+  assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'),false);
+  assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,true);
+ }
+ revision=4;entry=true;
+ assert.equal(await e.workspace.resume(),true);
+ assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,1);
+ await assert.rejects(e.workspace.prepareIncoming({...source,documentSnapshot:18},requestId),/正在更新编号/);
+ assert.equal(e.workspace.pending,false);
+ assert.deepEqual({...e.calls.find(call=>call.action==='wordDocumentCancel').payload},{requestId});
+ assert.equal(e.workspace.visibleSource(null).documentSnapshot,source.documentSnapshot);
+ revision=5;
+ assert.equal(await e.workspace.resume(),true);
+ revision=6;await e.workspace.refreshList();
+ await assert.rejects(e.workspace.prepareIncoming({...source,documentSnapshot:19,documentNumberingRevision:5},requestId),/正在更新编号/);
+ assert.equal(e.workspace.pending,false,'a newer published revision also supersedes an already queued Dock capture');
 });
 
 test('Returning after cancellation keeps verified numbers and rejects a changed Word revision',async()=>{
@@ -313,7 +360,8 @@ test('A scoped numbering receipt rebinds only the same cached row with unchanged
   }
   const change={...before,documentSnapshot:variant==='wrong snapshot'?19:18,index:variant==='wrong ordinal'?0:index,
    nativeSha256:variant==='changed bytes'?'e'.repeat(64):ownerDigest};
-  e.workspace.rememberAfterSave(incoming,0,change,'y+2',{format:'(#C1.#E1)',side:'right',previewText:'(2.2)',existingRevision:4});
+  const image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX4kAAAAASUVORK5CYII=';
+  e.workspace.rememberAfterSave(incoming,0,change,'y+2',{format:'(#C1.#E1)',side:'right',previewText:'(2.2)',existingRevision:4},{nativeSha256:ownerDigest,image});
   const cached=e.workspace.visibleSource(null);
   assert.equal(cached.objects[0].nativeSha256,source.objects[0].nativeSha256);
   assert.equal(cached.documentSnapshot,17,'other rows retain their full snapshot');
@@ -321,6 +369,7 @@ test('A scoped numbering receipt rebinds only the same cached row with unchanged
   assert.equal(await e.workspace.select(index),success,variant);
   if(success){
    assert.equal(cached.objects[index].layout.numberText,'(2.2)');
+   assert.equal(cached.objects[index].image,image,'a guarded number-only save also publishes its matching image');
    assert.equal(cached.numberingRefreshNeeded,false);
    assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').at(-1).payload.target.snapshot,18);
    const reopened={...incoming,documentSnapshot:19,documentNumberingRevision:5,objects:[{index:0,nativeSha256:ownerDigest}]};
@@ -1227,7 +1276,7 @@ test('Content-only save during documentLoading after local format save preserves
   e.workspace.rememberAfterSave(source,2,ack,'x_2',{format:'(#C1-#E1)',side:'right',previewText:'(2-3)',verifiedStartRevision:3});
   const partial={...source,documentSnapshot:18,documentLoading:true,activeIndex:0,documentPosition:editedRow,documentTotal:112,
    documentNumberingRevision:partialRevision,numberingRefreshNeeded:false,objects:[{index:0,nativeSha256:source.objects[editedRow].nativeSha256}]};
-  // Content-only save while background document is still loading: server receipt change is null.
+  // A missing or older receipt cannot confirm any content for this row.
   e.workspace.rememberAfterSave(partial,0,null,'edited content',undefined);
   const cached=e.workspace.visibleSource(null);
   assert.equal(cached.objects[editedRow].nativeSha256,null,`edited row ${editedRow} native identity must be invalidated`);
@@ -1260,6 +1309,57 @@ test('Content-only save during documentLoading after local format save preserves
   await e.workspace.refreshList();
   assert.equal(e.workspace.visibleSource(null).numberingRefreshNeeded,true);
  }
+});
+
+test('A confirmed partial save publishes only the hash-checked preview of the matched cached row',async()=>{
+ for(const scenario of ['partial','enriched','wrong document','wrong snapshot','wrong row','wrong old hash','wrong count','wrong revision','wrong thumbnail']){
+  const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+  source.objects[0].image='unchanged';
+  source.objects[1].image='old';
+  e.workspace.remember(source);
+  const partial={...source,documentSnapshot:18,documentLoading:true,activeIndex:0,documentPosition:1,
+   documentNumberingRevision:scenario==='wrong revision'?4:3,documentTotal:scenario==='wrong count'?3:2,
+   objects:[{...source.objects[1],index:0}]};
+  const updatedHash='1'.repeat(64),image='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX4kAAAAASUVORK5CYII=';
+  const change={
+   documentIdentity:scenario==='wrong document'?'other':source.documentIdentity,
+   documentSnapshot:scenario==='enriched'?19:scenario==='wrong snapshot'?24:18,
+   index:scenario==='wrong row'?0:1,previousNativeSha256:scenario==='wrong old hash'?digest:source.objects[1].nativeSha256,
+   nativeSha256:updatedHash,numberingChanged:false,...scenario==='enriched'?{selectionSnapshot:18}:{displayOnly:true}
+  };
+  e.workspace.rememberAfterSave(partial,0,change,'edited',undefined,{nativeSha256:scenario==='wrong thumbnail'?digest:updatedHash,image});
+  const cached=e.workspace.visibleSource(null);
+  const matched=['partial','enriched','wrong thumbnail'].includes(scenario),shown=matched&&scenario!=='wrong thumbnail';
+  assert.equal(cached.objects[1].image,shown?image:null,scenario);
+  assert.equal(cached.objects[1].latex,matched?'edited':source.objects[1].latex,scenario);
+  assert.equal(cached.objects[1].nativeSha256,null,scenario);
+  assert.equal(cached.objects[0].image,'unchanged',scenario);
+  assert.equal(await e.workspace.select(1),false,'a display receipt does not authorize opening an old ordinal');
+  if(shown){
+   const fresh={...source,documentSnapshot:20,objects:[source.objects[0],{...source.objects[1],nativeSha256:updatedHash,latex:'edited',image:null}]};
+   e.workspace.remember(fresh);
+   assert.equal(e.workspace.visibleSource(null).objects[1].image,image,scenario);
+  }
+ }
+});
+
+test('New Word numbering revisions reach a detached cached sidebar even while a draft prevents refreshing',async()=>{
+ const e=setup(),source={...document(),insertion:false,documentNumberingRevision:3};
+ e.workspace.accepted(source);e.state.draftChanged=true;
+ let revision=4,updates=0;e.api.changed=()=>updates++;
+ e.behavior(action=>action==='wordWorkspaceStatus'?{connected:true,revision,active:{identity:source.documentIdentity,name:source.documentName},
+  documents:[{identity:source.documentIdentity,name:source.documentName,readOnly:false,numberingRevision:revision}]}:undefined);
+ const detached=e.workspace.visibleSource(null);
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.equal(detached.liveNumberingRevision,4);
+ assert.equal(detached.numberingRefreshNeeded,true);
+ const lastUpdates=updates;
+ revision=5;
+ assert.equal(await e.workspace.syncCurrent(),false);
+ assert.strictEqual(e.workspace.visibleSource(null),detached);
+ assert.equal(detached.liveNumberingRevision,5);
+ assert.ok(updates>lastUpdates);
+ assert.equal(e.calls.filter(call=>call.action==='wordDocumentOpen').length,0);
 });
 
 test('Diverged or unverified partial saves never stay marked fresh and still invalidate the edited row',async()=>{

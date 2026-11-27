@@ -24,7 +24,7 @@ test('A foreign or failed list preserves the partial owner and live draft',async
   await e.context.loadWordDocument(e.context.wordTicket,e.initial);assert.equal(e.context.source,e.initial);assert.equal(e.initial.documentLoadFailed,true);assert.equal(e.context.mf.value,'live draft');assert.equal(e.old.index,0);assert.equal(e.calls.length,0);
  }
 });
-test('A thesis renders the selected formula and live scroll demand, dropping pending off-screen thumbnails',async()=>{
+test('A source without a cached document renders selected and visible rows on demand',async()=>{
  const source={objects:Array.from({length:112},(_,index)=>({index})),activeIndex:14,documentIdentity:'word:42',documentSnapshot:101},batches=[];
  const context=vm.createContext({window:{},source,selected:source.objects[14],wordTicket:'a'.repeat(64),wordNavigating:false,busy:false,wordCommitRunning:null,validationRunning:null,validationPending:false,Set,Number,setTimeout:fn=>queueMicrotask(fn),requestWorkbenchSync(){},native:async(action,payload)=>{batches.push(payload);return {images:payload.indices.map(index=>({index,image:'image-'+index}))};}});
  vm.runInContext(thumbnailLoader,context);
@@ -35,6 +35,98 @@ test('A thesis renders the selected formula and live scroll demand, dropping pen
  const count=batches.length;await context.loadWordThumbnails(context.wordTicket,source,[80]);assert.equal(batches.length,count);
  const loading=context.loadWordThumbnails(context.wordTicket,source,[70,81]);context.window.nativeReleaseWordThumbnail(70);await loading;
  assert.equal(source.objects[70].image,undefined);assert.equal(source.objects[81].image,'image-81');
+});
+
+function cachedThumbnailEditor({count=8,backgroundReply}={}){
+ const makeDocument=(identity='word:42')=>({hasDocumentContext:true,path:identity+'.docx',documentIdentity:identity,documentSnapshot:101,
+  documentNumberingRevision:7,sourceSha256:'b'.repeat(64),objects:Array.from({length:count},(_,index)=>({index,nativeSha256:index.toString(16).padStart(64,'0')}))});
+ const source=makeDocument(),requests=[],cancellations=[],ticket='a'.repeat(64);
+ const workspace={visibleSource:document=>document};
+ const context=vm.createContext({window:{wordDocumentWorkspace:workspace},source,selected:source.objects[2],wordTicket:ticket,
+  wordNavigating:false,busy:false,wordCommitRunning:null,validationRunning:null,validationPending:false,
+  setTimeout:fn=>setImmediate(fn),requestWorkbenchSync(){},native:async(action,payload)=>{
+   if(action==='wordDocumentThumbnailCancel'){cancellations.push(payload.requestId);return {};}
+   if(action==='wordSessionThumbnails'){
+    requests.push({kind:'visible',indices:Array.from(payload.indices)});
+    return {images:payload.indices.map(index=>({index,image:'visible-'+index}))};
+   }
+   assert.equal(action,'wordDocumentThumbnail');
+   requests.push({kind:payload.visible?'cached-visible':'background',index:payload.index,requestId:payload.requestId});
+   return backgroundReply?.(payload)??{image:(payload.visible?'visible-':'idle-')+payload.index};
+  }});
+ vm.runInContext(thumbnailLoader,context);
+ return {context,source,requests,cancellations,workspace,ticket,makeDocument};
+}
+
+test('A 112-row Word list fills offscreen thumbnails on its own from one cached snapshot',async()=>{
+ const e=cachedThumbnailEditor({count:112});
+ await e.context.loadWordThumbnails(e.ticket,e.source);
+ assert.deepEqual(e.requests[0],{kind:'visible',indices:[2]});
+ assert.deepEqual(e.requests.slice(1).map(row=>row.index),Array.from({length:112},(_,i)=>i).filter(i=>i!==2));
+ assert.equal(e.source.objects[111].image,'idle-111');
+ assert.ok(e.source.objects.every(row=>row.image));
+});
+
+test('A detached revision change retires the old preload and prioritizes still-visible cached rows',async()=>{
+ let started,respond;
+ const began=new Promise(resolve=>{started=resolve;});
+ const pending=new Promise(resolve=>{respond=resolve;});
+ const e=cachedThumbnailEditor({backgroundReply:payload=>{if(payload.requestId===1){started();return pending;}}});
+ const cached=e.source;
+ e.context.source=null;e.context.wordTicket=null;e.context.selected=null;
+ e.workspace.visibleSource=()=>cached;
+ const oldJob=e.context.loadWordThumbnails(null,cached,[]);await began;
+ // Swift visibility does not need to emit another event for the same row.
+ e.context.window.nativeRequestWordThumbnail(7);
+ cached.liveNumberingRevision=8;
+ e.context.window.updateWordThumbnails();
+ respond({image:'stale'});
+ await oldJob;
+ assert.deepEqual(e.cancellations,[1]);
+ await settle();await settle();
+ assert.deepEqual(e.requests[1],{kind:'cached-visible',index:7,requestId:2});
+ assert.equal(cached.objects[7].image,'visible-7');
+ assert.notEqual(cached.objects[0].image,'stale');
+ e.context.window.nativeStopWordThumbnails();
+});
+
+test('Switching document, changing revision, cancelling or closing invalidates in-flight idle thumbnails',async()=>{
+ for(const reason of ['document','revision','cancel','close']){
+  let started,respond;
+  const began=new Promise(resolve=>{started=resolve;});
+  const pending=new Promise(resolve=>{respond=resolve;});
+  const e=cachedThumbnailEditor({backgroundReply:payload=>{if(payload.requestId===1){started();return pending;}}});
+  const oldJob=e.context.loadWordThumbnails(e.ticket,e.source);await began;
+  if(reason==='document')e.context.source=e.makeDocument('word:43');
+  if(reason==='revision')e.source.liveNumberingRevision=8;
+  if(reason==='cancel')e.context.window.wordSessionGeneration=1;
+  if(reason==='close')e.context.window.nativeStopWordThumbnails();
+  e.context.window.updateWordThumbnails();
+  assert.deepEqual(e.cancellations,[1],reason);
+  respond({image:'late-image'});await oldJob;
+  assert.notEqual(e.source.objects[0].image,'late-image',reason);
+  assert.notEqual(e.context.source.objects[0].image,'late-image',reason);
+  e.context.window.nativeStopWordThumbnails();
+ }
+});
+
+test('Visible rows, editing and locating yield no work to the idle queue until they finish',async()=>{
+ let started,respond;
+ const began=new Promise(resolve=>{started=resolve;});
+ const pending=new Promise(resolve=>{respond=resolve;});
+ const e=cachedThumbnailEditor({backgroundReply:payload=>{if(payload.requestId===1){started();return pending;}}});
+ const loading=e.context.loadWordThumbnails(e.ticket,e.source);await began;
+ e.context.window.nativeRequestWordThumbnail(7);
+ e.context.validationPending=true;e.workspace.revealing=true;
+ assert.deepEqual(e.cancellations,[1]);
+ respond({cancelled:true});await settle();
+ assert.equal(e.requests.length,2);
+ e.context.validationPending=false;await settle();
+ assert.equal(e.requests.length,2,'a pending reveal also holds idle work');
+ e.workspace.revealing=false;await loading;
+ assert.deepEqual(e.requests[2],{kind:'visible',indices:[7]});
+ assert.equal(e.source.objects[7].image,'visible-7');
+ assert.equal(e.source.objects[0].image,'idle-0');
 });
 
 function thumbnailVisibilityTest(reply) {

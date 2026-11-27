@@ -1,4 +1,4 @@
-import {inspectOle,wrapNative} from './native.mjs';
+import {editCharacters,inspectOle,replaceOleLatex,symbolOperatorPosition,wrapNative} from './native.mjs';
 import {EQP_SPACING_KEYS,EQP_SIZE_KEYS} from './eqp.mjs';
 
 const UNIT_NAMES=Object.freeze(['in','cm','pt','pc','%']);
@@ -57,7 +57,7 @@ function state(ole,inspected){
  if(collect(source.parsed.records,n=>n.type===18).length!==1)throw Error('Nested equation preference overrides are not supported');
  const fonts=collect(source.parsed.records,n=>n.type===17),encodings=collect(source.parsed.records,n=>n.type===19);
  if(pref.styles.length>255)throw Error('Invalid style definition count');
- for(const s of pref.styles){if(s.style&~3)throw Error('Unknown native character style bits');if(s.font>fonts.length)throw Error('Missing native font definition');if(s.font&&fonts[s.font-1].start>pref.start)throw Error('Style references a later native font definition');}
+ for(const s of pref.styles){if(s.style&~3)throw Error('Unknown native character style bits');if(s.font>fonts.length)throw Error('Missing native font definition');}
  const raw=source.data.subarray(pref.start,pref.end),sizes=dimensions(raw,2),spaces=dimensions(raw,sizes.end);
  if(sizes.values.length<5)throw Error('Equation preferences do not define all five standard sizes');
  // Standard sizes must be understood. Extra/future sizes and spacing retain
@@ -135,25 +135,92 @@ function chooseFont(s,name,newFonts){
   if(at<0&&ansi<0)throw Error('A declared Windows basic-codepage encoding is required for this new font');
   encoding=(at>=0?at:ansi)+5;canonical=TYPOGRAPHY_FONTS.find(f=>f.toLowerCase()===name.toLowerCase());
  }else throw Error(`Font ${name} has no verified native encoding mapping; source unchanged`);
- // Adding before EQN_PREFS would renumber FONT_DEF entries later in the formula.
- if(s.fonts.some(f=>f.start>s.pref.start))throw Error('Cannot append a font without renumbering later font definitions; source unchanged');
  const existing=newFonts.findIndex(f=>f.name===canonical&&f.encoding===encoding);
  if(existing>=0)return {index:s.fonts.length+existing+1,encoding,name:canonical};
  newFonts.push({name:canonical,encoding});return {index:s.fonts.length+newFonts.length,encoding,name:canonical};
 }
-function checkFontChange(s,id,before,after){
+const unicodeOperatorEncodings=new Set(['MTCode','WinAllBasicCodePages']);
+function fontChangeEdits(s,id,before,after,edits){
  if(!before.font||before.font===after.index)return;
- const old=s.fonts[before.font-1];
+ const old=s.fonts[before.font-1],from=encodingName(old.encoding,s.encodings),to=encodingName(after.encoding,s.encodings);
+ const toSymbol=to==='Symbol'&&unicodeOperatorEncodings.has(from),fromSymbol=from==='Symbol'&&unicodeOperatorEncodings.has(to);
  for(const c of s.characters.filter(n=>n.typeface===id)){
   if(c.code===undefined)throw Error('Changing this font requires an unknown font-position mapping');
   if(c.code>=0xe000&&c.code<=0xf8ff)throw Error('Changing fonts for private MTCode glyphs requires an explicit mapping');
+  const code=id===6&&c.code===0x002a?0x2217:c.code,position=symbolOperatorPosition(code);
+  if(position!==undefined&&(toSymbol||fromSymbol)){
+   const expectedPosition=fromSymbol?position:c.code,positionFlags=c.options&0x14;
+   if(positionFlags===0x14||c.fontPosition!==undefined&&c.fontPosition!==expectedPosition||c.start<s.pref.end)throw Error('Changing native encodings would invalidate an existing encoded character position');
+   if(!toSymbol&&c.fontPosition===undefined&&code===c.code)continue;
+   const options=(c.options&~0x14)|(toSymbol?4:0);
+   const char=toSymbol?[code&255,code>>8,position]:[code&255,code>>8];
+   edits.push({start:c.start+1,end:c.start+2,bytes:[options]},
+    {start:c.codeOffset,end:c.codeOffset+2+(c.fontPositionSize??0),bytes:char});
+   continue;
+  }
   if(c.fontPosition!==undefined&&c.fontPosition!==c.code&&old.encoding!==after.encoding)throw Error('Changing native encodings would invalidate an existing encoded character position');
  }
 }
+function editedRange(data,start,end,edits){
+ const parts=[];let offset=start;
+ for(const {start,end,bytes} of edits.sort((a,b)=>a.start-b.start)){
+  if(start<offset)throw Error('Overlapping native font or character records');
+  parts.push(data.subarray(offset,start),Buffer.from(bytes));offset=end;
+ }
+ return Buffer.concat([...parts,data.subarray(offset,end)]);
+}
+
+/** Insert font dependencies before EQN_PREFS. Font and encoding definitions
+ * are ordinal. Update their known references when a late definition moves
+ * or a new one is inserted. FSTYLE_DEF remains in place, so negative CHAR
+ * typefaces keep their original style ordinal. */
+function migrateFontDefinitions(s,styles,newFonts,edits){
+ const fontCount=s.fonts.length,prefStart=s.pref.start;
+ const indices=(items,base)=>items.map((node,index)=>({node,index:index+base}));
+ const fontEntries=indices(s.fonts,1),encodingEntries=indices(s.encodings,5);
+ const requiredFonts=new Set(styles.map(({font})=>font));
+ const lateFonts=fontEntries.filter(({node,index})=>node.start>prefStart&&requiredFonts.has(index));
+ if(!lateFonts.length&&!newFonts.length)return Buffer.alloc(0);
+ const requiredEncodings=new Set([...lateFonts.map(({node})=>node.encoding),...newFonts.map(({encoding})=>encoding)]);
+ const lateEncodings=encodingEntries.filter(({node,index})=>node.start>prefStart&&requiredEncodings.has(index));
+ const {data}=s;
+ const order=(entries,moved,inserted=[])=>[
+  ...entries.filter(({node})=>node.start<prefStart),...moved,...inserted,
+  ...entries.filter(entry=>entry.node.start>prefStart&&!moved.includes(entry))
+ ];
+ const reindex=(entries,base)=>new Map(entries.map(({index},at)=>[index,at+base]));
+ const encodings=reindex(order(encodingEntries,lateEncodings),5);
+ const addedFonts=newFonts.map(({encoding,name},i)=>({index:fontCount+i+1,node:{encoding,name}}));
+ const fonts=reindex(order(fontEntries,lateFonts,addedFonts),1);
+ const remapFont=index=>index===0?0:fonts.get(index);
+ const remapEncoding=index=>index<5?index:encodings.get(index);
+ const erase=({node})=>edits.push({start:node.start,end:node.end,bytes:[]});
+ const indexEnd=node=>node.start+(data[node.start+1]===255?4:2);
+ const replaceIndex=(node,index)=>edits.push({start:node.start+1,end:indexEnd(node),bytes:uint(index)});
+ const fontRecord=node=>{
+  const encoding=remapEncoding(node.encoding);
+  if(encoding===undefined)throw Error('Missing native font encoding definition');
+  const name=node.start===undefined?Buffer.from(node.name+'\0','utf8'):data.subarray(indexEnd(node),node.end);
+  return cat([17],uint(encoding),name);
+ };
+ for(const entry of lateEncodings)erase(entry);
+ for(const entry of fontEntries){
+  const {node}=entry;
+  if(lateFonts.includes(entry))erase(entry);
+  else if(remapEncoding(node.encoding)!==undefined&&remapEncoding(node.encoding)!==node.encoding)replaceIndex(node,remapEncoding(node.encoding));
+ }
+ for(const style of collect(s.parsed.records,n=>n.type===8)){
+  const next=remapFont(style.font);
+  if(next!==undefined&&next!==style.font)replaceIndex(style,next);
+ }
+ for(const style of styles)style.font=remapFont(style.font);
+ return cat(...lateEncodings.map(({node})=>data.subarray(node.start,node.end)),...[...lateFonts,...addedFonts].map(({node})=>fontRecord(node)));
+}
 
 /** Patch top-level EQN_PREFS and append only necessary FONT_DEF records before
- * it. The complete formula suffix, local formatting, companions, CLSID and the
- * original 28-byte native header (except its data length) are preserved.
+ * it. Only verified CHAR font positions can change in the formula suffix.
+ * Local formatting, companions, CLSID and the original native header (except
+ * its data length) are preserved.
  * patch: {styles:{1..12:{font?:string,style?:0|1|2|3}},fullSize?:number,
  *         sizes:{0..4:{unit:'pt'|'%',value:number|decimalString}},
  *         spaces:{0..29:{unit:'in'|'cm'|'pt'|'pc'|'%',value:number|decimalString}},
@@ -163,9 +230,19 @@ function checkFontChange(s,id,before,after){
  * are structurally writable, not a claim of original-dialog validation or
  * exact rendering. Unknown/missing source slots cannot be edited or filled.
  */
-export function patchTypography(ole,patch){
+export function patchTypography(ole,patch){return patchPreferences(ole,patch);}
+
+/** Resolve style preferences against the final formula. Character replacements
+ * still use their original offsets, then remap positions for the new font. */
+export function editFormulaOle(ole,{latex,replacements,typography}={}){
+ if(latex!==undefined)return replaceOleLatex(ole,latex,typography?(source,context)=>patchPreferences(source,typography,context):undefined);
+ const edited=replacements===undefined?ole:editCharacters(ole,replacements);
+ return typography?patchTypography(edited,typography):edited;
+}
+
+function patchPreferences(ole,patch,{inspected,rebuildFrom}={}){
  object(patch,'typography patch');for(const k of Object.keys(patch))if(!['styles','fullSize','sizes','spaces','extraSizes'].includes(k))throw Error(`Unknown typography option ${k}`);
- const s=state(ole),styles=s.pref.styles.map(x=>({...x})),sizes=s.sizes.values.map(x=>[...x]),spaces=s.spaces.values.map(x=>[...x]),newFonts=[];
+ const s=state(ole,inspected),styles=s.pref.styles.map(x=>({...x})),sizes=s.sizes.values.map(x=>[...x]),spaces=s.spaces.values.map(x=>[...x]),newFonts=[],fontEdits=[];
  let styleChanged=false,sizeChanged=false,spaceChanged=false;
  if(patch.styles!==undefined){object(patch.styles,'styles patch');
   for(const [key,edit]of Object.entries(patch.styles)){
@@ -173,7 +250,7 @@ export function patchTypography(ole,patch){
    const id=Number(key);object(edit,'style patch');for(const k of Object.keys(edit))if(!['font','style'].includes(k))throw Error(`Unknown style option ${k}`);
    if(!Object.keys(edit).length)throw Error('Style patch is empty');
    const old=styles[id-1]||{font:0,style:0};let next={...old};
-   if(edit.font!==undefined){const font=chooseFont(s,edit.font,newFonts);checkFontChange(s,id,old,font);next.font=font.index;}
+   if(edit.font!==undefined){const font=chooseFont(s,edit.font,newFonts);if(rebuildFrom===undefined)fontChangeEdits(s,id,old,font,fontEdits);next.font=font.index;}
    if(edit.style!==undefined){if(!Number.isInteger(edit.style)||edit.style<0||edit.style>3)throw Error('Character style must be 0, 1, 2 or 3');if(!next.font)throw Error('Assign a font before formatting an unused style');next.style=edit.style;}
    if(next.font!==old.font||next.style!==old.style){while(styles.length<id)styles.push({font:0,style:0});styles[id-1]=next;styleChanged=true;}
   }
@@ -189,15 +266,16 @@ export function patchTypography(ole,patch){
  if(patch.extraSizes!==undefined)sizeChanged=applyDimensions(patch.extraSizes,sizes,{offset:5,count:3,kind:'extra'})||sizeChanged;
  if(patch.spaces!==undefined)spaceChanged=applyDimensions(patch.spaces,spaces,{count:30,kind:'space'});
  if(!styleChanged&&!sizeChanged&&!spaceChanged)return Buffer.from(ole);
+ const fonts=migrateFontDefinitions(s,styles,newFonts,fontEdits);
  const sizeBytes=sizeChanged?encodeDimensions(sizes,s.sizes):s.raw.subarray(s.sizes.start,s.sizes.end);
  const spaceBytes=spaceChanged?encodeDimensions(spaces,s.spaces):s.raw.subarray(s.spaces.start,s.spaces.end);
- const styleBytes=styleChanged?cat([styles.length],...styles.map(x=>cat(uint(x.font),...(x.font?[[x.style]]:[])))):s.raw.subarray(s.spaces.end);
+ const styleBytes=styleChanged||fonts.length?cat([styles.length],...styles.map(x=>cat(uint(x.font),...(x.font?[[x.style]]:[])))):s.raw.subarray(s.spaces.end);
  const pref=cat([18,s.pref.options],sizeBytes,spaceBytes,styleBytes);
- const fontBytes=newFonts.map(f=>cat([17],uint(f.encoding),Buffer.from(f.name+'\0','utf8')));
- const data=cat(s.data.subarray(0,s.pref.start),...fontBytes,pref,s.data.subarray(s.pref.end));
+ const prefix=editedRange(s.data,0,s.pref.start,fontEdits.filter(e=>e.start<s.pref.start));
+ const suffix=editedRange(s.data,s.pref.end,s.data.length,fontEdits.filter(e=>e.start>=s.pref.end)),data=cat(prefix,fonts,pref,suffix);
  const header=Buffer.from(s.header);header.writeUInt32LE(data.length,8);
  const result=wrapNative(cat(header,data),ole),check=state(result);
- if(!check.data.subarray(check.pref.end).equals(s.data.subarray(s.pref.end)))throw Error('Typography validation failed: formula bytes changed');
+ if(!check.data.subarray(check.pref.end).equals(suffix))throw Error('Typography validation failed: formula bytes changed');
  if(!check.header.subarray(0,8).equals(s.header.subarray(0,8))||!check.header.subarray(12).equals(s.header.subarray(12)))throw Error('Typography validation failed: native header changed');
  if(check.cfb.FileIndex[0].clsid!==s.cfb.FileIndex[0].clsid)throw Error('Typography validation failed: OLE class changed');
  for(const old of s.cfb.FileIndex.filter(e=>e.type===2&&e.name!=='Equation Native')){

@@ -120,7 +120,7 @@ test('tracked equations are skipped and malformed batch scopes are rejected',asy
 
 test('protected and signed packages are rejected before any copy mutation',async()=>{
  const bytes=await sourcePromise,protectedZip=await JSZip.loadAsync(bytes);
- protectedZip.file('word/settings.xml',(await protectedZip.file('word/settings.xml').async('string')).replace('<w:updateFields','<w:documentProtection w:enforcement="1"/><w:updateFields'));
+ protectedZip.file('word/settings.xml',(await protectedZip.file('word/settings.xml').async('string')).replace('</w:settings>','<w:documentProtection w:enforcement="1"/></w:settings>'));
  await assert.rejects(preflightTypography(await protectedZip.generateAsync({type:'nodebuffer'}),{typography:{fullSize:18}}),/Protected/);
  const signed=await JSZip.loadAsync(bytes);signed.file('_xmlsignatures/sig1.xml','<Signature/>');
  await assert.rejects(preflightTypography(await signed.generateAsync({type:'nodebuffer'}),{typography:{fullSize:18}}),/Signed/);

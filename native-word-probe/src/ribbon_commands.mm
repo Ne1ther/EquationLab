@@ -19,7 +19,6 @@
 
 extern "C" std::int32_t MathTypeBridgeMathTypeRegistrationState();
 extern "C" std::int32_t MathTypeBridgeRibbonOpen();
-void EquationLabFinishWordInsertionUncertain();
 void EquationLabDocumentContextDidCapture();
 void EquationLabPublishDocumentCataloguePart(NSDictionary* part);
 void EquationLabDocumentContextDidClear();
@@ -99,7 +98,9 @@ BOOL wordRequestTarget(id value){
 }
 BOOL wordRequestFieldsMatch(NSArray<NSString*>* fields,NSDictionary* envelope){
     NSString* insertionMode=envelope[@"insertionMode"];
-    if(insertionMode){
+    if([envelope[@"reveal"] isEqual:@YES]){
+        if(insertionMode||fields.count!=9||![fields[0] isEqual:@"ELDREQ4"]||![fields[3] isEqual:@"1"]||fields[8].length)return NO;
+    }else if(insertionMode){
         if(fields.count!=10||![fields[0] isEqual:@"ELDREQ3"]||fields[9].length||![insertionMode isEqual:fields[8]]||![@[@"inline",@"display",@"numbered-left",@"numbered-right"] containsObject:insertionMode])return NO;
     }else if(fields.count!=9||![fields[0] isEqual:@"ELDREQ2"]||fields[8].length)return NO;
     if(![envelope[@"requestId"] isEqual:fields[2]])return NO;
@@ -113,7 +114,7 @@ NSDictionary* wordDocumentRequestFromFile(NSInteger* tokenOut=nullptr){
     NSURL* directory=[startupDirectory() URLByAppendingPathComponent:@".EquationLab"];
     NSData* data=inputFile(directory,@"native-document-request.txt");if(!data)return nil;
     NSString* text=[[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding];NSArray<NSString*>* fields=[text componentsSeparatedByString:@"\n"];
-    if(!((fields.count==9&&[fields[0] isEqual:@"ELDREQ2"]&&!fields[8].length)||(fields.count==10&&[fields[0] isEqual:@"ELDREQ3"]&&!fields[9].length)))return nil;
+    if(!((fields.count==9&&[@[@"ELDREQ2",@"ELDREQ4"] containsObject:fields[0]]&&!fields[8].length)||(fields.count==10&&[fields[0] isEqual:@"ELDREQ3"]&&!fields[9].length)))return nil;
     NSScanner* tokenScanner=[NSScanner scannerWithString:fields[1]];NSInteger token=0;
     if(![tokenScanner scanInteger:&token]||!tokenScanner.isAtEnd||token<=0||token>INT32_MAX||!wordRequestHexId(fields[2]))return nil;
     NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(static_cast<std::int32_t>(token));
@@ -121,9 +122,9 @@ NSDictionary* wordDocumentRequestFromFile(NSInteger* tokenOut=nullptr){
     if(!wordRequestFieldsMatch(fields,envelope))return nil;
     if(tokenOut)*tokenOut=token;return envelope;
 }
-std::int32_t takeWordDocumentRequest(){
+std::int32_t takeWordDocumentRequest(BOOL revealOnly=NO){
     if(!validHost())return -1;
-    auto token=bridge_probe::takeWordDocumentRequest();if(token<=0)return token;
+    auto token=bridge_probe::takeWordDocumentRequest(revealOnly);if(token<=0)return token;
     NSDictionary* envelope=bridge_probe::wordDocumentRequestEnvelope(token);NSString* requestId=envelope[@"requestId"];
     if(!wordRequestHexId(requestId)){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-request-id");return -2;}
     NSDictionary* target=envelope[@"target"];NSString* documentIdentity=envelope[@"documentIdentity"];NSString* targetIdentity=documentIdentity?:@"",*digest=@"";NSNumber* snapshot=@0,*index=@0;NSString* targetFlag=documentIdentity?@"2":@"0";
@@ -140,7 +141,8 @@ std::int32_t takeWordDocumentRequest(){
         if(![scanner scanInt:&identityToken]||!scanner.isAtEnd||identityToken<=0){bridge_probe::finishWordDocumentRequest(token,@"failed",@"invalid-document-identity");return -2;}
     }
     NSString* insertionMode=envelope[@"insertionMode"];
-    NSString* text=insertionMode?[NSString stringWithFormat:@"ELDREQ3\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest,insertionMode]:[NSString stringWithFormat:@"ELDREQ2\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
+    NSString* header=[envelope[@"reveal"] isEqual:@YES]?@"ELDREQ4":@"ELDREQ2";
+    NSString* text=insertionMode?[NSString stringWithFormat:@"ELDREQ3\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n%@\n",token,requestId,targetFlag,targetIdentity,snapshot,index,digest,insertionMode]:[NSString stringWithFormat:@"%@\n%d\n%@\n%@\n%@\n%@\n%@\n%@\n",header,token,requestId,targetFlag,targetIdentity,snapshot,index,digest];
     NSData* bytes=[text dataUsingEncoding:NSUTF8StringEncoding];
     if(!outputFile([startupDirectory() URLByAppendingPathComponent:@".EquationLab"],@"native-document-request.txt",bytes)){
         bridge_probe::finishWordDocumentRequest(token,@"failed",@"request-file-write");return -2;
@@ -363,7 +365,10 @@ NSDictionary* attachSnapshotNumberingRevision(NSDictionary* context){
 std::int32_t prepareInsertion(NSString* layout){
     if(!validHost())return -1;NSURL* startup=startupDirectory();if(!startup)return -2;
     NSURL* directory=[startup URLByAppendingPathComponent:@".EquationLab"];
-    NSString* text=documentCaptureText(inputFile(directory,@"ribbon-insertion-context.txt"));
+    NSString* captureName=@"ribbon-insertion-context.txt";
+    NSData* capture=inputFile(directory,captureName);
+    if(capture)unlink([directory URLByAppendingPathComponent:captureName].fileSystemRepresentation);
+    NSString* text=documentCaptureText(capture);
     NSDictionary* context=decodeDocumentContext(text);if(!context[@"identity"]||!context[@"snapshot"])return -3;
     NSMutableDictionary* document=[attachSnapshotNumberingRevision(context) mutableCopy];document[@"index"]=@(-1);
     NSDictionary* opening=bridge_probe::wordDocumentRequestEnvelope(bridge_probe::currentWordDocumentRequestToken());
@@ -672,6 +677,16 @@ RIBBON_EXPORT(MathTypeBridgeCancelInsertion,([&](){EquationLabCancelWordInsertio
 RIBBON_EXPORT(MathTypeBridgeFinishInsertion,([&](){EquationLabFinishWordInsertion(true);return 0;})())
 RIBBON_EXPORT(MathTypeBridgeFailInsertion,([&](){EquationLabFinishWordInsertion(false);return 0;})())
 RIBBON_EXPORT(MathTypeBridgeUncertainInsertion,([&](){EquationLabFinishWordInsertionUncertain();return 0;})())
+RIBBON_EXPORT(MathTypeBridgeInsertionCompletionSupport,validHost()?1:0)
+extern "C" __attribute__((visibility("default"))) std::int32_t MathTypeBridgeFinishInsertionV2(std::int32_t token){@autoreleasepool{
+    return EquationLabFinishClaimedWordInsertion(token,WordInsertionOutcome::Committed);
+}}
+extern "C" __attribute__((visibility("default"))) std::int32_t MathTypeBridgeFailInsertionV2(std::int32_t token){@autoreleasepool{
+    return EquationLabFinishClaimedWordInsertion(token,WordInsertionOutcome::Failed);
+}}
+extern "C" __attribute__((visibility("default"))) std::int32_t MathTypeBridgeUncertainInsertionV2(std::int32_t token){@autoreleasepool{
+    return EquationLabFinishClaimedWordInsertion(token,WordInsertionOutcome::Unconfirmed);
+}}
 RIBBON_EXPORT(MathTypeBridgeInsertionError,EquationLabWordInsertionError())
 RIBBON_EXPORT(MathTypeBridgeInsertionProgressiveSupport,1)
 RIBBON_EXPORT(MathTypeBridgeTakeInsertionDocumentRequest,EquationLabTakeInsertionDocumentRequest())
@@ -726,7 +741,8 @@ RIBBON_EXPORT(MathTypeBridgePublishWordWorkspace,([&](){
         NSString* identity=[NSString stringWithFormat:@"%@:%d",documentProcessIdentity(),token];
         bridge_probe::publishWordWorkspace(@{@"identity":identity,@"name":lines[2]},nil);return 0;
     }
-    BOOL settings=[lines.firstObject isEqual:@"ELWORK3"];NSUInteger stride=settings?5:3;
+    BOOL reveal=[lines.firstObject isEqual:@"ELWORK4"];
+    BOOL settings=reveal||[lines.firstObject isEqual:@"ELWORK3"];NSUInteger stride=settings?5:3;
     if(lines.count<4||(!settings&&![lines[0] isEqual:@"ELWORK2"]))return -2;
     NSScanner* activeScanner=[NSScanner scannerWithString:lines[1]];int activeToken=0;
     if(![activeScanner scanInt:&activeToken]||!activeScanner.isAtEnd||activeToken<0)return -3;
@@ -742,12 +758,14 @@ RIBBON_EXPORT(MathTypeBridgePublishWordWorkspace,([&](){
         if(settings){NSString* format=lines[6+i*stride];if(format.length>128||[format rangeOfCharacterFromSet:NSCharacterSet.controlCharacterSet].location!=NSNotFound)return -5;if(format.length)document[@"numberFormat"]=format;int revision=0;NSScanner* revisionScanner=[NSScanner scannerWithString:lines[7+i*stride]];if(![revisionScanner scanInt:&revision]||!revisionScanner.isAtEnd||revision<0||revision>2147483646)return -5;document[@"numberingRevision"]=@(revision);}[documents addObject:document];if(token==activeToken)active=@{@"identity":identity,@"name":name};
     }
     if((count==0&&activeToken!=0)||(count>0&&!active))return -6;
-    bridge_probe::publishWordWorkspace(active,documents);return 0;
+    bridge_probe::publishWordWorkspace(active,documents,reveal);return 0;
 })())
 RIBBON_EXPORT(MathTypeBridgeTakeWordDocumentRequest,takeWordDocumentRequest())
+RIBBON_EXPORT(MathTypeBridgeTakeWordRevealRequest,takeWordDocumentRequest(YES))
 RIBBON_EXPORT(MathTypeBridgeWordDocumentRequestCurrent,currentWordDocumentRequest())
 RIBBON_EXPORT(MathTypeBridgeBeginWordDocumentRequest,beginCurrentWordDocumentRequest())
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestOpened,finishCurrentWordDocumentRequest(@"opened"))
+RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestRevealed,finishCurrentWordDocumentRequest(@"revealed"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestEmpty,finishCurrentWordDocumentRequest(@"empty"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestNoDocument,finishCurrentWordDocumentRequest(@"no-document"))
 RIBBON_EXPORT(MathTypeBridgeFinishWordDocumentRequestFailed,finishCurrentWordDocumentRequest(@"failed"))

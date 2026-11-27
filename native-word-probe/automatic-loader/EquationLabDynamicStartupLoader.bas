@@ -106,20 +106,21 @@ Private Function FindSymbol(ByVal handle As LongPtr, ByVal name As String) As Lo
     FindSymbol = ELdlsym(handle, bytes(0))
 End Function
 
-Private Function CallOwnInt32(ByVal name As String) As Long
+Private Function CallOwnInt32(ByVal name As String, Optional ByVal token As Long = 0) As Long
     Dim pointer As LongPtr
     pointer = FindSymbol(mNativeHandle, name)
     If pointer = 0 Then Err.Raise vbObjectError + 7305, "Equation Lab", "Required native entry point is unavailable."
-    CallOwnInt32 = InvokeInt32(pointer)
+    CallOwnInt32 = InvokeInt32(pointer, token)
 End Function
 
-Private Function InvokeInt32(ByVal pointer As LongPtr) As Long
+Private Function InvokeInt32(ByVal pointer As LongPtr, Optional ByVal token As Long = 0) As Long
     On Error GoTo Failed
     Dim cif As LongPtr
     Dim result As LongPtr
     Dim ignored As LongPtr
     Dim value As Long
     Dim status As Long
+    Dim argumentType As LongPtr, argumentPointer As LongPtr
     Dim number As Long
     Dim description As String
     If pointer = 0 Then Err.Raise vbObjectError + 7305, "Equation Lab", "Cannot call a missing entry point."
@@ -129,9 +130,19 @@ Private Function InvokeInt32(ByVal pointer As LongPtr) As Long
     cif = ELcalloc(1, 256)
     result = ELcalloc(1, 8)
     If cif = 0 Or result = 0 Then Err.Raise vbObjectError + 7306, "Equation Lab", "Native call allocation failed."
-    status = ELffiPrep(cif, 1, 0, mReturnType, 0)
+    If token = 0 Then
+        status = ELffiPrep(cif, 1, 0, mReturnType, 0)
+    Else
+        argumentType = mReturnType
+        argumentPointer = VarPtr(token)
+        status = ELffiPrep(cif, 1, 1, mReturnType, VarPtr(argumentType))
+    End If
     If status <> 0 Then Err.Raise vbObjectError + 7307, "Equation Lab", "Unsupported native libffi ABI."
-    ELffiCall cif, pointer, result, 0
+    If token = 0 Then
+        ELffiCall cif, pointer, result, 0
+    Else
+        ELffiCall cif, pointer, result, VarPtr(argumentPointer)
+    End If
     ignored = ELcopyLong(value, result, 4)
     InvokeInt32 = value
     ELfree result
@@ -187,11 +198,11 @@ Public Sub ELShowNativeConnectionStatus()
         IIf(mConnected, vbInformation, vbExclamation), "Equation Lab"
 End Sub
 
-Public Function EquationLabNativeCommand(ByVal name As String) As Long
+Public Function EquationLabNativeCommand(ByVal name As String, Optional ByVal token As Long = 0) As Long
     If Not mConnected Then ConnectDynamicBridge
     If Not mConnected Then Err.Raise vbObjectError + 7310, "Equation Lab", "Word native component is not connected."
 #If Mac And VBA7 Then
-    EquationLabNativeCommand = CallOwnInt32(name)
+    EquationLabNativeCommand = CallOwnInt32(name, token)
 #Else
     EquationLabNativeCommand = -1
 #End If

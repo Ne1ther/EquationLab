@@ -20,6 +20,27 @@ test('Shared MathType numbering and unnumbered equations do not need a legacy co
  const unnumbered=await createDocx([{latex:'x'}]);
  assert.equal((await inspectDocx(shared)).hasLegacyNumbering,false);
  assert.equal((await inspectDocx(unnumbered)).hasLegacyNumbering,false);
+ assert.doesNotMatch(await (await JSZip.loadAsync(unnumbered)).file('word/settings.xml').async('string'),/updateFields/);
+});
+
+test('first numbering enables field updates for an Equation Lab export, while external settings remain byte-identical',async()=>{
+ const readSettings=async bytes=>(await JSZip.loadAsync(bytes)).file('word/settings.xml').async('string');
+ const original=await createDocx([{latex:'x'},{latex:'y'}],{fragment:true});
+ const arrange=bytes=>arrangeDocx(bytes,{layout:{mode:'numbered-right'},defaultNumberingFamily:'mathtype'});
+ const output=await arrange(original),numbered=await inspectDocx(output);
+ assert.deepEqual(numbered.objects.map(object=>object.layout.numberText),['(1)','(2)']);
+ assert.match(await readSettings(output),/<w:updateFields w:val="true"\/>/);
+ assert.doesNotMatch(await readSettings(original),/updateFields/);
+
+ for(const variant of ['external fieldless','explicit false','already has fields']){
+  const zip=await JSZip.loadAsync(original);
+  const main=await zip.file('word/document.xml').async('string'),settings=await readSettings(original);
+  if(variant==='external fieldless')zip.file('docProps/core.xml','<coreProperties xmlns="http://schemas.openxmlformats.org/package/2006/metadata/core-properties"/>');
+  if(variant==='explicit false')zip.file('word/settings.xml',settings.replace('<w:compat>','<w:updateFields w:val="false"/><w:compat>'));
+  if(variant==='already has fields')zip.file('word/document.xml',main.replace('<w:sectPr>',`<w:p><w:fldSimple w:instr="PAGE"><w:r><w:t>1</w:t></w:r></w:fldSimple></w:p><w:sectPr>`));
+  const bytes=await zip.generateAsync({type:'nodebuffer'}),arranged=await arrange(bytes);
+  assert.equal(await readSettings(arranged),await readSettings(bytes),variant);
+ }
 });
 
 test('Word snapshot reads carry the legacy numbering flag through the cache',async()=>{

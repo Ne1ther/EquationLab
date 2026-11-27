@@ -11,17 +11,18 @@ import {RegisterHTMLHandler} from 'mathjax-full/js/handlers/html.js';
 import {AllPackages} from 'mathjax-full/js/input/tex/AllPackages.js';
 import {CommandMap} from 'mathjax-full/js/input/tex/SymbolMap.js';
 import {Configuration} from 'mathjax-full/js/input/tex/Configuration.js';
-import {inspectOle,oleRenderLatex,makeOle} from './native.mjs';
+import {inspectOle,oleRenderLatex,makeOle,usesBundledMathOutline} from './native.mjs';
 import {readTypography} from './typography-native.mjs';
 import {vectorPdfRequest,vectorInkBounds} from './vector-pdf.mjs';
 import {nativeDimension32} from './native-dimensions.mjs';
 import {createNativeLayout} from './native-layout.mjs';
 import {legacyOutline} from './legacy-glyphs.mjs';
+import {wordPreviewBox} from './word-preview.mjs';
 
 const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);
 const {mtExtraOperators={}}=JSON.parse(readFileSync(new URL('./native-template-pieces.json',import.meta.url)));
 const symbolAngleOutlines=Object.freeze({0x2329:0x3008,0x232a:0x3009,0x27e8:0x3008,0x27e9:0x3009});
-new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elrows:'PileRows',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
+new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elprime:'Prime',elroot:'Root',elmeta:'Metadata',elruler:'Ruler',elrows:'PileRows',elwhite:'WhiteFence',elbar:'Bar',elDoubleArrow:'DoubleArrow',elStretchIntegral:'StretchIntegral',elJstat:'Jstat',overrightharpoon:'Harpoon',underrightharpoon:'Harpoon'},{Glyph(parser,name){
  const variant=parser.GetArgument(name),size=Number(parser.GetArgument(name)),code=Number.parseInt(parser.GetArgument(name),16),color=parser.GetArgument(name);
  if(!/^el\d+$/.test(variant)||!Number.isFinite(size)||size<=0||size>100||!Number.isInteger(code)||code<1||code>0x10ffff||code>=0xd800&&code<=0xdfff||!/^#[0-9a-f]{6}$/i.test(color))throw Error('Invalid native glyph');
  const ch=String.fromCodePoint(code),kind=/[A-Za-z\u0370-\u03ff]/.test(ch)||code>65535?'mi':/[0-9]/.test(ch)?'mn':'mo';
@@ -29,6 +30,10 @@ new CommandMap('equation-native-glyphs',{elglyph:'Glyph',elroot:'Root',elmeta:'M
  // replaces a custom CoreText variant with its -smallop/-largeop font, which
  // can silently emit an unembedded browser <text> for contour integrals.
  const token=parser.create('token',kind,{mathvariant:variant,stretchy:false,largeop:false,mathcolor:color},ch);token.setProperty('equationNativeSize',size);parser.Push(token);
+},Prime(parser,name){
+ const base=parser.create('node','TeXAtom',[parser.ParseArg(name)]),marks=parser.create('node','TeXAtom',[parser.ParseArg(name)]);
+ const node=parser.create('node','mrow',[base,marks]);
+ node.setProperty('elNativePrime',true);parser.Push(node);
 },Root(parser,name){
  const ratio=Number(parser.GetArgument(name)),node=parser.ParseArg(name);if(!Number.isFinite(ratio)||ratio<=0||ratio>100)throw Error('Invalid native root size');
  let root;node.walkTree(n=>{if(!root&&['msqrt','mroot'].includes(n.kind))root=n;});if(!root)throw Error('Missing native root');root.setProperty('elNativeBoxRatio',ratio);parser.Push(node);
@@ -172,6 +177,12 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
  // Full preference. The original explicit point sizes remain authoritative.
  if(!prefs){if(states.size!==1)throw Error('Preference-free rendering requires a single explicit native glyph');full=states.values().next().value.size;}
  const faces=[],faceIds=new Map();
+ const registeredGlyph=(code,font,style,size,color)=>{
+  const key=font+'\0'+style;let index=faceIds.get(key);
+  if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font,style,characters:[]});}
+  if(!faces[index].characters.includes(code))faces[index].characters.push(code);
+  return `\\elglyph{el${index}}{${size/full}}{${code.toString(16)}}{${color}}`;
+ };
  const glyphToken=(n,plain)=>{
   if(/\s/.test(String.fromCharCode(n.code)))return plain;
   const state=states.get(n.start);if(!state)throw Error('Missing native glyph state');
@@ -187,14 +198,15 @@ export async function renderNative(ole,{raster=true,maxWidth,maxHeight}={}){
   // Resolve only the outline lookup; the source MTCode and font position stay
   // intact for no-op saves and character-only edits.
   const symbolAngle=symbol?symbolAngleOutlines[n.code]:undefined;
-  const alias=legacyOutline(n.code,state.font),eastAsianMath=n.typeface===12&&[0x2223].includes(n.code),missing=n.code===0xf700,useSTIX=symbolStar||alias!==null||eastAsianMath||missing;
+  const alias=legacyOutline(n.code,state.font),eastAsianMath=n.typeface===12&&[0x2223].includes(n.code),missing=n.code===0xf700,useSTIX=symbolStar||alias!==null||eastAsianMath||missing||usesBundledMathOutline(n.code,state.font);
   const code=missing?0x25a1:alias??symbolAngle??(symbolStar?0x2217:symbol&&n.code===0x2d?0x2212:n.code),fontName=useSTIX?'STIX Two Math':state.font,fontStyle=state.style;
-  const key=fontName+'\0'+fontStyle;let index=faceIds.get(key);
-  if(index===undefined){index=faces.length;faceIds.set(key,index);faces.push({font:fontName,style:fontStyle,characters:[]});}
-  if(!faces[index].characters.includes(code))faces[index].characters.push(code);
-  return `\\elglyph{el${index}}{${state.size/full}}{${code.toString(16)}}{${state.color}}`;
+  return registeredGlyph(code,fontName,fontStyle,state.size,state.color);
  };
  const layoutCallbacks={
+  prime:(base,mark,latex,count)=>{
+   const {font,style}=prefs.styles[5],{size,color}=states.get(base.start);
+   return `\\elprime{${latex}}{${registeredGlyph(0x2032,font,style,size,layoutColors.get(mark.start)??color).repeat(count)}}`;
+  },
   embellishment:(n,latex)=>[14,15,19,20,25,26,27,28,30,31,32,36,37].includes(n.embellishment)?`\\elmeta{200}{${n.embellishment}}{${latex}}`:latex,
   template:(n,latex)=>{
    if(n.selector<=7||n.selector===9){
@@ -270,7 +282,12 @@ export async function rasterizeNativeSvg(svg,width,height,{maxWidth,maxHeight,sc
  return Buffer.from((await helperRequest({...vectorPdfRequest(svg,width,height),format:'png',scale})).png,'base64');
 }
 
-export async function nativePdf(ole){
- const p=await renderNative(ole,{raster:false}),response=await helperRequest(vectorPdfRequest(p.svg,p.width,p.height));
- return {pdf:response.pdf,width:Math.max(1,Math.round(p.width*2540/72)),height:Math.max(1,Math.round(p.height*2540/72))};
+export async function nativePdf(ole,{forWord=false,wordLayout,thumbnail}={}){
+ const rendered=await renderNative(ole,{raster:false});
+ const {width,height}=forWord?wordPreviewBox(rendered,wordLayout):rendered;
+ const response=await helperRequest(vectorPdfRequest(rendered.svg,width,height));
+ // A sidebar preview uses the editor's normal bounds and the same Native
+ // layout. Its optional raster must not invalidate an otherwise valid PDF.
+ const png=thumbnail?await rasterizeNativeSvg(rendered.svg,rendered.width,rendered.height,thumbnail).catch(()=>null):null;
+ return {pdf:response.pdf,width:Math.max(1,Math.round(width*2540/72)),height:Math.max(1,Math.round(height*2540/72)),...png?{png}:{}};
 }

@@ -22,17 +22,18 @@ std::int32_t EquationLabTakeWordInsertionFile(){return 0;}
 std::int32_t EquationLabWordInsertionFileNameNext(){return 0;}
 void EquationLabFinishWordInsertion(bool){}
 void EquationLabFinishWordInsertionUncertain(){}
+std::int32_t EquationLabFinishClaimedWordInsertion(std::int32_t,WordInsertionOutcome){return 1;}
 std::int32_t EquationLabWordInsertionError(){return 0;}
 std::int32_t EquationLabTakeInsertionDocumentRequest(){return 0;}
 std::int32_t EquationLabInsertionDocumentRequestToken(){return 0;}
 std::int32_t EquationLabFinishInsertionDocumentCapture(NSDictionary*){return -1;}
 void EquationLabFailInsertionDocumentCapture(){}
 namespace bridge_probe {
-void publishWordWorkspace(NSDictionary*,NSArray<NSDictionary*>*){}
+void publishWordWorkspace(NSDictionary*,NSArray<NSDictionary*>*,BOOL){}
 NSNumber* wordWorkspaceNumberingRevision(NSString*){return nil;}
 void closeWordWorkspaceIdentity(NSString*){}
 std::int32_t diagnosticValue(std::uint32_t){return testGeneration;}
-std::int32_t takeWordDocumentRequest(){return 0;}
+std::int32_t takeWordDocumentRequest(BOOL){return 0;}
 NSDictionary* wordDocumentRequestEnvelope(std::int32_t){return nil;}
 BOOL wordDocumentRequestIsCurrent(std::int32_t){return NO;}
 BOOL beginWordDocumentRequest(std::int32_t){return NO;}
@@ -156,6 +157,12 @@ int main(int argc,char** argv){@autoreleasepool{try{
     NSDictionary* targetRequest=@{@"requestId":requestId,@"target":@{@"identity":@"process:1",@"snapshot":@5,@"index":@2,@"nativeSha256":requestId}};
     NSArray* targetFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n1\nprocess:1\n5\n2\n%@\n",requestId,requestId] componentsSeparatedByString:@"\n"];
     check(wordRequestFieldsMatch(targetFields,targetRequest),"exact document request lost target fields");
+    NSDictionary* revealRequest=@{@"requestId":requestId,@"target":targetRequest[@"target"],@"reveal":@YES};
+    NSMutableArray* revealFields=[targetFields mutableCopy];revealFields[0]=@"ELDREQ4";
+    check(wordRequestFieldsMatch(revealFields,revealRequest),"reveal sidecar lost its exact target");
+    check(!wordRequestFieldsMatch(targetFields,revealRequest)&&!wordRequestFieldsMatch(revealFields,targetRequest),"reveal silently downgraded to an OLE activation");
+    revealFields[6]=@"3";
+    check(!wordRequestFieldsMatch(revealFields,revealRequest),"reveal sidecar accepted a changed ordinal");
     NSDictionary* explicitRequest=@{@"requestId":requestId,@"documentIdentity":@"process:inactive-42"};
     NSArray* explicitFields=[[@"ELDREQ2\n1\n" stringByAppendingFormat:@"%@\n2\nprocess:inactive-42\n0\n0\n\n",requestId] componentsSeparatedByString:@"\n"];
     check(wordRequestFieldsMatch(explicitFields,explicitRequest),"explicit document identity did not survive the native sidecar");

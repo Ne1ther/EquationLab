@@ -17,7 +17,7 @@ import {MAX_CATALOGUE_PAGE_BASE64} from './word-catalogue-limits.mjs';
 import {performance} from 'node:perf_hooks';
 
 const MAX_BLOB=16*1024*1024,MAX_ENCODED=4*Math.ceil(MAX_BLOB/3);
-const MAX_SESSIONS=16,TTL=20*60*1000,MAX_UINT64=18446744073709551615n;
+const MAX_SESSIONS=16,MAX_RECEIPTS=64,TTL=20*60*1000,MAX_UINT64=18446744073709551615n;
 const sessions=new Map();
 // Small acknowledgement receipts contain no formula, PDF or private file path.
 const receipts=new Map();
@@ -130,7 +130,8 @@ function request(operation,body){
  if(body.document?.insertionAfter&&typeof body.document.insertionAfter==='object')body.document.insertionAfter={...body.document.insertionAfter};
  if(body.numbering?.context&&typeof body.numbering.context==='object')body.numbering.context={...body.numbering.context};
  const allowed=operation==='native-open'?['session','native','acknowledgement','numberingSupport','numberingContextSupport','numberingExistingSupport','document']:operation==='native-insert-open'?['session','acknowledgement','numberingContextSupport','document','layout']:operation==='native-complete'?['ticket','session','native','pdf','width','height','target','docx','numbering']:operation==='native-enrich'?['ticket','session','document','initialSnapshot','failed']:operation==='native-catalogue-part'?['ticket','session','initialSnapshot','snapshot','ordinal','ooxml','encoding']:operation==='native-enrich-request'?['ticket','session','catalogueCount']:operation==='native-ack'?['ticket','session','ok','uncertain','numberingLocal']:operation==='native-navigate'?['ticket','index']:['ticket','session'];
- if(Object.keys(body).some(key=>!allowed.includes(key)))throw Error('Invalid native session request fields');
+ if(Object.keys(body).some(key=>!allowed.includes(key)&&!(operation==='native-poll'&&key==='insertionReplay')))throw Error('Invalid native session request fields');
+ if(Object.hasOwn(body,'insertionReplay')&&(body.insertionReplay!==true||body.session===undefined))throw Error('Invalid Word insertion delivery request');
  if(operation==='native-open'||operation==='native-insert-open')uint64(body.session);
  else{
   if(typeof body.ticket!=='string'||!/^[a-f0-9]{64}$/.test(body.ticket))throw Error('Invalid native session ticket');
@@ -138,10 +139,29 @@ function request(operation,body){
  }
  return body;
 }
-function refreshReceipt(receipt){
- if(receipt.state==='delivered'&&Number.isFinite(receipt.deliveredAt)&&Date.now()-receipt.deliveredAt>=ACK_CONFIRMATION_TIMEOUT){
-  receipt.state='unconfirmed';receipt.expires=Date.now()+TTL;
+function markReceiptDelivered(receipt,now){
+ receipt.state='delivered';
+ receipt.deliveredAt=now;
+ // A host may disappear without polling status or acknowledging the fragment.
+ receipt.expires=now+ACK_CONFIRMATION_TIMEOUT+TTL;
+}
+function finalizeReceipt(receipt,state,now){
+ if(receipt.state===state)return;
+ receipt.state=state;
+ receipt.expires=now+TTL;
+ if(state==='committed'||state==='failed')receipt.protectedUntil=now+ACK_CONFIRMATION_TIMEOUT;
+}
+function reserveReceiptCapacity(now){
+ // Reserve a slot for each open acknowledged edit before it completes.
+ const reserved=[...sessions.values()].filter(entry=>entry.acknowledgement&&!receipts.has(entry.ticket)).length;
+ if(receipts.size+reserved<MAX_RECEIPTS)return;
+ // Keep pending results and protect final results during the App's status
+ // window and the native host's retries, even under receipt pressure.
+ for(const [ticket,receipt] of receipts){
+  if(receipt.protectedUntil!==undefined&&receipt.protectedUntil<=now)receipts.delete(ticket);
+  if(receipts.size+reserved<MAX_RECEIPTS)return;
  }
+ throw Error('Too many unconfirmed native receipts');
 }
 function blob(value){
  if(typeof value!=='string'||!value.length||value.length>MAX_ENCODED||value.length%4||!/^[A-Za-z0-9+/]*={0,2}$/.test(value))throw Error('Invalid or oversized base64 payload');
@@ -180,7 +200,7 @@ function stopCataloguePreview(entry){
 function wipe(entry){
  stopEnrichment(entry);
  entry.document?.bytes.fill(0);entry.document=null;
- entry.native?.fill(0);entry.result?.native.fill(0);entry.result?.pdf.fill(0);entry.result?.docx?.fill(0);
+ entry.native?.fill(0);entry.result?.native?.fill(0);entry.result?.pdf?.fill(0);entry.result?.docx?.fill(0);
  entry.native=null;entry.result=null;
 }
 async function discard(entry){
@@ -190,14 +210,17 @@ async function discard(entry){
 }
 async function expireEntry(entry){
  const receipt=receipts.get(entry.ticket);
- if(receipt?.state==='queued'){receipt.state='failed';receipt.expires=Date.now()+TTL;}
+ if(receipt?.state==='queued')finalizeReceipt(receipt,'failed',Date.now());
  // Expiration wipes owned payloads even if filesystem deletion must be retried.
  wipe(entry);entry.state='expired';await discard(entry);
 }
 async function expire(){
- // Unresolved receipts remain queryable while Word may still mutate the host document.
- for(const [ticket,receipt]of receipts)if(receipt.expires!==null&&receipt.expires<=Date.now())receipts.delete(ticket);
- const now=Date.now();for(const entry of sessions.values())if(entry.expires<=now){try{await expireEntry(entry);}catch{/* The per-entry timer retries; other sessions stay isolated. */}}
+ const now=Date.now();
+ for(const [ticket,receipt] of receipts){
+  if(receipt.expires!==null&&receipt.expires<=now)receipts.delete(ticket);
+  else if(receipt.state==='delivered'&&receipt.deliveredAt+ACK_CONFIRMATION_TIMEOUT<=now)receipt.state='unconfirmed';
+ }
+ for(const entry of sessions.values())if(entry.expires<=now){try{await expireEntry(entry);}catch{/* The per-entry timer retries; other sessions stay isolated. */}}
 }
 function arm(entry){
  const delay=Math.max(1,entry.expires-Date.now());
@@ -384,6 +407,7 @@ async function enrichDocument(body){
    await stage(entry);full.path=join(entry.directory,'document-full.docx');
    await writeFile(full.path,full.bytes,{mode:0o600,flag:'wx'});
    stopCataloguePreview(entry);
+   if(old.scope==='selection')entry.selectionSnapshot=old.snapshot;
    old.bytes.fill(0);entry.document=full;entry.documentRequested=false;
    return {ok:true};
   });
@@ -399,7 +423,8 @@ async function enrichDocument(body){
  * Native, PDF and insertion DOCX payloads use canonical standard base64, at most 16 MiB each.
  * PDF validation checks its header, not the full document structure.
  * Optional session on ticket operations must match the original uint64 string.
- * A final poll consumes complete/cancelled state once and clears owned buffers.
+ * A final legacy poll consumes state once. Replay-capable insertion hosts
+ * receive the same fragment until acknowledgement or the delivery deadline.
  * Existing-formula edits stage/replace only Equation Native; insertion sessions
  * return one checked DOCX fragment for the native Word core to insert at its live range.
  */
@@ -414,21 +439,22 @@ export async function nativeSessionOperation(path,body){
   if(operation==='native-status'||operation==='native-ack'){
    const receipt=receipts.get(body.ticket);
    if(!receipt||body.session!==undefined&&body.session!==receipt.session)throw Error('Unknown or expired native receipt');
-   refreshReceipt(receipt);
    if(operation==='native-ack'){
     const hasUncertain=Object.hasOwn(body,'uncertain');
     if(body.session!==receipt.session||typeof body.ok!=='boolean'||hasUncertain&&(body.uncertain!==true||body.ok!==false))throw Error('Invalid native acknowledgement');
     if(Object.hasOwn(body,'numberingLocal')&&(body.numberingLocal!==true||!body.ok||!receipt.localNumberingAllowed))throw Error('Invalid native numbering acknowledgement');
     if(hasUncertain){
      if(!['delivered','unconfirmed','committed','failed'].includes(receipt.state))throw Error('Invalid native acknowledgement');
-     if(receipt.state==='delivered'||receipt.state==='unconfirmed'){receipt.state='unconfirmed';receipt.expires=Date.now()+TTL;}
+     if(receipt.state==='delivered')finalizeReceipt(receipt,'unconfirmed',Date.now());
     }else{
      if(!['delivered','unconfirmed','committed','failed'].includes(receipt.state))throw Error('Invalid native acknowledgement');
      const next=body.ok?'committed':'failed';
      if(['committed','failed'].includes(receipt.state)&&receipt.state!==next)throw Error('Conflicting native acknowledgement');
      if(body.numberingLocal===true&&receipt.state!==next)receipt.change.numberingLocal=true;
-     receipt.state=next;receipt.expires=Date.now()+TTL;
+     finalizeReceipt(receipt,next,Date.now());
     }
+    const replay=sessions.get(body.ticket);
+    if(replay?.insertionReplay)await discard(replay);
    }
    return {state:receipt.state,...operation==='native-status'&&receipt.state==='committed'&&receipt.change?{change:receipt.change}:{}};
   }
@@ -441,7 +467,7 @@ export async function nativeSessionOperation(path,body){
    if(!insertion&&body.numberingSupport!==undefined&&body.numberingSupport!==true)throw Error('Invalid native numbering capability');
    if(body.numberingContextSupport!==undefined&&(body.numberingContextSupport!==true||!insertion&&!body.numberingSupport))throw Error('Invalid native numbering context capability');
    if(body.numberingExistingSupport!==undefined&&(body.numberingExistingSupport!==true||!body.numberingSupport))throw Error('Invalid native existing numbering capability');
-   if(body.acknowledgement&&receipts.size>=64)throw Error('Too many native receipts');
+   if(body.acknowledgement)reserveReceiptCapacity(Date.now());
    let native,document,layout;
    try{
     if(insertion){
@@ -460,16 +486,33 @@ export async function nativeSessionOperation(path,body){
    do{ticket=randomBytes(32).toString('hex');}while(sessions.has(ticket));
    const entry={ticket,session:body.session,document,layout,insertion,numberingSupport:body.numberingSupport===true,numberingContextSupport:body.numberingContextSupport===true,numberingExistingSupport:body.numberingExistingSupport===true,acknowledgement:body.acknowledgement===true,native,result:null,state:'editing',expires:Date.now()+TTL,directory:null,path:null,timer:null};
    sessions.set(ticket,entry);arm(entry);
-   return {ticket,editorUrl:'equationlab://word-edit/'+ticket,documentContext:contextStatus(document)};
+   return {ticket,editorUrl:'equationlab://word-edit/'+ticket,documentContext:contextStatus(document),...insertion?{insertionReplay:true}:{}};
   }
   const entry=current(body);
   if(operation==='native-cancel'&&entry.insertion&&entry.state==='complete')throw Error('Cannot cancel a completed Word insertion before host acknowledgement');
   if(operation==='native-poll'){
+   if(body.insertionReplay&&!entry.insertion)throw Error('Only Word insertions can replay delivery');
    if(entry.state==='editing')return {state:'editing',...entry.documentRequested?{loadDocument:true,...entry.catalogueRequested?{cataloguePreview:true,catalogueEncoding:'deflate-base64'}:{}}:{}};
+   const receipt=receipts.get(body.ticket);
+   if(entry.state==='complete'&&body.insertionReplay){
+    if(!entry.insertionReplay){
+     entry.insertionReplay=true;
+     markReceiptDelivered(receipt,Date.now());
+     // Retain only the data needed to safely retry a lost response. A Word
+     // process that disappears cannot keep it past the receipt deadline.
+     entry.document?.bytes.fill(0);entry.document=null;
+     entry.result.native.fill(0);entry.result.native=null;
+     entry.result.pdf.fill(0);entry.result.pdf=null;
+     entry.expires=receipt.deliveredAt+ACK_CONFIRMATION_TIMEOUT;
+     clearTimeout(entry.timer);arm(entry);
+    }
+    const {docx,insertionMode,insertionNumberFormat}=entry.result;
+    return {state:'complete',docx:docx.toString('base64'),insertionMode,insertionNumberFormat};
+   }
+   if(entry.insertionReplay)throw Error('Word insertion requires replay-capable polling');
    const result=entry.state==='complete'?{state:'complete',native:entry.result.native.toString('base64'),pdf:entry.result.pdf.toString('base64'),width:entry.result.width,height:entry.result.height,...entry.insertion?{docx:entry.result.docx.toString('base64'),insertionMode:entry.result.insertionMode,insertionNumberFormat:entry.result.insertionNumberFormat}:{},...entry.result.target?{target:entry.result.target}:{},...entry.result.numbering?{numbering:entry.result.numbering}:{}}:entry.state==='navigate'?{state:'navigate',index:entry.navigateIndex}:{state:'cancelled'};
    await discard(entry);
-   const receipt=receipts.get(body.ticket);
-   if(receipt?.state==='queued'){receipt.state='delivered';receipt.deliveredAt=Date.now();}
+   if(receipt?.state==='queued')markReceiptDelivered(receipt,Date.now());
    return result;
   }
   editing(entry);
@@ -533,10 +576,12 @@ export async function nativeSessionOperation(path,body){
    await removeStage(entry);
    if(entry.expires<=Date.now()){await expireEntry(entry);throw Error('Unknown or expired native session');}
    const document=entry.document;
-   const change=!entry.insertion&&document?.identity&&document.snapshot!=null&&(!document.partial||existingNumberOnly)?{
+   const change=!entry.insertion&&document?.identity&&document.snapshot!=null?{
     documentIdentity:document.identity,documentSnapshot:document.snapshot,index:target?.index??document.position,
     previousNativeSha256:target?.expectedNativeSha256??createHash('sha256').update(entry.native).digest('hex'),
-    nativeSha256:createHash('sha256').update(native).digest('hex'),numberingChanged:!!numbering
+    nativeSha256:createHash('sha256').update(native).digest('hex'),numberingChanged:!!numbering,
+    ...document.partial&&!existingNumberOnly?{displayOnly:true}:{},
+    ...entry.selectionSnapshot!=null&&!target?{selectionSnapshot:entry.selectionSnapshot}:{}
    }:null;
    stopEnrichment(entry);entry.native.fill(0);entry.native=null;entry.result={native,pdf,width,height,target,numbering,docx,insertionMode,insertionNumberFormat};entry.state='complete';
    // Keep an unresolved acknowledgement until Word reports a terminal result.

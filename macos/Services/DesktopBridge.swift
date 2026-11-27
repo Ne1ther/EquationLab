@@ -266,6 +266,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if NSApp.isHidden { NSApp.unhideWithoutActivation() }
         if editorWindow.isMiniaturized { editorWindow.deminiaturize(nil) }
         editorWindow.makeKeyAndOrderFront(nil)
+        webView?.evaluateJavaScript("window.nativeResumeWordThumbnails?.()", completionHandler: nil)
         (webView as? EquationWKWebView)?.refreshAfterReveal()
         WordFocusHandoff.begin(editorIsFrontmost: editorIsFrontmost, wordIsFrontmost: wordIsFrontmost, fromWord: reason == "word-delivered",
             activateFromWord: { if let word {
@@ -415,10 +416,38 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
                 let allowed = word.activate(from: .current, options: [])
                 EditorLifecycleLog.logger.info("word_return_focus allowed=\(allowed, privacy: .public)")
             } },
-            hide: { if hideEditor { self.editorWindow?.orderOut(nil) } })
+            hide: { if hideEditor {
+                self.webView?.evaluateJavaScript("window.nativeStopWordThumbnails?.()", completionHandler: nil)
+                self.editorWindow?.orderOut(nil)
+            } })
         // Retain the window and engine so the next OLE activation is warm.
         if hideEditor { EditorLifecycleLog.logger.info("word_editor_hidden") }
         else { EditorLifecycleLog.logger.info("word_navigation_handoff") }
+    }
+    var canRevealWordFormula: Bool {
+        state.wordDocumentIdentity != nil && state.fileCopyGeneration == nil && !state.busy &&
+        !state.wordOutcomeUnknown && !wordSessionIsInsertion && !wordDocumentRequestPending
+    }
+    func revealWordFormula(_ index: Int, documentIdentity: String, revealToken: String?) {
+        guard documentIdentity == state.wordDocumentIdentity,
+              let revealToken, state.objects.contains(where: { $0.id == index && $0.revealToken == revealToken }) else {
+            state.message = "公式位置可能已变化，请在 Word 打开目标文档并刷新公式列表。"
+            state.messageError = true
+            return
+        }
+        guard canRevealWordFormula, let webView else { return }
+        webView.callAsyncJavaScript("return await window.nativeRevealWordFormula(index, documentIdentity, revealToken)",
+                                    arguments: ["index": index, "documentIdentity": documentIdentity, "revealToken": revealToken], in: nil, in: .page) { [weak self] result in
+            guard let self, self.state.wordDocumentIdentity == documentIdentity,
+                  self.state.objects.contains(where: { $0.id == index && $0.revealToken == revealToken }) else { return }
+            switch result {
+            case .success(let revealed):
+                if revealed as? Bool == true { self.returnToWord(hideEditor: false) }
+            case .failure:
+                self.state.message = "Word 暂时没有响应，请稍后再试。"
+                self.state.messageError = true
+            }
+        }
     }
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         editorReady = true; (webView as? EquationWKWebView)?.recordLifecycle("loaded"); (webView as? EquationWKWebView)?.syncAppearance()
@@ -434,7 +463,11 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
     }
     func prepareToClose(_ completion: @escaping (Bool) -> Void) {
         recordWindowEvent("close_requested", reason: wordSessionActive ? "word-session" : "standalone")
-        guard hasWordSessionOrRequest else { completion(true); return }
+        guard hasWordSessionOrRequest else {
+            webView?.evaluateJavaScript("window.nativeStopWordThumbnails?.()", completionHandler: nil)
+            completion(true)
+            return
+        }
         guard let webView, editorReady else {
             if !wordSessionActive {
                 // No draft was delivered yet. A loading request can be ended
@@ -453,6 +486,7 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
                 // A completed close belongs to the session that requested it.
                 // Do not hide or terminate a replacement opened during its ACK.
                 let accepted = value as? Bool == true && self?.hasWordSessionOrRequest != true
+                if !accepted { self?.webView?.evaluateJavaScript("window.nativeResumeWordThumbnails?.()", completionHandler: nil) }
                 self?.recordWindowEvent("close_result", reason: accepted ? "accepted" : "kept-draft")
                 completion(accepted)
             case .failure(let error):
@@ -523,8 +557,16 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
             self.action("field", ["id": id, "value": value])
         })
     }
-    func reply(_ id: String, _ result: [String: Any]) {
+    func reply(_ id: String, _ result: [String: Any], to request: WKScriptMessage? = nil) {
         guard let data = try? JSONSerialization.data(withJSONObject: ["id": id, "result": result]), let json = String(data: data, encoding: .utf8) else { return }
+        if let request {
+            // A rejected request must finish in its own frame. A subframe can
+            // use IDs that overlap with requests pending in the main editor.
+            request.webView?.evaluateJavaScript("window.nativeReply?.(\(json))", in: request.frameInfo, in: .page) { result in
+                if case .failure(let error) = result { EditorLifecycleLog.logger.error("reply failed \(error.localizedDescription, privacy: .public)") }
+            }
+            return
+        }
         webView?.evaluateJavaScript("window.nativeReply(\(json))") { _, error in
             if let error { EditorLifecycleLog.logger.error("reply failed \(error.localizedDescription, privacy: .public)") }
         }
@@ -674,6 +716,15 @@ final class DesktopBridge: NSObject, ObservableObject, WKScriptMessageHandler, W
         if action == "copyLatex" {
             NSPasteboard.general.clearContents(); NSPasteboard.general.setString(payload["latex"] as? String ?? "", forType: .string)
             reply(id, ["ok": true, "data": ["copied": true]]); return
+        }
+        if action == "readLatexPasteboard" {
+            guard message.webView === webView, message.frameInfo.isMainFrame,
+                  message.frameInfo.request.url?.isFileURL == true else {
+                reply(id, ["ok": false, "error": "Clipboard request is not from the editor."], to: message)
+                return
+            }
+            reply(id, ["ok": true, "data": LaTeXPasteboard.snapshot(NSPasteboard.general).payload], to: message)
+            return
         }
         if action == "copyPNG" {
             run(id, action: "preview", payload: payload, copyPNG: true); return

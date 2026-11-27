@@ -323,11 +323,12 @@ struct FormulaSidebar: View {
                         .background {
                             let thumbnailDocument = bridge.state.documentPath
                             let fileCopyGeneration = bridge.state.fileCopyGeneration
-                            let canRequest = fileCopyGeneration != nil || bridge.wordSessionActive
-                            FormulaThumbnailVisibility(key: "\(thumbnailDocument):\(fileCopyGeneration ?? 0):\(item.id)", enabled: canRequest && !showingFavorites && !bridge.state.wordCatalogAvailable && item.image == nil && !item.readOnly) {
-                                thumbnailVisibility(item.id, document: thumbnailDocument, fileCopyGeneration: fileCopyGeneration, visible: true)
+                            let documentIdentity = fileCopyGeneration == nil ? bridge.state.wordDocumentIdentity : nil
+                            let canRequest = fileCopyGeneration != nil || bridge.wordSessionActive || documentIdentity != nil
+                            FormulaThumbnailVisibility(key: "\(thumbnailDocument):\(documentIdentity ?? ""):\(fileCopyGeneration ?? 0):\(item.id)", enabled: canRequest && !showingFavorites && !bridge.state.wordCatalogAvailable && item.image == nil && !item.readOnly) {
+                                thumbnailVisibility(item.id, document: thumbnailDocument, documentIdentity: documentIdentity, fileCopyGeneration: fileCopyGeneration, visible: true)
                             } onHidden: {
-                                thumbnailVisibility(item.id, document: thumbnailDocument, fileCopyGeneration: fileCopyGeneration, visible: false)
+                                thumbnailVisibility(item.id, document: thumbnailDocument, documentIdentity: documentIdentity, fileCopyGeneration: fileCopyGeneration, visible: false)
                             }
                         }
                         .listRowBackground(rowSelectionBackground(for: item.id))
@@ -336,9 +337,15 @@ struct FormulaSidebar: View {
                                 bridge.invoke(showingFavorites ? "nativeFavorite" : "nativeSelectObject", argument: item.id)
                             }.disabled(selectionUnavailable)
                             Button(bridge.t("复制 LaTeX")) {
-                                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(item.latex, forType: .string)
+                                bridge.invoke("nativeCopyEquationLatex", argument: item.latex)
                             }.disabled(item.latex.isEmpty)
                             if !showingFavorites {
+                                if bridge.state.fileCopyGeneration == nil, let documentIdentity = bridge.state.wordDocumentIdentity {
+                                    Button(bridge.t("定位原文位置")) {
+                                        bridge.revealWordFormula(item.id, documentIdentity: documentIdentity, revealToken: item.revealToken)
+                                    }
+                                        .disabled(!bridge.canRevealWordFormula)
+                                }
                                 Button(bridge.t("查看原生设置")) { bridge.invoke("nativeSelectObject", argument: item.id); bridge.inspectorTab = .style; bridge.showInspector = true }.disabled(selectionUnavailable)
                             }
                         }
@@ -726,8 +733,9 @@ struct FormulaSidebar: View {
             scroll.scrollTo(selected, anchor: .center)
         }
     }
-    private func thumbnailVisibility(_ index: Int, document: String, fileCopyGeneration: Int?, visible: Bool) {
+    private func thumbnailVisibility(_ index: Int, document: String, documentIdentity: String?, fileCopyGeneration: Int?, visible: Bool) {
         var payload: [String: Any] = ["index": index, "path": document, "visible": visible]
+        if let documentIdentity { payload["documentIdentity"] = documentIdentity }
         if let fileCopyGeneration { payload["fileCopyGeneration"] = fileCopyGeneration }
         guard let data = try? JSONSerialization.data(withJSONObject: payload),
               let argument = String(data: data, encoding: .utf8) else { return }

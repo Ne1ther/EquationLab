@@ -5,19 +5,20 @@
 #include <cstring>
 #include <cerrno>
 #include <fcntl.h>
+#include <os/log.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
-typedef NS_ENUM(NSUInteger, ELWordInsertionOutcome) {
-    ELWordInsertionOutcomeFailed,
-    ELWordInsertionOutcomeCommitted,
-    ELWordInsertionOutcomeUnconfirmed,
-};
+using ELWordInsertionOutcome=WordInsertionOutcome;
+static constexpr auto ELWordInsertionOutcomeFailed=WordInsertionOutcome::Failed;
+static constexpr auto ELWordInsertionOutcomeCommitted=WordInsertionOutcome::Committed;
+static constexpr auto ELWordInsertionOutcomeUnconfirmed=WordInsertionOutcome::Unconfirmed;
 
 // Share the bounded, nonredirecting HTTP client and cooperative activation
 // used by existing OLE edits. No network wait runs on Word's main thread.
 id EquationLabTransportRequest(NSString*,NSDictionary*,void(^)(NSDictionary*,NSError*));
 void EquationLabTransportLaunch(NSString*,void(^)(NSError*));
+bool EquationLabTransportConnectionRefused(NSError*);
 void EquationLabDiscardDocumentParts();
 
 @interface ELWordInsertion : NSObject
@@ -29,8 +30,11 @@ void EquationLabDiscardDocumentParts();
 @property(nonatomic,strong) NSDate* documentRequestCheckedAt;
 @property(nonatomic) NSUInteger documentRequestFailures;
 @property(nonatomic,strong) NSDate* deadline;
+@property(nonatomic,strong) NSDate* serviceWakeDeadline;
 @property(nonatomic,strong) NSData* fragment;
 @property(nonatomic,strong) NSURL* fragmentFile;
+@property(nonatomic,strong) dispatch_source_t deliveryCleanup;
+@property(nonatomic) NSTimeInterval deliveryCleanupAt;
 @property(nonatomic) NSUInteger fileNameCursor;
 @property(nonatomic,copy) NSString* mode;
 @property(nonatomic,copy) NSString* numberFormat;
@@ -41,12 +45,18 @@ void EquationLabDiscardDocumentParts();
 @property(nonatomic) BOOL claimed;
 @property(nonatomic) BOOL ended;
 @property(nonatomic) NSUInteger attempts;
+@property(nonatomic) NSUInteger openRetries;
+@property(nonatomic) BOOL replayDelivery;
 @property(nonatomic,copy) NSDictionary* initialDocument;
 @property(nonatomic,strong) NSDate* enrichmentDeadline;
 @property(nonatomic,strong) id enrichmentRequest;
 @property(nonatomic) BOOL enrichmentClaimed;
 @property(nonatomic) BOOL enrichmentFinished;
+@property(nonatomic,strong) NSDate* editorLaunchDeadline;
 - (void)poll;
+- (void)openWithBody:(NSDictionary*)body;
+- (void)checkServiceWakeDeadline;
+- (void)checkEditorLaunchDeadline;
 @end
 
 @interface ELWordAcknowledgement : NSObject
@@ -76,6 +86,32 @@ static constexpr NSUInteger MaximumAcknowledgementAttempts=5;
 static constexpr NSTimeInterval AcknowledgementDeadlineSeconds=50.0;
 static constexpr NSTimeInterval AcknowledgementRetryDelays[]={0.25,0.5,1.0,2.0};
 static constexpr NSUInteger MaximumRememberedAcknowledgements=64;
+static constexpr NSUInteger MaximumOpenRetries=8;
+static constexpr NSTimeInterval ServiceWakeSeconds=10.0;
+static constexpr NSTimeInterval EditorLaunchSeconds=15.0;
+static constexpr NSTimeInterval DeliveryCleanupSeconds=20.0;
+static constexpr NSTimeInterval ClaimCleanupSeconds=30.0;
+
+static bool isCurrentInsertion(ELWordInsertion* state) {
+    return state&&state==insertion&&!state.ended&&state.generation==insertionGeneration;
+}
+
+static void launchInsertion(NSString* url,void(^completion)(NSError*)) {
+    EquationLabTransportLaunch(url,^(NSError* error){
+        if(NSThread.isMainThread)completion(error);
+        else dispatch_async(dispatch_get_main_queue(),^{completion(error);});
+    });
+}
+
+static void logInsertionFailure(const char* phase,NSInteger code,NSError* error=nil) {
+    static os_log_t log=os_log_create("app.equationlab.mac","WordHostInsertion");
+    os_log_error(log,"insertion phase=%{public}s result=%ld domain=%{public}@ detail=%ld",
+                 phase,static_cast<long>(code),error.domain?:@"",static_cast<long>(error.code));
+}
+
+static NSDictionary* insertionPollBody(NSString* ticket,NSString* session,BOOL replay) {
+    return replay?@{@"ticket":ticket,@"session":session,@"insertionReplay":@YES}:@{@"ticket":ticket,@"session":session};
+}
 
 static NSMutableDictionary<NSString*,ELWordAcknowledgement*>* acknowledgementQueue() {
     if(!pendingAcknowledgements)pendingAcknowledgements=[NSMutableDictionary dictionary];
@@ -100,11 +136,11 @@ static void recordAcknowledgement(ELWordAcknowledgement* acknowledgement) {
 }
 
 static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsertionOutcome outcome,std::uint64_t generation);
-static void retireInsertionTicket(NSString* ticket,NSString* session,std::uint64_t generation) {
+static void retireInsertionTicket(NSString* ticket,NSString* session,std::uint64_t generation,BOOL replay) {
     if(!ticket.length)return;
     NSDictionary* body=@{@"ticket":ticket,@"session":session};
     EquationLabTransportRequest(@"/api/native-cancel",body,^(NSDictionary*,NSError*){
-        EquationLabTransportRequest(@"/api/native-poll",body,^(NSDictionary* result,NSError*){
+        EquationLabTransportRequest(@"/api/native-poll",insertionPollBody(ticket,session,replay),^(NSDictionary* result,NSError*){
             if([result[@"state"] isEqual:@"complete"]){
                 queueAcknowledgement(ticket,session,ELWordInsertionOutcomeFailed,generation);
                 return;
@@ -118,20 +154,69 @@ static void retireInsertionTicket(NSString* ticket,NSString* session,std::uint64
         });
     });
 }
+static void cancelDeliveryCleanup(ELWordInsertion* state) {
+    if(!state.deliveryCleanup)return;
+    dispatch_source_cancel(state.deliveryCleanup);
+    state.deliveryCleanup=nil;
+}
 static void endInsertion(ELWordInsertion* state,std::int32_t error,bool cancel) {
     if(!state||state.ended)return;
     state.ended=YES;state.fragment=nil;state.request=nil;state.enrichmentFinished=YES;
-    if(state.fragmentFile){unlink(state.fragmentFile.fileSystemRepresentation);state.fragmentFile=nil;}
+    cancelDeliveryCleanup(state);
+    if(state.fragmentFile){
+        if(unlink(state.fragmentFile.fileSystemRepresentation)&&errno!=ENOENT)logInsertionFailure("unlink-fragment",errno);
+        state.fragmentFile=nil;
+    }
     if(state.enrichmentClaimed)EquationLabDiscardDocumentParts();
     id enrichmentRequest=state.enrichmentRequest;state.enrichmentRequest=nil;
     if([enrichmentRequest respondsToSelector:@selector(cancel)])[enrichmentRequest cancel];
-    if(insertion==state){insertion=nil;insertionError=error;}
+    if(insertion==state){
+        insertion=nil;insertionError=error;
+        if(error){logInsertionFailure("ended",error);EquationLabWakeWordHost();}
+    }
     if(error&&state.documentRequestId.length){
         // A rejected capture or launch must release the App's pending request
         // immediately, even if VBA already reported its synchronous open step.
         EquationLabTransportRequest(@"/api/native-document-cancel",@{@"requestId":state.documentRequestId},^(NSDictionary*,NSError*){});
     }
-    if(cancel)retireInsertionTicket(state.ticket,state.session,state.generation);
+    if(cancel)retireInsertionTicket(state.ticket,state.session,state.generation,state.replayDelivery);
+}
+
+static void finishInsertion(ELWordInsertion* state,ELWordInsertionOutcome outcome) {
+    const std::int32_t error=outcome==ELWordInsertionOutcomeCommitted?0:outcome==ELWordInsertionOutcomeFailed?6:7;
+    NSString* ticket=state.ticket;NSString* session=state.session;const auto generation=state.generation;
+    endInsertion(state,error,false);
+    queueAcknowledgement(ticket,session,outcome,generation);
+}
+
+static void expireUnclaimedDelivery(ELWordInsertion* state) {
+    if(!isCurrentInsertion(state)||!state.fragment||state.claimed)return;
+    logInsertionFailure("unclaimed-delivery-timeout",6);
+    // No host macro took the fragment, so Word did not apply this insert.
+    finishInsertion(state,ELWordInsertionOutcomeFailed);
+}
+
+static void scheduleDeliveryCleanup(ELWordInsertion* state) {
+    state.deliveryCleanupAt=NSProcessInfo.processInfo.systemUptime+DeliveryCleanupSeconds;
+    dispatch_source_t timer=dispatch_source_create(DISPATCH_SOURCE_TYPE_TIMER,0,0,dispatch_get_main_queue());
+    if(!timer){expireUnclaimedDelivery(state);return;}
+    state.deliveryCleanup=timer;
+    __weak ELWordInsertion* weak=state;
+    dispatch_source_set_event_handler(timer,^{expireUnclaimedDelivery(weak);});
+    dispatch_source_set_timer(timer,dispatch_time(DISPATCH_TIME_NOW,DeliveryCleanupSeconds*NSEC_PER_SEC),DISPATCH_TIME_FOREVER,0);
+    dispatch_resume(timer);
+}
+
+static void scheduleClaimCleanup(ELWordInsertion* state,NSTimeInterval seconds) {
+    __weak ELWordInsertion* weak=state;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,static_cast<std::int64_t>(seconds*NSEC_PER_SEC)),dispatch_get_main_queue(),^{
+        ELWordInsertion* current=weak;
+        if(!isCurrentInsertion(current)||!current.claimed)return;
+        logInsertionFailure("claimed-completion-timeout",7);
+        // Word might have already committed. Never make the claim available
+        // again or treat a missing notification as proof of rollback.
+        finishInsertion(current,ELWordInsertionOutcomeUnconfirmed);
+    });
 }
 
 @implementation ELWordAcknowledgement
@@ -151,6 +236,7 @@ static void endInsertion(ELWordInsertion* state,std::int32_t error,bool cancel) 
     if(acknowledgementQueue()[self.key]==self)[acknowledgementQueue() removeObjectForKey:self.key];
     recordAcknowledgement(self);
     if(self.generation==insertionGeneration)acknowledgementError=self.outcome==ELWordInsertionOutcomeUnconfirmed||!confirmed?7:0;
+    if(!confirmed)logInsertionFailure("acknowledgement",7);
 }
 - (void)retryOrFail {
     if(![self.state isEqual:@"pending"])return;
@@ -212,6 +298,67 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
 }
 
 @implementation ELWordInsertion
+- (void)checkServiceWakeDeadline {
+    if(isCurrentInsertion(self)&&!self.ticket&&self.serviceWakeDeadline.timeIntervalSinceNow<=0)endInsertion(self,1,false);
+}
+- (void)checkEditorLaunchDeadline {
+    if(isCurrentInsertion(self)&&self.editorLaunchDeadline&&self.editorLaunchDeadline.timeIntervalSinceNow<=0){
+        logInsertionFailure("launch-editor-timeout",2);endInsertion(self,2,true);
+    }
+}
+- (void)retryOpenWithBody:(NSDictionary*)body {
+    if(!isCurrentInsertion(self))return;
+    if(self.openRetries>=MaximumOpenRetries||self.serviceWakeDeadline.timeIntervalSinceNow<=0){endInsertion(self,1,false);return;}
+    self.openRetries++;
+    __weak ELWordInsertion* weak=self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,500*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak openWithBody:body];});
+}
+- (void)openWithBody:(NSDictionary*)body {
+    if(!isCurrentInsertion(self))return;
+    // Keep the callback alive after cancellation to retire any ticket the
+    // service issued just before Word cancelled the open.
+    self.request=EquationLabTransportRequest(@"/api/native-insert-open",body,^(NSDictionary* result,NSError* error){
+        NSString* ticket=[result[@"ticket"] isKindOfClass:NSString.class]?result[@"ticket"]:nil;
+        NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
+        BOOL valid=ticket.length==64&&[ticket rangeOfCharacterFromSet:invalid].location==NSNotFound;
+        BOOL replay=[result[@"insertionReplay"] isEqual:@YES];
+        if(!isCurrentInsertion(self)){if(valid)retireInsertionTicket(ticket,self.session,self.generation,replay);return;}
+        self.request=nil;
+        if(error||!valid){
+            if(!EquationLabTransportConnectionRefused(error)){
+                logInsertionFailure("open",1,error);endInsertion(self,1,false);return;
+            }
+            if(self.serviceWakeDeadline){[self retryOpenWithBody:body];return;}
+            self.serviceWakeDeadline=[NSDate dateWithTimeIntervalSinceNow:ServiceWakeSeconds];
+            __weak ELWordInsertion* weak=self;
+            launchInsertion(@"equationlab://wake",^(NSError* wakeError){
+                ELWordInsertion* state=weak;if(!isCurrentInsertion(state))return;
+                [state checkServiceWakeDeadline];
+                if(!isCurrentInsertion(state))return;
+                if(wakeError){logInsertionFailure("wake-service",2,wakeError);endInsertion(state,2,false);return;}
+                [state retryOpenWithBody:body];
+            });
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW,ServiceWakeSeconds*NSEC_PER_SEC),dispatch_get_main_queue(),^{
+                [weak checkServiceWakeDeadline];
+            });
+            return;
+        }
+        self.ticket=ticket;self.replayDelivery=replay;
+        NSString* url=[@"equationlab://word-edit/" stringByAppendingString:ticket];
+        if(self.documentRequestId.length)url=[url stringByAppendingFormat:@"?request=%@",self.documentRequestId];
+        self.editorLaunchDeadline=[NSDate dateWithTimeIntervalSinceNow:EditorLaunchSeconds];
+        __weak ELWordInsertion* weak=self;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW,EditorLaunchSeconds*NSEC_PER_SEC),dispatch_get_main_queue(),^{[weak checkEditorLaunchDeadline];});
+        launchInsertion(url,^(NSError* launchError){
+            ELWordInsertion* state=weak;if(!isCurrentInsertion(state))return;
+            [state checkEditorLaunchDeadline];
+            if(!isCurrentInsertion(state)||!state.editorLaunchDeadline)return;
+            state.editorLaunchDeadline=nil;
+            if(launchError){logInsertionFailure("launch-editor",2,launchError);endInsertion(state,2,true);return;}
+            [state poll];
+        });
+    });
+}
 - (void)poll {
     if(self.ended||self!=insertion||self.request||self.fragment)return;
     if(self.deadline.timeIntervalSinceNow<=0){endInsertion(self,3,true);return;}
@@ -231,9 +378,9 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
         return;
     }
     __weak ELWordInsertion* weak=self;
-    self.request=EquationLabTransportRequest(@"/api/native-poll",@{@"ticket":self.ticket,@"session":self.session},^(NSDictionary* result,NSError* error){
+    self.request=EquationLabTransportRequest(@"/api/native-poll",insertionPollBody(self.ticket,self.session,self.replayDelivery),^(NSDictionary* result,NSError* error){
         ELWordInsertion* state=weak;if(!state||state.ended||state!=insertion)return;state.request=nil;
-        if(error){if(++state.attempts>3){endInsertion(state,4,true);return;}}
+        if(error){if(++state.attempts>3){logInsertionFailure("poll",4,error);endInsertion(state,4,true);return;}}
         else if([result[@"state"] isEqual:@"complete"]){
             NSString* mode=[result[@"insertionMode"] isKindOfClass:NSString.class]?result[@"insertionMode"]:nil;
             if(!mode||![@[@"inline",@"display",@"numbered-left",@"numbered-right"] containsObject:mode]){EquationLabFinishWordInsertion(false);return;}
@@ -245,7 +392,8 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
             NSString* encoded=[result[@"docx"] isKindOfClass:NSString.class]?result[@"docx"]:nil;
             NSData* fragment=encoded.length<=24*1024*1024?[[NSData alloc] initWithBase64EncodedString:encoded options:0]:nil;
             if(fragment.length<4||memcmp(fragment.bytes,"PK\x03\x04",4)){EquationLabFinishWordInsertion(false);return;}
-            state.mode=mode;state.numberFormat=numberFormat;state.numberFormatCursor=0;state.fragment=fragment;EquationLabWakeWordHost();return;
+            state.mode=mode;state.numberFormat=numberFormat;state.numberFormatCursor=0;state.fragment=fragment;
+            scheduleDeliveryCleanup(state);EquationLabWakeWordHost();return;
         }else if([result[@"state"] isEqual:@"cancelled"]){endInsertion(state,0,false);return;}
         else if(![result[@"state"] isEqual:@"editing"]){endInsertion(state,5,true);return;}
         else if([result[@"loadDocument"] boolValue]&&[state.initialDocument[@"scope"] isEqual:@"insertion"]&&!state.enrichmentFinished){
@@ -257,6 +405,7 @@ static void queueAcknowledgement(NSString* ticket,NSString* session,ELWordInsert
                 });
             }else if(state.enrichmentDeadline.timeIntervalSinceNow<=0)EquationLabFailInsertionDocumentCapture();
         }
+        if(!error)state.attempts=0;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW,200*NSEC_PER_MSEC),dispatch_get_main_queue(),^{[weak poll];});
     });
 }
@@ -272,29 +421,25 @@ std::int32_t EquationLabBeginWordInsertion(NSURL* directory,NSDictionary* docume
     state.documentRequestWatchUntil=[NSDate dateWithTimeIntervalSinceNow:65];
     state.generation=++insertionGeneration;state.deadline=[NSDate dateWithTimeIntervalSinceNow:20*60];insertion=state;insertionError=0;acknowledgementError=0;
     NSDictionary* body=@{@"session":state.session,@"acknowledgement":@YES,@"numberingContextSupport":@YES,@"document":document,@"layout":layout};
-    state.request=EquationLabTransportRequest(@"/api/native-insert-open",body,^(NSDictionary* result,NSError* error){
-        NSString* ticket=[result[@"ticket"] isKindOfClass:NSString.class]?result[@"ticket"]:nil;
-        NSCharacterSet* invalid=[[NSCharacterSet characterSetWithCharactersInString:@"0123456789abcdef"] invertedSet];
-        BOOL valid=ticket.length==64&&[ticket rangeOfCharacterFromSet:invalid].location==NSNotFound;
-        if(state.ended||insertion!=state){if(valid)retireInsertionTicket(ticket,state.session,state.generation);return;}
-        state.request=nil;
-        if(error||!valid){endInsertion(state,1,false);return;}
-        state.ticket=ticket;
-        NSString* url=[@"equationlab://word-edit/" stringByAppendingString:ticket];
-        if(state.documentRequestId.length)url=[url stringByAppendingFormat:@"?request=%@",state.documentRequestId];
-        EquationLabTransportLaunch(url,^(NSError* launchError){
-            if(state.ended||insertion!=state)return;
-            if(launchError){endInsertion(state,2,true);return;}
-            [state poll];
-        });
-    });
+    [state openWithBody:body];
     return 0;
 }
-bool EquationLabWordInsertionActive(){return insertion!=nil;}
-void EquationLabCancelWordInsertion(){if(NSThread.isMainThread&&insertion){if(insertion.fragment)EquationLabFinishWordInsertion(false);else endInsertion(insertion,0,true);}}
+bool EquationLabWordInsertionActive(){return NSThread.isMainThread&&insertion!=nil;}
+void EquationLabCancelWordInsertion(){
+    if(!NSThread.isMainThread||!insertion)return;
+    if(insertion.claimed)finishInsertion(insertion,ELWordInsertionOutcomeUnconfirmed);
+    else if(insertion.fragment)finishInsertion(insertion,ELWordInsertionOutcomeFailed);
+    else endInsertion(insertion,0,true);
+}
 NSData* EquationLabClaimWordInsertion(std::int32_t* token){
     if(!NSThread.isMainThread||!insertion.fragment||insertion.claimed)return nil;
-    insertion.claimed=YES;if(token)*token=insertion.token;return insertion.fragment;
+    // A delayed main-queue timer cannot let a late macro claim expired work.
+    if(NSProcessInfo.processInfo.systemUptime>=insertion.deliveryCleanupAt){expireUnclaimedDelivery(insertion);return nil;}
+    insertion.claimed=YES;
+    cancelDeliveryCleanup(insertion);
+    scheduleClaimCleanup(insertion,ClaimCleanupSeconds);
+    if(token)*token=insertion.token;
+    return insertion.fragment;
 }
 std::int32_t EquationLabTakeWordInsertionFile(){
     std::int32_t token=0;NSData* data=EquationLabClaimWordInsertion(&token);
@@ -304,7 +449,7 @@ std::int32_t EquationLabTakeWordInsertionFile(){
     NSURL* file=[state.directory URLByAppendingPathComponent:[NSString stringWithFormat:@"word-insert-%@.docx",nonce]];
     // Never replace an earlier path, even if its file is still open in Word.
     int fd=open(file.fileSystemRepresentation,O_WRONLY|O_CREAT|O_EXCL|O_NOFOLLOW|O_CLOEXEC,0600);
-    if(fd<0){EquationLabFinishWordInsertion(false);return -2;}
+    if(fd<0){logInsertionFailure("open-fragment",errno);EquationLabFinishWordInsertion(false);return -2;}
     state.fragmentFile=file;
     struct stat stat{};bool ok=!fstat(fd,&stat)&&S_ISREG(stat.st_mode)&&stat.st_uid==geteuid()&&!fchmod(fd,0600);
     const auto* bytes=static_cast<const unsigned char*>(data.bytes);std::size_t used=0;
@@ -314,7 +459,7 @@ std::int32_t EquationLabTakeWordInsertionFile(){
         if(count<=0)ok=false;else used+=static_cast<std::size_t>(count);
     }
     if(close(fd))ok=false;
-    if(!ok){EquationLabFinishWordInsertion(false);return -2;}
+    if(!ok){logInsertionFailure("write-fragment",errno);EquationLabFinishWordInsertion(false);return -2;}
     state.fileNameCursor=0;return token;
 }
 std::int32_t EquationLabWordInsertionFileNameNext(){
@@ -334,15 +479,17 @@ std::int32_t EquationLabWordInsertionNumberingNext(){
 }
 void EquationLabFinishWordInsertion(bool ok){
     if(!NSThread.isMainThread||!insertion||insertion.ended)return;
-    ELWordInsertion* state=insertion;NSString* ticket=state.ticket;NSString* session=state.session;std::uint64_t generation=state.generation;
-    endInsertion(state,ok?0:6,false);
-    queueAcknowledgement(ticket,session,ok?ELWordInsertionOutcomeCommitted:ELWordInsertionOutcomeFailed,generation);
+    finishInsertion(insertion,ok?ELWordInsertionOutcomeCommitted:ELWordInsertionOutcomeFailed);
 }
 void EquationLabFinishWordInsertionUncertain(){
     if(!NSThread.isMainThread||!insertion||insertion.ended)return;
-    ELWordInsertion* state=insertion;NSString* ticket=state.ticket;NSString* session=state.session;std::uint64_t generation=state.generation;
-    endInsertion(state,7,false);
-    queueAcknowledgement(ticket,session,ELWordInsertionOutcomeUnconfirmed,generation);
+    finishInsertion(insertion,ELWordInsertionOutcomeUnconfirmed);
+}
+std::int32_t EquationLabFinishClaimedWordInsertion(std::int32_t token,WordInsertionOutcome outcome){
+    if(!NSThread.isMainThread||token<=0)return -1;
+    if(!isCurrentInsertion(insertion)||!insertion.claimed||insertion.token!=token)return 1;
+    finishInsertion(insertion,outcome);
+    return 0;
 }
 std::int32_t EquationLabWordInsertionError(){return insertionError?insertionError:acknowledgementError;}
 

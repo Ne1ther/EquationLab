@@ -3,13 +3,12 @@ import {constants} from 'node:fs';
 import {dirname,join,resolve} from 'node:path';
 import {isMainModule} from './cli-entry.mjs';
 import {createInterface} from 'node:readline';
-import {inspectOle,oleLatex,characters,editCharacters,replaceOleLatex,patchRuler,readRuler} from './native.mjs';
+import {inspectOle,oleLatex,characters,patchRuler,readRuler} from './native.mjs';
 import {makeNewOle,factoryTypography,MATHTYPE_FACTORY_SOURCE} from './new-formula.mjs';
 import {createDocx,inspectDocx,editDocx,replaceDocxEquation,arrangeDocx,hash} from './document.mjs';
-import {patchTypography,TYPOGRAPHY_SPACES,TYPOGRAPHY_EXTRA_SIZES} from './typography-native.mjs';
+import {editFormulaOle,readTypography,TYPOGRAPHY_SPACES,TYPOGRAPHY_EXTRA_SIZES} from './typography-native.mjs';
 import {renderNative,nativePdf,warmNativeRenderer} from './font-renderer.mjs';
 import {readEqp,writeEqp} from './eqp.mjs';
-import {readTypography} from './typography-native.mjs';
 import {previewNumberFormat} from './layout.mjs';
 import {checkedWordNumbering,checkExistingWordNumberingTarget} from './word-numbering.mjs';
 import {createRenderScheduler} from './render-scheduler.mjs';
@@ -22,8 +21,48 @@ import JSZip from 'jszip';
 
 const drafts=createDraftStore(),draftBases=new Map();
 const thumbnailSize={maxWidth:640,maxHeight:240};
+// The existing completion wire requires a single-page PDF and positive extents.
+// For existingRevision, the helper validates that envelope but preserves the
+// live preview and its size. Use a fixed 1 pt placeholder to keep older helpers
+// compatible without invoking PDF rendering or applying Word layout limits.
+const numberOnlyPreview={width:35,height:35,pdf:Buffer.from(`%PDF-1.4
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [3 0 R] /Count 1 >>
+endobj
+3 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 1 1] /Resources <<>> /Contents 4 0 R >>
+endobj
+4 0 obj
+<< /Length 0 >>
+stream
+endstream
+endobj
+xref
+0 5
+0000000000 65535 f\x20
+0000000009 00000 n\x20
+0000000058 00000 n\x20
+0000000115 00000 n\x20
+0000000214 00000 n\x20
+trailer
+<< /Size 5 /Root 1 0 R >>
+startxref
+262
+%%EOF
+`,'ascii').toString('base64')};
 
 function applyRuler(ole,payload){return payload.ruler===undefined?ole:patchRuler(ole,payload.ruler);}
+function editExistingFormula(ole,{mode,latex,replacements,typography}){
+ if(mode==='characters'){
+  if(replacements==null)throw Error('Invalid character replacement');
+  return editFormulaOle(ole,{replacements,typography});
+ }
+ if(typeof latex!=='string')throw Error('Formula must be LaTeX text');
+ return editFormulaOle(ole,{latex,typography});
+}
 
 async function checkCopyDestination(input,output){
  const message='请另存为副本，保留原始 Word 文档';
@@ -66,7 +105,7 @@ async function writeDocumentCopy(input,output,bytes){
 // individual sidebar thumbnails are arriving, and reuse identical snapshots
 // across OLE activations. Recheck file identity before every reuse.
 const documentCache=createDocumentSnapshotCache({
- inspect:inspectDocx,readTypographyPreset:readTypographyPresetFromPackage,
+ inspect:(buffer,options)=>inspectDocx(buffer,{...options,wordPreviewLimits:true}),readTypographyPreset:readTypographyPresetFromPackage,
  extractPreviews:async(bytes,paths)=>{
   const zip=await JSZip.loadAsync(bytes),images=Object.create(null);
   for(const imagePath of paths)if(/\.(png|jpe?g|gif)$/i.test(imagePath)&&zip.file(imagePath)){
@@ -116,6 +155,7 @@ async function verifyWordThumbnailSession(payload,expected=null){
 // A thumbnail is identified by ALL native bytes, including fonts, sizes,
 // spacing and rulers. Never reuse Word's stale image or cache document paths.
 const thumbnailCache=new Map();let thumbnailBytes=0;
+const backgroundThumbnailJobs=new Map();
 function cacheThumbnail(key,image){
  const old=thumbnailCache.get(key);if(old)thumbnailBytes-=old.length;
  thumbnailCache.delete(key);thumbnailCache.set(key,image);thumbnailBytes+=image.length;
@@ -210,7 +250,7 @@ async function insertWordEquation(payload){
  try{
   ole=applyRuler(base,{ruler:payload.ruler});if(ole!==base)base.fill(0);
   native=inspectOle(ole).native;
-  const pdf=await nativePdf(ole);
+  const pdf=await nativePdf(ole,{forWord:true});
   docx=await createDocx([{ole,layout}],{fragment:true,initializeContext:changedContext,numberingFamily:'mathtype',insertionBody:true});
   const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:native.toString('base64'),...pdf,docx:docx.toString('base64')});
   markWordTicketEnded(payload.ticket);
@@ -288,7 +328,7 @@ export async function desktopRequest(request,execution={}) {
  if(action==='exportGraphic'){
   const output=payload.source?await documentCopyPath(payload.source.path,payload.output):payload.output;
   let ole;
-  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
+  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');ole=editExistingFormula(o.ole,{...payload.source,latex:payload.latex,typography:payload.typography});}
   else ole=makeNewOle(payload.latex,payload.typography);
   ole=applyRuler(ole,payload);let bytes;
   if(payload.format==='pdf')bytes=Buffer.from((await nativePdf(ole)).pdf,'base64');
@@ -342,7 +382,40 @@ export async function desktopRequest(request,execution={}) {
   return {images:result.objects.map(o=>({index:o.index,image:o.image}))};
  }
  if(action==='wordSessionCancel'){const result=await wordSession('native-cancel',{ticket:payload.ticket});markWordTicketEnded(payload.ticket);return result;}
- if(action==='wordSessionStatus')return wordSession('native-status',{ticket:payload.ticket});
+ if(action==='wordDocumentThumbnailCancel'){
+  const job=backgroundThumbnailJobs.get(payload.requestId);
+  if(job)job.cancelled=true;
+  return {};
+ }
+ if(action==='wordDocumentThumbnail'){
+  const {sourceSha256,index,nativeSha256,requestId}=payload;
+  if(!/^[a-f0-9]{64}$/.test(sourceSha256)||!/^[a-f0-9]{64}$/.test(nativeSha256)||
+     !Number.isSafeInteger(index)||index<0||!Number.isSafeInteger(requestId)||requestId<1||
+     backgroundThumbnailJobs.has(requestId))throw Error('Invalid cached thumbnail target');
+  const snapshot=documentCache.getContent(sourceSha256);
+  if(!snapshot)return {unavailable:true};
+  const object=snapshot.objects[index];
+  if(!object?.mainDocument||object.parseError||object.previewError||object.nativeSha256!==nativeSha256)return {image:null};
+  const job={cancelled:false};backgroundThumbnailJobs.set(requestId,job);
+  try{
+   const run=async()=>{
+    if(job.cancelled)return {cancelled:true};
+    let image=thumbnailCache.get(nativeSha256);
+    if(!image){
+     const rendered=await renderNative(object.ole,thumbnailSize);
+     image=cacheThumbnail(nativeSha256,'data:image/png;base64,'+rendered.png.toString('base64'));
+    }
+    return job.cancelled?{cancelled:true}:{image};
+   };
+   return await (execution.scheduleThumbnail?execution.scheduleThumbnail(run):run());
+  }finally{backgroundThumbnailJobs.delete(requestId);}
+ }
+ if(action==='wordSessionStatus'){
+  const result=await wordSession('native-status',{ticket:payload.ticket});
+  const nativeSha256=result.state==='committed'&&result.change?.nativeSha256;
+  const image=nativeSha256&&thumbnailCache.get(nativeSha256);
+  return image?{...result,thumbnail:{nativeSha256,image}}:result;
+ }
  if(action==='wordSessionSave'){
   const session=await wordSession('native-read',{ticket:payload.ticket});
   checkedWordSource(session,payload.ticket);
@@ -356,7 +429,7 @@ export async function desktopRequest(request,execution={}) {
   const original=inspectOle(owner.ole).native,expected=Buffer.from(session.native,'base64');
   let same;try{same=expected.length>0&&expected.toString('base64')===session.native&&original.equals(expected);}finally{original.fill(0);expected.fill(0);}
   if(!same)throw Error('Word 会话源公式已变化，已阻止写回');
-  let o=owner,target;
+  let o=owner,target,wordLayout;
   if(payload.target!==undefined){
    const value=payload.target;
    if(!value||typeof value!=='object'||Array.isArray(value)||Object.keys(value).some(k=>!['index','expectedNativeSha256','documentIdentity'].includes(k))||!Number.isInteger(value.index)||value.index<0||typeof value.expectedNativeSha256!=='string'||!/^[a-f0-9]{64}$/.test(value.expectedNativeSha256)||typeof value.documentIdentity!=='string')throw Error('Word 保存目标无效');
@@ -375,17 +448,30 @@ export async function desktopRequest(request,execution={}) {
    else{
     if(session.document.scope!==undefined)throw Error('Word 文档快照尚未载入完整，已阻止写回');
     const document=await readDocument(session.document.path);o=document.objects[target.index];
+    wordLayout=o?.wordPreview;
    }
    if(!o||o.mainDocument!==true||o.parseError||o.nativeSha256!==target.expectedNativeSha256)throw Error('Word 保存目标已变化，已阻止写回');
   }
-  const changed=payload.mode==='characters'?editCharacters(o.ole,payload.replacements):replaceOleLatex(o.ole,payload.latex);
-  const ole=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload);
+  if(!existingNumberOnly&&o===owner&&session.document?.path){
+   const document=await readDocument(session.document.path),bound=document.objects[session.document.index];
+   if(bound?.mainDocument&&bound.nativeSha256===owner.nativeSha256)wordLayout=bound.wordPreview;
+  }
+  if(session.document?.scope==='selection'&&!existingNumberOnly)wordLayout={...wordLayout,pendingOwnerCapture:true};
+  const ole=applyRuler(editExistingFormula(o.ole,payload),payload);
   const editedNative=inspectOle(ole).native;
-  let submittedNative;
-  try{submittedNative=editedNative.toString('base64');}finally{editedNative.fill(0);}
+  let submittedNative,nativeSha256;
+  try{submittedNative=editedNative.toString('base64');nativeSha256=hash(editedNative);}finally{editedNative.fill(0);}
   if(existingNumberOnly&&submittedNative!==session.native)throw Error('仅改编号时不能修改公式内容');
-  const p=await nativePdf(existingNumberOnly?owner.ole:ole);
-  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:submittedNative,...p,...target?{target}:{},...numbering?{numbering}:{}});
+  const needsThumbnail=session.acknowledgement===true&&!!session.document?.identity&&!thumbnailCache.has(nativeSha256);
+  let png,preview;
+  if(existingNumberOnly){
+   preview=numberOnlyPreview;
+   if(needsThumbnail)png=(await renderNative(owner.ole,thumbnailSize).catch(()=>null))?.png;
+  }else{
+   ({png,...preview}=await nativePdf(ole,{forWord:true,wordLayout,thumbnail:needsThumbnail?thumbnailSize:undefined}));
+  }
+  if(png)cacheThumbnail(nativeSha256,'data:image/png;base64,'+png.toString('base64'));
+  const result=await wordSession('native-complete',{ticket:payload.ticket,session:session.session,native:submittedNative,...preview,...target?{target}:{},...numbering?{numbering}:{}});
   markWordTicketEnded(payload.ticket);
   return {...result,...session.acknowledgement?{acknowledgement:true}:{}};
  }
@@ -464,7 +550,8 @@ export async function desktopRequest(request,execution={}) {
   if(payload.source){
    const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];
    if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');
-   equations[0].ole=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,equations[0].latex);
+   const {typography,...first}=equations[0];
+   equations[0]={...first,ole:editExistingFormula(o.ole,{...payload.source,latex:first.latex,typography})};
   }
   const bytes=await createDocx(equations,{fragment:payload.fragment??true,numberingFamily:'mathtype'});
   if(payload.source)await writeDocumentCopy(payload.source.path,output,bytes);
@@ -474,7 +561,7 @@ export async function desktopRequest(request,execution={}) {
  if(action==='editPreview') {
   const {objects}=await readDocument(payload.input,payload.sourceSha256),o=objects[payload.index];
   if(!o||o.parseError)throw Error(o?.parseError||'公式不存在');
-  const changed=payload.mode==='rebuild'?replaceOleLatex(o.ole,payload.latex):editCharacters(o.ole,payload.replacements),updated=applyRuler(payload.typography?patchTypography(changed,payload.typography):changed,payload),latex=oleLatex(updated),p=await renderNative(updated,{raster:false});
+  const updated=applyRuler(editExistingFormula(o.ole,{...payload,mode:payload.mode==='rebuild'?'rebuild':'characters'}),payload),latex=oleLatex(updated),p=await renderNative(updated,{raster:false});
   return {latex,nativeSha256:hash(inspectOle(updated).native),svg:p.svg,warnings:p.warnings};
  }
  if(action==='edit') {
@@ -496,7 +583,7 @@ export async function desktopRequest(request,execution={}) {
  }
  if(action==='preview') {
   let ole;
-  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');const changed=payload.source.mode==='characters'?editCharacters(o.ole,payload.source.replacements):replaceOleLatex(o.ole,payload.latex);ole=payload.typography?patchTypography(changed,payload.typography):changed;}
+  if(payload.source){const {objects}=await readDocument(payload.source.path,payload.source.sourceSha256),o=objects[payload.source.index];if(!o||o.parseError)throw Error(o?.parseError||'原公式不存在');ole=editExistingFormula(o.ole,{...payload.source,latex:payload.latex,typography:payload.typography});}
   else ole=makeNewOle(payload.latex,payload.typography);
   ole=applyRuler(ole,payload);
   if(payload.favoriteThumbnail===true){const p=await renderNative(ole,thumbnailSize);return {png:p.png.toString('base64')};}
@@ -508,7 +595,7 @@ export async function desktopRequest(request,execution={}) {
 if(await isMainModule(import.meta.url)){
  if(process.argv.includes('--stdio-worker')){
   const rendering=createRenderScheduler(warmNativeRenderer().catch(error=>process.stderr.write('Renderer warmup: '+error.message+'\n')));
-  const control=new Set(['wordSessionRead','wordSessionDocument','wordSessionObject','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
+  const control=new Set(['wordSessionRead','wordSessionDocument','wordSessionObject','wordSessionCancel','wordSessionStatus','wordSessionNavigate','wordDocumentOpen','wordDocumentStatus','wordDocumentCancel','wordDocumentThumbnailCancel','wordWorkspaceStatus','typography-default','numberingPreview','draftStatus','draftSave','draftClear']),inflight=new Set();
   // One app-owned process, no socket/listener. Preserve the existing one-shot
   // protocol for installers and tooling. A rejected request never poisons the
   // next request, and all writes/exports retain the same validation path.
@@ -521,14 +608,15 @@ if(await isMainModule(import.meta.url)){
    // Status/cancel/open must not wait behind font warmup or thumbnail drawing.
    // Rendering and filesystem mutations retain their original serial order.
    const isPreview=['validate','editPreview'].includes(request.action);
-   const isThumbnailBatch=request.action==='wordSessionThumbnails'||request.action==='fileCopyThumbnails';
+   const isCachedThumbnail=request.action==='wordDocumentThumbnail';
+   const isThumbnailBatch=isCachedThumbnail||request.action==='wordSessionThumbnails'||request.action==='fileCopyThumbnails';
    const isFavoriteThumbnail=request.action==='preview'&&request.payload?.favoriteThumbnail===true;
    const key=isPreview&&request.coalescePreview===true&&request.payload?.previewOnly===true?'editor-preview':null;
    let timing;
    const execution=control.has(request.action)||isThumbnailBatch?(async()=>{
     const before=performance.now();let lastYield=-Infinity,queuedMs=0;
     const checkpoint=async()=>{if(performance.now()-lastYield>=8){await new Promise(resolve=>setImmediate(resolve));lastYield=performance.now();}};
-    const scheduleThumbnail=isThumbnailBatch?task=>rendering.enqueue(task,{priority:2,onTiming:value=>{queuedMs+=value.queuedMs;}}):undefined;
+    const scheduleThumbnail=isThumbnailBatch?task=>rendering.enqueue(task,{priority:isCachedThumbnail&&!request.payload?.visible?3:2,onTiming:value=>{queuedMs+=value.queuedMs;}}):undefined;
     const context=request.action==='wordSessionDocument'?{snapshotCheckpoint:checkpoint}:isThumbnailBatch?{snapshotCheckpoint:checkpoint,scheduleThumbnail}:undefined;
     const result=await run(context);
     const totalMs=performance.now()-before;

@@ -1,5 +1,5 @@
 {
-  "version": "0.7.10",
-  "zh": "修复含有大型对象的 Word 长文档在侧栏长时间只显示第一条公式的问题。目录分段在后台压缩并按顺序送达，全文核验期间可继续显示并搜索已收到的公式。",
-  "en": "Fixed a case where the sidebar showed only the first equation for an extended time in long Word documents with large embedded objects. Preview batches are compressed in the background and delivered in order so received equations remain visible and searchable during full-document verification."
+  "version": "0.7.11",
+  "zh": "可以从公式侧栏定位到 Word 原文。更新修复了 Word 中公式插入、大公式保存和 LaTeX 粘贴的问题，改善了公式缩略图和符号显示。",
+  "en": "You can reveal an equation in Word from the sidebar. This update fixes equation insertion, saving large equations in Word, and pasting LaTeX, and improves equation thumbnails and symbol rendering."
 }

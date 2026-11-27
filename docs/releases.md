@@ -1,5 +1,13 @@
 # 版本记录
 
+## 0.7.11 · build115
+
+可以从公式侧栏定位到 Word 原文。更新修复了 Word 中公式插入、大公式保存和 LaTeX 粘贴的问题，改善了公式缩略图和符号显示。
+
+You can reveal an equation in Word from the sidebar. This update fixes equation insertion, saving large equations in Word, and pasting LaTeX, and improves equation thumbnails and symbol rendering.
+
+[下载 0.7.11 · Download 0.7.11](https://github.com/Ne1ther/EquationLab/releases/tag/v0.7.11)
+
 ## 0.7.10 · build114
 
 修复带大型嵌入对象的长 Word 文档在侧栏停在第一条公式的问题。侧栏分批显示公式和已读到的正文编号，全文核对期间可以搜索已载入的条目。核对结束后，进度提示变成勾选。更新还整理了文档工具入口和 AI Skill 安装面板。

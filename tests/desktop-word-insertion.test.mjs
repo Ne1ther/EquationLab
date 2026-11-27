@@ -38,7 +38,7 @@ const drafts=await readFile(new URL('../desktop/draft-integration.js',import.met
 
 function createEditor(){
  const calls=[],messages=[],layoutLoads=[],changedCalls=[],modeRenders=[],historyResets=[];let clock=0;
- const renderedLists=[],elements=new Map(),timers=new Map();let context,typographyPatch=null,validationFailure=null,timerId=0,discardDraftOnSwitch=false;
+ const renderedLists=[],elements=new Map(),timers=new Map();let context,typographyPatch=null,typographyBaseline=null,defaultTypography=null,validationFailure=null,timerId=0,discardDraftOnSwitch=false;
  let behavior=async(action)=>action==='wordSessionInsert'?{acknowledgement:false}:{};
  const defaults={'layout-mode':'inline','layout-format':'(#E1)','layout-chapter':'1','layout-section':'1'};
  const element=id=>{
@@ -74,7 +74,8 @@ function createEditor(){
   native:async(action,payload)=>{calls.push({action,payload});return behavior(action,payload);}
  });
  context.window.resetEditorHistory=()=>historyResets.push('reset');
- context.window.desktopTypographyNew=()=>{typographyPatch=null;};
+ context.window.desktopTypographyNew=(preset=defaultTypography)=>{typographyPatch=preset;typographyBaseline=preset;};
+ context.window.desktopTypographyChanged=()=>JSON.stringify(typographyPatch)!==JSON.stringify(typographyBaseline);
  context.window.desktopTypographyPatch=()=>typographyPatch;
  context.window.desktopTypographyRestorePatch=patch=>{typographyPatch=patch;};
  const perform=appSource.split('\n').find(line=>line.startsWith('async function perform('));
@@ -107,6 +108,7 @@ function createEditor(){
   discardDraftOnSwitch(value=true){discardDraftOnSwitch=value;},
   setNativeBehavior(fn){behavior=fn;},
   failNextValidation(error=new Error('validation failed')){validationFailure=error;},
+  setDefaultTypography(preset){defaultTypography=preset;context.window.desktopTypographyNew();},
   setTypographyPatch(patch){typographyPatch=patch;},
   element
  };
@@ -125,9 +127,57 @@ test('Settings-only insertion drafts require confirmation before sidebar switchi
  }
 });
 
+test('Inherited typography keeps cold-open, confirmed-save and repeated Ribbon insertion clean',async()=>{
+ const editor=createEditor(),c=editor.context,defaults={size:14},wordPreset={size:17};
+ const typographyReady=deferred(),readStarted=deferred(),receipt=deferred();
+ c.window.desktopTypographyReady=typographyReady.promise;
+ editor.setNativeBehavior(async(action,payload)=>{
+  if(action==='wordSessionRead'){
+   readStarted.resolve();
+   return {...insertionDocument,documentIdentity:payload.ticket,insertionLayout:{...insertionLayout,mode:'display'},documentTypographyPreset:{typography:wordPreset}};
+  }
+  if(action==='wordSessionInsert')return {acknowledgement:true};
+  if(action==='wordSessionStatus')return receipt.promise;
+  return {};
+ });
+ const opened=c.window.nativeOpenWordSession(ticket);
+ await readStarted.promise;
+ editor.setDefaultTypography(defaults);typographyReady.resolve();
+ assert.equal(await opened,true);
+ assert.equal(c.mf.value,'');assert.equal(c.wordSessionChanged(),false);
+ assert.deepEqual(c.window.desktopTypographyPatch(),wordPreset);
+ c.mf.value='N^*';c.changed();
+ const saved=c.window.nativeCommitWordSession();
+ const next=c.window.nativeOpenWordSession(freshTicket);
+ receipt.resolve({state:'committed'});
+ assert.equal(await saved,true);
+ assert.equal(await next,true);
+ assert.equal(c.mf.value,'');assert.equal(c.wordSessionChanged(),false);
+ assert.equal(editor.calls.some(call=>call.action==='confirmWordSessionSwitch'),false);
+ assert.deepEqual(editor.calls.find(call=>call.action==='wordSessionInsert').payload.typography,wordPreset);
+ editor.setTypographyPatch({size:19});
+ assert.equal(c.wordSessionChanged(),true);
+ assert.equal(await c.window.nativeOpenWordSession('d'.repeat(64)),false);
+ assert.equal(c.wordTicket,freshTicket);
+ assert.equal(editor.calls.filter(call=>call.action==='confirmWordSessionSwitch').length,1);
+});
+
+test('Progressive Word typography enrichment becomes the baseline of a blank insertion',async()=>{
+ const editor=createEditor(),c=editor.context;
+ const preset={size:17},initial={...insertionDocument,wordTicket:ticket,objects:[],documentLoading:true,documentTotal:3,documentPosition:-1};
+ const full={...insertionDocument,wordTicket:ticket,documentSnapshot:'fresh',documentContext:{count:3},objects:documentObjects.map(o=>({...o,mainDocument:true})),documentTypographyPreset:{typography:preset}};
+ editor.setDefaultTypography({size:14});
+ editor.setNativeBehavior(async action=>action==='wordSessionDocument'?{state:'available',document:full}:{});
+ c.source=initial;c.wordTicket=ticket;c.validationRunning=null;c.validationPending=false;c.formulaKey=()=>c.mf.value;
+ await c.loadWordDocument(ticket,initial);
+ assert.equal(c.source,full);
+ assert.deepEqual(c.window.desktopTypographyPatch(),preset);
+ assert.equal(c.wordSessionChanged(),false);
+});
+
 test('partial insertion enrichment changes only document metadata and preserves the typed draft and its settings',async()=>{
  const editor=createEditor(),c=editor.context;
- const initial={...insertionDocument,wordTicket:ticket,objects:[],documentLoading:true,documentTotal:3,documentPosition:-1,typographyBaseline:'null'};
+ const initial={...insertionDocument,wordTicket:ticket,objects:[],documentLoading:true,documentTotal:3,documentPosition:-1};
  const full={...insertionDocument,wordTicket:ticket,documentSnapshot:'fresh',documentContext:{count:3},objects:documentObjects.map(o=>({...o,mainDocument:true}))};
  c.source=initial;c.wordTicket=ticket;c.selected=null;c.mf.value='draft_x^2';c.editingRuler=[{position:320,type:0}];c.validationRunning=null;c.validationPending=false;c.formulaKey=()=>c.mf.value;
  editor.setTypographyPatch({fullSize:15});editor.element('layout-format').value='(#C1.#E1)';
@@ -154,6 +204,24 @@ test('App draft enters a document-bound insertion with text, typography and rule
  assert.equal(c.mf.value,'q^2+7');assert.deepEqual(JSON.parse(JSON.stringify(c.editingRuler)),[{position:32,type:0}]);
  assert.equal(c.window.desktopTypographyPatch().size,15);assert.equal(editor.element('layout-mode').value,'numbered-right');
  assert.equal(editor.calls.some(call=>call.action==='confirmWordSessionSwitch'),false);
+});
+
+test('A blank App insertion inherits the Word preset without transferring standalone defaults as a draft',async()=>{
+ const editor=createEditor(),c=editor.context,requestId='9'.repeat(64),wordPreset={size:17};
+ editor.setDefaultTypography({size:14});
+ c.window.wordDocumentWorkspace.accepted({...insertionDocument,insertion:false});
+ editor.setNativeBehavior(async action=>{
+  if(action==='wordWorkspaceStatus')return {connected:true,insertionRequestSupport:true,revision:1,active:{identity:documentIdentity,name:'target.docx'},documents:[{identity:documentIdentity,name:'target.docx',readOnly:false}]};
+  if(action==='wordDocumentOpen')return {requestId};
+  if(action==='wordDocumentStatus')return {state:'opened'};
+  if(action==='wordSessionRead')return {...insertionDocument,documentTypographyPreset:{typography:wordPreset}};
+  return {};
+ });
+ assert.equal(await c.window.wordDocumentWorkspace.insert('inline'),true);
+ assert.equal(await c.window.nativeOpenWordSession(ticket,requestId),true);
+ assert.equal(c.mf.value,'');
+ assert.equal(c.wordSessionChanged(),false);
+ assert.deepEqual(c.window.desktopTypographyPatch(),wordPreset);
 });
 
 test('a numbered Word insertion submits the format selected in the inspector',async()=>{
@@ -272,6 +340,92 @@ test('Word renumbering reloads the same clean equation and preserves a dirty dra
   const opens=editor.calls.filter(call=>call.action==='wordDocumentOpen');
   if(dirty){assert.equal(opens.length,0);assert.equal(c.wordTicket,ticket);assert.equal(c.mf.value,'draft+1');assert.equal(c.source.numberingRefreshNeeded,true);}
   else{assert.equal(opens.length,1);assert.deepEqual(JSON.parse(JSON.stringify(opens[0].payload.target)),{identity:documentIdentity,snapshot:documentSnapshot,index:1,nativeSha256:documentObjects[1].nativeSha256});assert.equal(c.mf.value,documentObjects[1].latex);}
+ }
+});
+
+test('A combined formula and numbering save publishes the new thumbnail at confirmation and reads numbers without the edit ticket',async()=>{
+ const editor=createEditor(),c=editor.context;
+ const original={...documentSnapshotFor(1),wordNumberingSupported:true,documentNumberingRevision:3};
+ original.objects.forEach((row,index)=>Object.assign(row,{image:'old-image-'+index,
+  layout:{mode:'numbered-right',numberFormat:'(#E1)',numberText:`(${index+1})`,equation:index+1}}));
+ const newHash='5'.repeat(64),newImage='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jX4kAAAAASUVORK5CYII=',requestId='c'.repeat(64);
+ const updated={...original,documentSnapshot:documentSnapshot+'-next',documentNumberingRevision:4,
+  objects:original.objects.map((row,index)=>({...row,...index===1?{nativeSha256:newHash,latex:'x+7'}:{},image:null,
+   layout:{...row.layout,numberFormat:'[#E1]',numberText:`[${index+1}]`}}))};
+ const pending=deferred();let published=3,duringClose=null;
+ editor.setNativeBehavior(async(action,payload)=>{
+  if(action==='wordSessionRead')return payload.ticket===freshTicket?updated:original;
+  if(action==='wordSessionSave'){
+   assert.equal(payload.latex,'x+7');assert.equal(payload.numbering.format,'[#E1]');
+   return {acknowledgement:true};
+  }
+  if(action==='wordSessionStatus')return {state:'committed',
+   change:{documentIdentity,documentSnapshot,index:1,previousNativeSha256:original.objects[1].nativeSha256,nativeSha256:newHash,numberingChanged:true},
+   thumbnail:{nativeSha256:newHash,image:newImage}};
+  if(action==='state'&&payload.wordSessionEnded)duringClose=c.window.wordDocumentWorkspace.visibleSource(c.source);
+  if(action==='wordWorkspaceStatus')return {connected:true,revision:published,active:{identity:documentIdentity,name:original.documentName},
+   documents:[{identity:documentIdentity,name:original.documentName,readOnly:false,numberingRevision:published}],retiredIdentities:[]};
+  if(action==='wordDocumentOpen')return {requestId};
+  if(action==='wordDocumentStatus')return pending.promise;
+  return {};
+ });
+ assert.equal(await c.window.nativeOpenWordSession(ticket),true);
+ c.loadObjectLayout(c.selected);editor.element('layout-format').value='[#E1]';c.mf.value='x+7';
+ assert.equal(await c.window.nativeCommitWordSession(),true,editor.messages.map(message=>message.text).join(' | '));
+ assert.equal(c.wordTicket,null);
+ assert.equal(duringClose.objects[1].nativeSha256,newHash);
+ assert.equal(duringClose.objects[1].image,newImage);
+ assert.equal(duringClose.objects[0].image,'old-image-0');
+ assert.equal(duringClose.numberingRefreshNeeded,true);
+ assert.equal(await c.window.nativeSyncWordWorkspace(),false,'wait for the post-save revision to be published');
+ assert.equal(await c.window.nativeResumeWordDocument(true),true,'Dock can display the cached rows while waiting');
+ assert.equal(editor.calls.filter(call=>call.action==='wordDocumentOpen').length,0);
+ published=4;
+ assert.equal(await c.window.nativeResumeWordDocument(true),true);
+ assert.deepEqual(JSON.parse(JSON.stringify(editor.calls.find(call=>call.action==='wordDocumentOpen').payload)),{documentIdentity});
+ assert.equal(await c.window.nativeOpenWordSession(freshTicket,requestId),true);
+ const visible=c.window.wordDocumentWorkspace.visibleSource(c.source);
+ assert.equal(visible.objects[1].layout.numberText,'[2]');
+ assert.equal(visible.objects[0].layout.numberText,'[1]');
+ assert.equal(visible.objects[1].image,newImage);
+ assert.equal(visible.objects[0].image,'old-image-0');
+ assert.deepEqual(editor.calls.filter(call=>call.action==='wordSessionRead').map(call=>call.payload.ticket),[ticket,freshTicket]);
+ pending.resolve({state:'opened'});
+});
+
+test('A ticketless numbering readback leaves a new standalone draft and its cached rows intact',async()=>{
+ for(const [timing,viaDock] of [['before delivery',false],['during native read',false],['before delivery',true],['during native read',true]]){
+  const editor=createEditor(),c=editor.context,workspace=c.window.wordDocumentWorkspace;
+  const initial={...documentSnapshotFor(1),documentNumberingRevision:3};
+  const next={...documentSnapshotFor(1,{snapshot:documentSnapshot+'-next'}),documentNumberingRevision:4};
+  const requestId='c'.repeat(64),status=deferred(),reading=deferred(),release=deferred();
+  workspace.accepted(initial);
+  editor.setNativeBehavior(async(action,payload)=>{
+   if(action==='wordWorkspaceStatus')return {connected:true,revision:4,active:{identity:documentIdentity,name:initial.documentName},
+    documents:[{identity:documentIdentity,name:initial.documentName,readOnly:false,numberingRevision:4}],retiredIdentities:[]};
+   if(action==='wordDocumentOpen')return {requestId};
+   if(action==='wordDocumentStatus')return status.promise;
+   if(action==='wordSessionRead'){assert.equal(payload.ticket,freshTicket);reading.resolve();await release.promise;return next;}
+   return {};
+  });
+  assert.equal(await (viaDock?c.window.nativeResumeWordDocument(true):c.window.nativeSyncWordWorkspace()),true,timing);
+  const cached=workspace.visibleSource(null);
+  if(timing==='before delivery')c.mf.value='standalone draft';
+  else{
+   const launch=c.window.nativeOpenWordSession(freshTicket,requestId);
+   await reading.promise;c.mf.value='standalone draft';release.resolve();
+   assert.equal(await launch,false,timing);
+  }
+  if(timing==='before delivery')assert.equal(await c.window.nativeOpenWordSession(freshTicket,requestId),false,timing);
+  assert.equal(c.mf.value,'standalone draft',timing);
+  assert.equal(c.wordTicket,null,timing);
+  assert.strictEqual(workspace.visibleSource(null).objects,cached.objects,timing);
+  assert.equal(workspace.visibleSource(null).documentSnapshot,initial.documentSnapshot,timing);
+  assert.equal(workspace.pending,false,timing);
+  assert.equal(editor.calls.filter(call=>call.action==='confirmWordSessionSwitch'||call.action==='draftClear').length,0,timing);
+  assert.deepEqual(editor.calls.filter(call=>call.action==='wordSessionCancel').map(call=>call.payload.ticket),[freshTicket],timing);
+  assert.deepEqual(editor.calls.filter(call=>call.action==='wordDocumentCancel').map(call=>call.payload.requestId),[requestId],timing);
+  status.resolve({state:'opened'});
  }
 });
 

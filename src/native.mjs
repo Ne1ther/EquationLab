@@ -1,12 +1,24 @@
 import CFB from 'cfb';
+import {createHash} from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import {integralMacroName,integralMacroVariation,integralGlyphs} from './integral-templates.mjs';
 import {legacyGlyph} from './legacy-glyphs.mjs';
+import {writeCompoundStorage} from './compound-storage.mjs';
 
 export const template = JSON.parse(readFileSync(new URL('./resources/ole-template.json', import.meta.url)));
 const b64 = s => Buffer.from(s, 'base64');
 const u16 = n => { const b = Buffer.alloc(2); b.writeUInt16LE(n); return b; };
 const cat = (...parts) => Buffer.concat(parts.map(p => Buffer.isBuffer(p) ? p : Buffer.from(p)));
+// MathType for Windows can put a local ANSI family name in FONT_DEF without
+// declaring the host code page. Recognize the observed GBK name for SimSun.
+const windowsSimSunName = Buffer.from('cbcecce5', 'hex');
+// The original Equation Lab round-trip QA generated these two known objects
+// with an automatic STIX fallback for fixed square brackets. DSMT headers
+// and FONT_DEF placement alone cannot identify this legacy exporter.
+const legacyAutomaticStixNative = new Set([
+  '84e445755eb5c93419f44165a6cdb44e1e642cb1718bc0a467dc7c99122abfe2',
+  '32637369177354308eaf8a179156d1ddc04dbb3b8aacd35618d02a367f946384',
+]);
 
 export class MtefReader {
   constructor(data) { this.b = Buffer.from(data); this.p = 0; this.nodes = 0; }
@@ -14,7 +26,8 @@ export class MtefReader {
   word() { return this.byte() | this.byte() << 8; }
   uint() { const n = this.byte(); return n === 255 ? this.word() : n; }
   sint() { const n = this.byte(); return n === 255 ? this.word() - 32768 : n - 128; }
-  zstr() { const p = this.p; while (this.byte()) {} return this.b.subarray(p, this.p - 1).toString('utf8'); }
+  zstrBytes() { const p = this.p; while (this.byte()) {} return this.b.subarray(p, this.p - 1); }
+  zstr() { return this.zstrBytes().toString('utf8'); }
   skip(n) { if (n < 0 || this.p + n > this.b.length) throw Error('Invalid MTEF length'); this.p += n; }
   nudge(o) { if (o & 8) { const x = this.byte(), y = this.byte(); if (x === 128 && y === 128) this.skip(4); } }
   dimensions() {
@@ -39,7 +52,11 @@ export class MtefReader {
     const start = this.p, type = this.byte(), n = { type, start };
     if (type === 0 || (type >= 10 && type <= 14)) {}
     else if (type === 19) n.name = this.zstr();
-    else if (type === 17) { n.encoding = this.uint(); n.name = this.zstr(); }
+    else if (type === 17) {
+      n.encoding = this.uint();
+      const name = this.zstrBytes();
+      n.name = this.platform === 1 && name.equals(windowsSimSunName) ? 'SimSun' : name.toString('utf8');
+    }
     else if (type === 18) {
       n.options = this.byte(); n.sizes = this.dimensions(); n.spaces = this.dimensions();
       const count = this.byte(); n.styles = [];
@@ -89,7 +106,7 @@ export class MtefReader {
   }
   read({allowTrailing = false} = {}) {
     if (this.byte() !== 5) throw Error('This prototype supports MTEF v5 only');
-    const platform = this.byte(), product = this.byte(), major = this.byte(), minor = this.byte();
+    const platform = this.platform = this.byte(), product = this.byte(), major = this.byte(), minor = this.byte();
     const application = this.zstr(), options = this.byte(), headerEnd = this.p;
     const records = this.list();
     if (!allowTrailing && this.p !== this.b.length) throw Error(`Trailing MTEF bytes: ${this.b.length - this.p}`);
@@ -102,7 +119,9 @@ export function parseNative(native) {
   if (native.length < 28) throw Error('Invalid Equation Native header or length');
   const h = native.readUInt16LE(0), len = native.readUInt32LE(8);
   if (h !== 28 || len !== native.length - h) throw Error('Invalid Equation Native header or length');
-  const data = native.subarray(h); return { data, header: native.subarray(0,h), parsed: new MtefReader(data).read() };
+  const data=native.subarray(h),parsed=new MtefReader(data).read();
+  if(parsed.records.some(n=>n.type===17&&n.name==='STIX Two Math')&&legacyAutomaticStixNative.has(createHash('sha256').update(native).digest('hex')))parsed.legacyAutomaticStix=true;
+  return {data,header:native.subarray(0,h),parsed};
 }
 
 export function inspectOle(buffer) {
@@ -120,7 +139,7 @@ export function wrapNative(native, sourceOle) {
     for (const [name, value] of Object.entries(template.streams)) CFB.utils.cfb_add(cfb, name, b64(value));
   }
   CFB.utils.cfb_add(cfb, 'Equation Native', native);
-  return Buffer.from(CFB.write(cfb, {type:'buffer'}));
+  return writeCompoundStorage(cfb);
 }
 
 // MTEF v5 structure comes from WIRIS' published specification. Two published
@@ -138,7 +157,7 @@ Object.assign(glyphs,{
 });
 Object.assign(glyphs,{lBrack:'⟦',rBrack:'⟧',llbracket:'⟦',rrbracket:'⟧',backprime:'‵',frown:'⌢',smile:'⌣'});
 export const supportedGlyphs=Object.freeze({...glyphs});
-const nativeMathGlyphs=new Set(['∬','∭','∐','∮','∯','∰','∲','∳',...Object.values(glyphs).filter(c=>!originalNativeGlyphs.has(c))]);
+const nativeMathGlyphs=new Set(['∬','∭','∐','∮','∯','∰','∲','∳',...Object.values(glyphs).filter(c=>!originalNativeGlyphs.has(c)&&c.charCodeAt(0)>127)]);
 const nativeGreekGlyphs=new Set(['ϰ','ϱ','ϵ']);
 // BMP script letters fit MTEF's 16-bit character field. Persist their actual
 // outline font in the equation rather than substituting only in the preview.
@@ -149,6 +168,14 @@ for(const value of Object.values(scriptLetters))nativeMathGlyphs.add(value);
 // existing commands have no glyph. Author their real native font explicitly;
 // a renderer-only fallback would leave Word's saved object inconsistent.
 for(const code of [0x2213,0x2243,0x226a,0x226b,0x2113,0x210f,0x2204,0x220b,0x2216,0x2299,0x2218,0x22c6,0x2225,0x25b3,0x25a1,0x2235,0x21a6,0x2195,0x22ef,0x22ee,0x22f1])nativeMathGlyphs.add(String.fromCharCode(code));
+// Both families ship with Windows 10/11. The Cambria Math cmap lacks these
+// glyphs, which the Windows Segoe UI Symbol cmap provides.
+const segoeMathGlyphs=new Set([0x2035,0x25b2,0x25b7,0x25bc,0x25bd,0x25c1,0x25c6,0x2662,0x2663,0x2713]);
+function windowsMathFont(code){return segoeMathGlyphs.has(code)?'Segoe UI Symbol':'Cambria Math';}
+export function usesBundledMathOutline(code,font){
+  const value=String.fromCharCode(code);
+  return (nativeMathGlyphs.has(value)||nativeGreekGlyphs.has(value))&&font.toLowerCase()===windowsMathFont(code).toLowerCase();
+}
 const reverseGlyphs = Object.fromEntries(Object.entries(glyphs).map(([k,v])=>[v,`\\${k} `]));
 const functions = new Set(['sin','cos','tan','cot','sec','csc','arcsin','arccos','arctan','sinh','cosh','tanh','coth','log','ln','lg','exp','det','dim','ker','arg','gcd','hom','Pr']);
 const bigOperators = {
@@ -158,12 +185,17 @@ const bigOperators = {
 const spaces = {',':'\u2009',':':'\u2005',';':'\u2004',' ':' ',quad:'\u2003',qquad:'\u2003\u2003',enspace:'\u2002',space:' '};
 const reverseSpaces = {'\u2009':'\\,','\u2005':'\\:','\u2004':'\\;','\u2003':'\\quad ','\u2002':'\\enspace ',' ':'\\ '};
 const fencePairs = [['⟨','⟩'],['(',')'],['{','}'],['[',']'],['|','|'],['‖','‖'],['⌊','⌋'],['⌈','⌉'],['⟦','⟧']];
+// MathType's expanding CHAR records use side-specific MTCode from the 7.8
+// template definitions. The LaTeX delimiters above describe their appearance.
+const fenceNativeCodes = {0:[0x2329,0x232a],4:[0xec07,0xec08],5:[0xec09,0xec0a],6:[0xf8f0,0xf8fb],7:[0xf8ee,0xf8f9],8:[0x301a,0x301b]};
 const accentCodes = {dot:2,ddot:3,dddot:4,ddddot:24,hat:9,tilde:8,vec:11,overrightarrow:11,overleftarrow:12,overleftrightarrow:13,bar:17,underdot:25,underddot:26,underdddot:27,underddddot:28,undertilde:30,underleftarrow:34,underrightarrow:33,underleftrightarrow:35};
 const accentCommands = Object.fromEntries(Object.entries(accentCodes).map(([k,v])=>[v,k]));
 // Embellishment 11 is a single-character vector accent. The expanding arrow
 // template is decoded separately below; using it here clips a full-size arrow
 // to a narrow character's advance in the SVG/PDF preview.
-Object.assign(accentCommands,{5:'prime',6:'doubleprime',18:'tripleprime',10:'not',11:'vec'});
+Object.assign(accentCommands,{10:'not',11:'vec'});
+const primeCounts={5:1,6:2,18:3};
+const primeEmbellishments=[5,6,18];
 const seqNode = items => ({kind:'seq',items});
 const emptyNode = n => !n || n.kind==='seq' && n.items.every(emptyNode);
 const onlyChar = n => n?.kind==='char' ? n : n?.kind==='seq' && n.items.length===1 ? onlyChar(n.items[0]) : null;
@@ -252,6 +284,12 @@ export function latexAst(input) {
         const code=textGroup(),position=Number(textGroup()),font=textGroup(),encoding=textGroup(),bits=Number(textGroup());
         if(code.toLowerCase()!=='f700'||!Number.isInteger(position)||position<0||position>255||!['Euclid Math One','Euclid Math Two','MT Extra','Symbol','Times New Roman'].includes(font)||!['EuclidMath1','EuclidMath2','MTExtra','Symbol','WinAllBasicCodePages','MTCode'].includes(encoding)||![0,1,2,3].includes(bits))throw Error('Invalid preserved missing glyph');
         return {kind:'missingGlyph',position,font,encoding,bits};
+      }
+      if(command==='mtstix'){
+        const encoding=textGroup(),bits=textGroup(),wire=textGroup(),body=group();
+        const parsed=/^([1-9a-f][0-9a-f]{0,3})(?:-([sw])([0-9a-f]{1,4}))?$/.exec(wire);
+        if(!/^(?:b[1-4]|u(?:[0-9a-f]{2}){1,128})$/.test(encoding)||!/^[0-3]$/.test(bits)||!parsed||parsed[2]==='s'&&parseInt(parsed[3],16)>255)throw Error('Invalid preserved STIX glyph');
+        return {kind:'stixGlyph',body,binding:{encoding,bits:Number(bits),code:parseInt(parsed[1],16),wire,position:parsed[2]?parseInt(parsed[3],16):undefined,widePosition:parsed[2]==='w'}};
       }
       if(command==='textcolor'){
         const color=textGroup();if(!/^#[0-9a-f]{6}$/i.test(color))throw Error('Color must be a six-digit RGB value');
@@ -348,8 +386,9 @@ export function latexAst(input) {
       if(command==='widehat'||command==='widetilde')return {kind:'wideaccent',command,body:group()};
       if(accentCodes[command])return {kind:'accent',command,body:group()};
       if(command==='boxed')return {kind:'box',body:group()};
-      if(command==='not'){const body=group();if(!onlyChar(body))throw Error('Negation is supported for one character only');return {kind:'accent',command:'not',body};}
+      if(command==='not'){const body=group();if(!onlyChar(body))throw Error('Negation is supported for one character only');return {kind:'accent',command:'not',embellishment:10,body};}
       if(spaces[command]!==undefined)return seqNode([...spaces[command]].map(value=>({kind:'char',value})));
+      if(command==='doubleprime'||command==='tripleprime')return seqNode(Array.from({length:command==='doubleprime'?2:3},()=>({kind:'char',value:'′'})));
       if(glyphs[command])return {kind:'char',value:glyphs[command]};
       if(['{','}','%','$','#','&','_','|','\\'].includes(command))return {kind:'char',value:command==='|'?'‖':command};
       throw Error(`Unsupported LaTeX command \\${command}; no conversion was applied`);
@@ -363,7 +402,7 @@ export function latexAst(input) {
   function postfix(n){
     let sub,sup,limits;
     while(true){white();
-      if(text[p]==="'"){let count=0;while(text[p]==="'"){p++;count++;}if(count>3)throw Error('At most three native prime embellishments are supported');n={kind:'accent',command:count===1?'prime':count===2?'doubleprime':'tripleprime',body:n};continue;}
+      if(text[p]==="'"){let count=0;while(text[p]==="'"){p++;count++;}if(count>3)throw Error('At most three native prime embellishments are supported');n={kind:'accent',embellishment:primeEmbellishments[count-1],body:n};continue;}
       if(text[p]==='^'||text[p]==='_'){
         const op=text[p++],value=group();if(op==='^'){if(sup)throw Error('Duplicate superscript');sup=value;}else{if(sub)throw Error('Duplicate subscript');sub=value;}continue;
       }
@@ -414,13 +453,14 @@ export function latexAst(input) {
 const uintRecord=n=>n<255?Buffer.from([n]):cat([255],u16(n));
 const signedRecord=n=>n>=-128&&n<127?Buffer.from([n+128]):cat([255],u16(n+32768));
 const signedWord=n=>{const b=Buffer.alloc(2);b.writeInt16LE(n);return b;};
-function charRecord(value,{typeface,options=0,embellishments=[],fontPosition}={}){
+function charRecord(value,{typeface,options=0,embellishments=[],fontPosition,widePosition=false}={}){
   let code=value.codePointAt(0);if([...value].length!==1||code>65535||code===0)throw Error('Unsupported native character');
   if(code===9)return cat([2,4],signedRecord(23),u16(9),[9]);
   if(typeface===undefined)typeface=/^[0-9]$/.test(value)?8:/^[A-Za-z]$/.test(value)?3:(code>=0x3b1&&code<=0x3d6)||[0x3f0,0x3f1,0x3f5].includes(code)?4:code>=0x391&&code<=0x3a9?5:reverseSpaces[value]?1:6;
   // A math-mode keyboard '-' denotes minus. Text-style hyphens stay U+002D.
   if(code===0x2d&&typeface===6)code=0x2212;
-  return cat([2,options|(embellishments.length?1:0)|(fontPosition===undefined?0:4)],signedRecord(typeface),u16(code),...(fontPosition===undefined?[]:[[fontPosition]]),...(embellishments.length?[...embellishments.map(e=>Buffer.from([6,0,e])),Buffer.from([0])]:[]));
+  const position=fontPosition===undefined?Buffer.alloc(0):widePosition?u16(fontPosition):Buffer.from([fontPosition]);
+  return cat([2,options|(embellishments.length?1:0)|(fontPosition===undefined?0:widePosition?16:4)],signedRecord(typeface),u16(code),position,...(embellishments.length?[...embellishments.map(e=>Buffer.from([6,0,e])),Buffer.from([0])]:[]));
 }
 const inheritedSize=ctx=>10+(ctx.logicalSize??0);
 const scriptSize=ctx=>10+([1,2,2,4,4,5,6][ctx.logicalSize??0]??1);
@@ -458,23 +498,31 @@ function nativePointSize(d){
   const factor={0:72,1:72/2.54,2:1,3:12}[d[0]],value=Number(raw)*factor;
   return Number.isFinite(value)&&value>0&&value<=512?value:undefined;
 }
-function sourceContext(parsed){
+function sourceContext(parsed,implicitStixBindings){
   const fonts=[],styles=[],preferenceStyles=[];
   for(const n of parsed.records){if(n.type===17)fonts.push(n);if(n.type===8)styles.push(n);if(n.type===18)preferenceStyles.splice(0,preferenceStyles.length,...n.styles);}
   const extras=[];
   const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;
   const encodings=parsed.records.filter(n=>n.type===19).map(n=>n.name),colors=parsed.records.filter(n=>n.type===16).map(n=>n.components);
-  return {fonts,styles,preferenceStyles,extras,fullPointSize,color(color){
+  return {fonts,styles,preferenceStyles,extras,fullPointSize,implicitStixBindings,color(color){
     const components=[1,3,5].map(i=>Math.round(parseInt(color.slice(i,i+2),16)*1000/255));let index=colors.findIndex(c=>JSON.stringify(c)===JSON.stringify(components));
     if(index<0){index=colors.length;colors.push(components);extras.push(cat([16,0],...components.map(u16)));}return index+1;
   },explicit(style,value){
     if(typeof style==='string')style=combineStyle(null,style);
     const symbolic=!/^[\x20-\x7e]$/.test(value)&&!reverseSpaces[value];
-    let family=style.font??(style.family==='math'?'STIX Two Math':style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman');
-    let font=fonts.findIndex(f=>f.name.toLowerCase()===family.toLowerCase())+1;
+    const family=style.font??(style.family==='math'?windowsMathFont(value.codePointAt(0)):style.family==='textUnicode'?'Arial Unicode MS':style.family==='sans'?'Arial':style.family==='mono'?'Courier New':symbolic?'Symbol':'Times New Roman');
+    const defineEncoding=name=>{let i=encodings.indexOf(name);if(i<0){i=encodings.length;encodings.push(name);extras.push(cat([19],Buffer.from(name+'\0','utf8')));}return i+5;};
+    let encoding;
+    if(style.nativeEncoding){
+      const kind=style.nativeEncoding[0],value=style.nativeEncoding.slice(1);
+      const name=kind==='u'?Buffer.from(value,'hex').toString('utf8'):null;
+      if(name?.includes('\0'))throw Error('Invalid preserved font encoding');
+      encoding=kind==='b'?Number(value):defineEncoding(name);
+    }
+    let font=fonts.findIndex(f=>f.name.toLowerCase()===family.toLowerCase()&&(encoding===undefined||f.encoding===encoding))+1;
     if(!font){
-      let encoding=family==='Symbol'?3:family==='MT Extra'?4:parsed.records.some(n=>n.type===19&&n.name==='WinAllBasicCodePages')?5:1;
-      if(style.encoding&&style.encoding!=='MTExtra'){let i=encodings.indexOf(style.encoding);if(i<0){i=encodings.length;encodings.push(style.encoding);extras.push(cat([19],Buffer.from(style.encoding+'\0','utf8')));}encoding=i+5;}
+      const windowsEncoding=encodings.indexOf('WinAllBasicCodePages');
+      if(encoding===undefined)encoding=style.encoding&&style.encoding!=='MTExtra'?defineEncoding(style.encoding):family==='Symbol'?3:family==='MT Extra'?4:windowsEncoding>=0?windowsEncoding+5:1;
       fonts.push({name:family,encoding});font=fonts.length;extras.push(cat([17],uintRecord(encoding),Buffer.from(family+'\0','utf8')));
     }
     const bits=style.bits;
@@ -500,10 +548,59 @@ function authoredTypeface(ctx,value,style){
  if(mathematical)return ctx.explicit({family:'math',bits:nativeGreekGlyphs.has(value)?2:0},value);
  return undefined;
 }
+// Original Symbol encoder (MathType 7.8 at 0x944a60): U+2217 and U+2032
+// use 0x2A and 0xA2. Fixed square brackets use their ASCII positions.
+const symbolOperatorPositions = {0x2217:0x2a,0x2032:0xa2,0x005b:0x5b,0x005d:0x5d};
+export function symbolOperatorPosition(code){return symbolOperatorPositions[code];}
+function authoredCharRecord(value,ctx,style,embellishments){
+ const original=ctx.implicitStixBindings?.get(value.codePointAt(0));
+ if(original?.remaining&&(!style||style.family==='serif'&&style.bits===original.binding.bits)){
+  original.remaining--;return stixCharRecord(value,ctx,original.binding,embellishments);
+ }
+ if(value==='*'&&!style)value='∗';
+ const code=value.codePointAt(0),legacy=legacyGlyph(code);
+ const typeface=legacy?ctx.explicit({font:legacy.font,encoding:legacy.encoding,bits:style?.bits??0},value):authoredTypeface(ctx,value,style);
+ const symbolPosition=symbolOperatorPosition(code);
+ let fontPosition=legacy?.position;
+ if(symbolPosition!==undefined){
+  const face=typeface??6,definition=face<0?ctx.styles[-face-1]:ctx.preferenceStyles[face-1];
+  if(ctx.fonts[definition?.font-1]?.encoding===3)fontPosition=symbolPosition;
+ }
+ return charRecord(value,{typeface,fontPosition,embellishments});
+}
+function stixCharRecord(value,ctx,binding,embellishments){
+ const original=String.fromCharCode(binding.code),matching=original===value||glyphLatex({code:binding.code})===glyphLatex({code:value.codePointAt(0)});
+ const typeface=ctx.explicit({font:'STIX Two Math',nativeEncoding:binding.encoding,bits:binding.bits},value);
+ return charRecord(matching?original:value,{typeface,embellishments,...matching?{fontPosition:binding.position,widePosition:binding.widePosition}:{}});
+}
+function embellishedCharacter(node,style){
+ if(node?.kind==='seq'&&node.items.length===1)return embellishedCharacter(node.items[0],style);
+ if(node?.kind==='style')return embellishedCharacter(node.body,combineStyle(style,node.style));
+ if(node?.kind==='stixGlyph'){
+  const character=embellishedCharacter(node.body,style);
+  return character?{...character,binding:node.binding}:null;
+ }
+ if(node?.kind==='accent'){
+  const character=embellishedCharacter(node.body,style);
+  const id=node.embellishment??accentCodes[node.command];
+  if(character&&id)character.embellishments.push(id);
+  return id?character:null;
+ }
+ if((node?.kind==='char'||node?.kind==='text')&&[...node.value].length===1)return {node,style,embellishments:[]};
+ return null;
+}
+function fenceChars(selector,left,right){
+ const chars=[];
+ for(const [side,delimiter] of [left,right].entries())if(delimiter!=='.'){
+  const code=fenceNativeCodes[selector]?.[side]??delimiter.charCodeAt(0);
+  chars.push(charRecord(String.fromCharCode(code),{typeface:22}));
+ }
+ return chars;
+}
 function emit(n,ctx,style){
   if(n.displayStyle&&!ctx.displayStyle){const {displayStyle,...body}=n;return cat([10],emit(body,{...ctx,logicalSize:0,displayStyle:true},style),[inheritedSize(ctx)]);}
   if(n.kind==='seq')return cat(...n.items.map(x=>cat(emit(x,ctx,style),['bigop','custombigop','expandedintegral','limit','limitbox','hbrace','arrow'].includes(x.kind)||x.kind==='sqrt'&&x.index||x.kind==='fraction'&&x.small?[inheritedSize(ctx)]:[])));
-  if(n.kind==='char'){const legacy=legacyGlyph(n.value.codePointAt(0));return charRecord(n.value,legacy?{typeface:ctx.explicit({font:legacy.font,encoding:legacy.encoding,bits:style?.bits??0},n.value),fontPosition:legacy.position}:{typeface:authoredTypeface(ctx,n.value,style)});}
+  if(n.kind==='char')return authoredCharRecord(n.value,ctx,style);
   if(n.kind==='missingGlyph')return charRecord('\uf700',{typeface:ctx.explicit({font:n.font,encoding:n.encoding,bits:n.bits},'\uf700'),fontPosition:n.position});
   if(n.kind==='text')return cat(...[...n.value].map(c=>charRecord(c,{typeface:/[^\x00-\u024f]/.test(n.value)?ctx.explicit({family:'textUnicode',bits:0},c):1})));
   if(n.kind==='style')return emit(n.body,ctx,combineStyle(style,n.style));
@@ -520,7 +617,7 @@ function emit(n,ctx,style){
       const interval=['(',')','[',']'];if(!interval.includes(n.left)||!interval.includes(n.right))throw Error(`Unsupported native fence pair ${n.left} ${n.right}`);
       selector=9;variation=interval.indexOf(n.left)|(interval.indexOf(n.right)<<4);
     }
-    return tmpl(selector,[slot(n.body,ctx,undefined,style),...(n.left==='.'?[]:[charRecord(n.left,{typeface:22})]),...(n.right==='.'?[]:[charRecord(n.right,{typeface:22})])],variation);
+    return tmpl(selector,[slot(n.body,ctx,undefined,style),...fenceChars(selector,n.left,n.right)],variation);
   }
   if(n.kind==='bigop'){
     const op=bigOperators[n.command];let sum=n.limits===undefined?(ctx.displayStyle?true:!!op.sum):n.limits,sub=n.sub;
@@ -591,7 +688,7 @@ function emit(n,ctx,style){
     const pack=(rules,count)=>{const b=Buffer.alloc(Math.ceil((count+1)/4));for(let i=0;i<=count;i++)b[i>>2]|=(rules?.[i]||0)<<((i&3)*2);return b;};
     const cells=n.rows.flat(),matrix=cat([5,0,n.valign??1,hjust,n.vjust??1,n.rows.length,n.cols],pack(n.rowRules,n.rows.length),pack(n.colRules,n.cols),...cells.map(c=>slot(c,ctx,undefined,style)),[0]);
     const wrappers={pmatrix:['(',')'],bmatrix:['[',']'],Bmatrix:['{','}'],vmatrix:['|','|'],Vmatrix:['‖','‖'],cases:['{','.']};
-    if(wrappers[n.env]){const [left,right]=wrappers[n.env],selector=fencePairs.findIndex(([l])=>l===left);return tmpl(selector,[cat([inheritedSize(ctx),1,0],matrix,[0]),charRecord(left,{typeface:22}),...(right==='.'?[]:[charRecord(right,{typeface:22})])],right==='.'?1:3);}
+    if(wrappers[n.env]){const [left,right]=wrappers[n.env],selector=fencePairs.findIndex(([l])=>l===left);return tmpl(selector,[cat([inheritedSize(ctx),1,0],matrix,[0]),...fenceChars(selector,left,right)],right==='.'?1:3);}
     return matrix;
   }
   if(n.kind==='bar')return tmpl(n.under?12:13,[slot(n.body,ctx,undefined,style)],n.double?1:0);
@@ -601,28 +698,67 @@ function emit(n,ctx,style){
     // Hat/tilde templates have a contents line and an expanding accent char.
     const hat=n.command==='widehat',arc=n.command==='overparen',joint=n.command==='mtjstat';return tmpl(joint?35:arc?34:hat?33:32,[slot(n.body,ctx,undefined,style),charRecord(joint?'\uee0d':arc?'⌢':hat?'̂':'̃',{typeface:22})]);
   }
-  if(n.kind==='accent'){
-    const c=onlyChar(n.body),embellishment=n.embellishment??(n.command==='not'?10:n.command==='prime'?5:n.command==='doubleprime'?6:n.command==='tripleprime'?18:accentCodes[n.command]);
+  if(n.kind==='accent'||n.kind==='stixGlyph'){
+    const c=embellishedCharacter(n,style);
     if(!c){
       if(n.command==='bar')return tmpl(13,[slot(n.body,ctx,undefined,style)]);
       if(['vec','overrightarrow','overleftarrow','overleftrightarrow'].includes(n.command)){
         const direction=n.command==='overleftarrow'?1:n.command==='overleftrightarrow'?3:2,mark=direction===1?'⃖':direction===3?'⃡':'⃗';
         return tmpl(31,[slot(n.body,ctx,undefined,style),charRecord(mark,{typeface:22})],direction);
       }
-      throw Error(`Accent \\${n.command} requires one character; use a wide accent for a group`);
+      if(n.kind==='stixGlyph')throw Error('A preserved STIX style requires one character');
+      throw Error(`Accent \\${n.command??embellishmentMacro(n.embellishment)} requires one character; use a wide accent for a group`);
     }
-    return charRecord(c.value,{typeface:authoredTypeface(ctx,c.value,style),embellishments:[embellishment]});
+    if(c.binding)return stixCharRecord(c.node.value,ctx,c.binding,c.embellishments);
+    if(c.node.kind==='text'){
+      const value=c.node.value,typeface=/[^\x00-\u024f]/.test(value)?ctx.explicit({family:'textUnicode',bits:0},value):1;
+      return charRecord(value,{typeface,embellishments:c.embellishments});
+    }
+    return authoredCharRecord(c.node.value,ctx,c.style,c.embellishments);
   }
   throw Error(`Unsupported node ${n.kind}`);
 }
 
-function rebuildNative(sourceNative,latex){
-  const {data,parsed,header}=parseNative(sourceNative),ast=latexAst(latex);
-  const content=parsed.records.find(n=>[1,4].includes(n.type));
-  let formulaStart=content?.start;
-  if(formulaStart===undefined){const size=parsed.records.find(n=>[9,10,11,12,13,14].includes(n.type));if(!size)throw Error('Cannot identify the source formula container; original data remains unchanged');formulaStart=size.start;}
-  else {const at=parsed.records.indexOf(content);if(at&&[9,10,11,12,13,14].includes(parsed.records[at-1].type))formulaStart=parsed.records[at-1].start;}
-  const ctx=sourceContext(parsed),body=slot(ast,ctx),mtef=cat(data.subarray(0,formulaStart),...ctx.extras,body,[0]);
+function formulaOffset({records}){
+  const isSize=n=>n?.type>=9&&n.type<=14;
+  const first=records.findIndex(n=>n.type===1||n.type===4);
+  if(first>=0)return (isSize(records[first-1])?records[first-1]:records[first]).start;
+  const size=records.find(isSize);
+  if(!size)throw Error('Cannot identify the source formula container; original data remains unchanged');
+  return size.start;
+}
+
+function rebuildPrefix(data,records,start,legacyAutomaticStix){
+  const prefix=records.filter(n=>n.start<start),prefs=prefix.findLast(n=>n.type===18);
+  const fonts=prefix.filter(n=>n.type===17);
+  // Older Equation Lab output appended automatically selected STIX faces
+  // after EQN_PREFS, for the very body being replaced. Fonts selected in
+  // EQN_PREFS or used by an opaque prefix remain source data.
+  const removable=font=>legacyAutomaticStix&&prefs&&font.start>=prefs.end&&font.name==='STIX Two Math';
+  if(!fonts.some(removable)||prefix.some(n=>![8,15,16,17,18,19].includes(n.type)))return {prefix,bytes:data.subarray(0,start)};
+  const newFontIndices=new Map();let fontIndex=0;
+  for(const [i,font] of fonts.entries())if(!removable(font))newFontIndices.set(i+1,++fontIndex);
+  if(prefs.styles.some(s=>s.font&&newFontIndices.get(s.font)!==s.font)||prefix.some(n=>n.type===8&&!fonts[n.font-1]))return {prefix,bytes:data.subarray(0,start)};
+  const kept=[],bytes=[data.subarray(0,prefix[0].start)];
+  for(const node of prefix){
+    if(node.type===17&&removable(node))continue;
+    if(node.type===8){
+      const font=newFontIndices.get(node.font);
+      if(font===undefined)continue;
+      if(font!==node.font){kept.push({...node,font});bytes.push(cat([8],uintRecord(font),[node.style]));continue;}
+    }
+    kept.push(node);bytes.push(data.subarray(node.start,node.end));
+  }
+  return {prefix:kept,bytes:cat(...bytes)};
+}
+
+function rebuildNative(sourceNative,latex,provenLegacy){
+  const {data,parsed,header}=parseNative(sourceNative),ast=latexAst(latex),start=formulaOffset(parsed);
+  const legacyAutomaticStix=provenLegacy||parsed.legacyAutomaticStix;
+  const {prefix,bytes}=rebuildPrefix(data,parsed.records,start,legacyAutomaticStix);
+  const implicitStixBindings=!legacyAutomaticStix&&!latex.includes('\\mtstix')?sourceStixBindings(parsed):undefined;
+  const ctx=sourceContext({records:prefix},implicitStixBindings),body=slot(ast,ctx);
+  const mtef=cat(bytes,...ctx.extras,body,[0]);
   const h=Buffer.from(header);h.writeUInt32LE(mtef.length,8);const native=cat(h,mtef);parseNative(native);return native;
 }
 /** RULER record7 uses count then (type:uint8,position:uint16) entries.
@@ -651,7 +787,7 @@ export function patchRuler(ole,tabs){
  const edited=cat(next,ruler,data.subarray(end)),h=Buffer.from(header);h.writeUInt32LE(edited.length,8);
  const result=wrapNative(cat(h,edited),ole);parseNative(inspectOle(result).native);return result;
 }
-export function makeOle(latex){const result=wrapNative(rebuildNative(b64(template.streams['Equation Native']),latex));oleLatex(result);return result;}
+export function makeOle(latex,sourceNative=b64(template.streams['Equation Native'])){const result=wrapNative(rebuildNative(sourceNative,latex));oleLatex(result);return result;}
 /** Exact recovered template constructor, separate from a normalized LaTeX
  * expression. Only original table pairs and populated, documented slots may be
  * authored. New expanded integrals use the original-runtime-stable option 1. */
@@ -670,18 +806,21 @@ export function makeEmbellishmentOle(id,latex){
  if(!Number.isInteger(id)||id<2||id>37)throw Error('Unknown original embellishment');
  const ast=latexAst(latex),c=onlyChar(ast);if(!c)throw Error('Character embellishments require exactly one character');
  const original=makeOle(latex),{data,parsed,header}=inspectOle(original),node=parsed.records.find(n=>n.type===1),character=node.children.find(n=>n.type===2);
- const raw=charRecord(c.value,{typeface:character.typeface,embellishments:[id]}),mtef=cat(data.subarray(0,character.start),raw,data.subarray(character.end)),h=Buffer.from(header);h.writeUInt32LE(mtef.length,8);
+ const raw=charRecord(String.fromCharCode(character.code),{typeface:character.typeface,fontPosition:character.fontPosition,embellishments:[id]}),mtef=cat(data.subarray(0,character.start),raw,data.subarray(character.end)),h=Buffer.from(header);h.writeUInt32LE(mtef.length,8);
  const result=wrapNative(cat(h,mtef),original);oleLatex(result);return result;
 }
 /** Structural replacement, not lossless editing: preserve source Equation Native
  * header, preference bytes, CFB CLSID and all companion streams; regenerate the
  * formula's records. Original per-character fonts, size overrides and positioning
  * can change. editCharacters is the separate exact-native-byte edit path. */
-export function replaceOleLatex(sourceOle,latex){
+export function replaceOleLatex(sourceOle,latex,prepareSource){
   // Opening and closing the structure editor must not normalize original MTEF
   // records, local styles, nudges or opaque extensions when nothing changed.
-  if(latex===oleLatex(sourceOle))return Buffer.from(sourceOle);
-  const {native}=inspectOle(sourceOle),result=wrapNative(rebuildNative(native,latex),sourceOle),ruler=readRuler(sourceOle),updated=ruler.length?patchRuler(result,ruler):result;oleLatex(updated);return updated;
+  const original=inspectOle(sourceOle),rebuilding=latex!==nativeLatex(original.parsed);
+  if(prepareSource)sourceOle=prepareSource(sourceOle,{inspected:original,rebuildFrom:rebuilding?formulaOffset(original.parsed):undefined});
+  if(!rebuilding)return Buffer.from(sourceOle);
+  const {native}=prepareSource?inspectOle(sourceOle):original,result=wrapNative(rebuildNative(native,latex,original.parsed.legacyAutomaticStix),sourceOle);
+  const ruler=nativeRuler(original.parsed),updated=ruler.length?patchRuler(result,ruler):result;oleLatex(updated);return updated;
 }
 
 export function characters(parsed){
@@ -755,12 +894,43 @@ function glyphLatex(n){
   if(/^[A-Za-z0-9+*\-=().,\[\]\/|:;<>!?]$/.test(c))return c;
   previewError(`Preview of MTCode U+${n.code.toString(16)} is unsupported`);
 }
-function decoderContext(parsed){
+function decodedFonts(parsed){
   const fonts=[],styles=[],preferences=[],encodings=[];
   function walk(nodes){for(const n of nodes){if(n.type===17)fonts.push(n);else if(n.type===8)styles.push(n);else if(n.type===18)preferences.splice(0,preferences.length,...n.styles);else if(n.type===19)encodings.push(n);if(n.children)walk(n.children);}}
-  walk(parsed.records);const colors=['#000000'],charColors=new Map(),recordColors=new Map();let color=colors[0];
+  walk(parsed.records);return {fonts,styles,preferences,encodings};
+}
+function decoderContext(parsed){
+  const fonts=decodedFonts(parsed),colors=['#000000'],charColors=new Map(),recordColors=new Map();let color=colors[0];
   function colorWalk(nodes){for(const n of nodes){if(n.type===16){if(n.options&~7||n.options&1||n.components.some(v=>v>1000))previewError('Unsupported native color definition');colors.push('#'+n.components.map(v=>Math.round(v*255/1000).toString(16).padStart(2,'0')).join(''));}else if(n.type===15){color=colors[n.color];if(!color)previewError('Missing native color definition');}else {recordColors.set(n.start,color);if(n.type===2)charColors.set(n.start,color);}if(n.children)colorWalk(n.children);}}colorWalk(parsed.records);
-  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;return {fonts,styles,preferences,encodings,fullPointSize,charColors,recordColors,inheritedColor:colors[0]};
+  const fullPointSize=nativePointSize(parsed.records.find(n=>n.type===18)?.sizes?.[0])??12;
+  return {...fonts,fullPointSize,charColors,recordColors,inheritedColor:colors[0],legacyAutomaticStix:parsed.legacyAutomaticStix};
+}
+function stixBinding(node,ctx){
+  if(ctx.legacyAutomaticStix||node.typeface>=0||node.code===undefined||node.code===0xf700)return null;
+  const style=ctx.styles[-node.typeface-1],font=ctx.fonts[style?.font-1];
+  if(font?.name.toLowerCase()!=='stix two math'||style.style&~3)return null;
+  const name=ctx.encodings[font.encoding-5]?.name;
+  const encoding=font.encoding>=1&&font.encoding<=4?`b${font.encoding}`:name&&Buffer.byteLength(name)<=128?`u${Buffer.from(name).toString('hex')}`:null;
+  if(!encoding)return null;
+  const wire=node.code.toString(16)+(node.fontPosition===undefined?'':`-${node.fontPositionSize===2?'w':'s'}${node.fontPosition.toString(16)}`);
+  return {encoding,bits:style.style,code:node.code,wire,position:node.fontPosition,widePosition:node.fontPositionSize===2};
+}
+function sourceStixBindings(parsed){
+  const ctx=decodedFonts(parsed),bindings=new Map();
+  if(!ctx.fonts.some(font=>font.name.toLowerCase()==='stix two math'))return bindings;
+  function walk(nodes){for(const n of nodes){
+    if(n.type===2&&n.code!==undefined){
+      const code=n.code===0x2329?0x27e8:n.code===0x232a?0x27e9:n.code;
+      const binding=stixBinding(n,ctx),previous=bindings.get(code);
+      // Plain submitted LaTeX can inherit an unambiguous source binding.
+      // Mixed occurrences use explicit markers in the editable LaTeX.
+      if(!binding||previous===null||previous&&(previous.binding.encoding!==binding.encoding||previous.binding.bits!==binding.bits||previous.binding.wire!==binding.wire))bindings.set(code,null);
+      else if(previous)previous.remaining++;
+      else bindings.set(code,{binding,remaining:1});
+    }
+    if(n.children)walk(n.children);
+  }}
+  walk(parsed.records);return bindings;
 }
 function editableColor(text,color,ctx){return !ctx.fontToken&&color&&color!==ctx.inheritedColor?`\\textcolor{${color}}{${text}}`:text;}
 function structureColorContext(n,ctx){return ctx.fontToken?ctx:{...ctx,inheritedColor:ctx.recordColors.get(n.start)??ctx.inheritedColor};}
@@ -780,7 +950,9 @@ function characterStyle(n,ctx){
   const family=font?ctx.fonts[font-1]?.name:undefined;
   if(font&&!family)previewError(`Missing font definition ${font}`);
   if(legacyGlyph(n.code)&&style===0)return null;
-  if(family==='STIX Two Math'&&(style===0&&n.code>=128||style===2&&nativeGreekGlyphs.has(String.fromCharCode(n.code))))return null;
+  const variantGreek=nativeGreekGlyphs.has(String.fromCharCode(n.code));
+  if(family==='STIX Two Math'&&(style===0&&(n.code>=128||n.code===0x5b||n.code===0x5d)||style===2&&variantGreek))return null;
+  if(n.typeface<0&&family&&usesBundledMathOutline(n.code,family)&&style===(variantGreek?2:0))return null;
   if(family==='Arial Unicode MS'&&style===0)return 'text';
   // Editable LaTeX describes content and broad styles; exact family names stay
   // in MTEF and are rendered separately through CoreText, never inferred from
@@ -808,12 +980,20 @@ function renderChar(n,ctx){
   if(reverseSpaces[String.fromCharCode(n.code)]){}
   else if(style==='text')text=`\\text{${escapedText(String.fromCharCode(n.code))}}`;
   else if(style&&style!=='function'){for(const command of (Array.isArray(style)?[...style].reverse():[style]))text=`\\${command}{${text}}`;}
+  const stix=!ctx.fontToken&&stixBinding(n,ctx);
+  if(stix)text=preservedMacro('mtstix',stix.encoding,stix.bits,stix.wire,glyphLatex(n));
   if(n.children){for(const e of n.children){
     if(e.type!==6||e.options)previewError('Unknown character embellishment styling');
+    const primes=primeCounts[e.embellishment];
+    if(primes){
+      // MathLive normalizes apostrophes into superscript atoms. The preserved
+      // macro keeps the original attachment distinct from an explicit script.
+      text=ctx.fontToken?(ctx.prime?ctx.prime(n,e,text,primes):text+"'".repeat(primes)):preservedMacro(embellishmentMacro(e.embellishment),text);
+      continue;
+    }
     if(!ctx.fontToken&&[7,14,15,16,19,20,21,22,23,25,26,27,28,29,30,31,32,33,34,35,36,37].includes(e.embellishment)){text=preservedMacro(embellishmentMacro(e.embellishment),text);continue;}
     const command=accentCommands[e.embellishment];
-    if(command==='prime')text+="'";else if(command==='doubleprime')text+="''";else if(command==='tripleprime')text+="'''";
-    else if([7,14,15,19,20,31,32,36,37].includes(e.embellishment)){
+    if([7,14,15,19,20,31,32,36,37].includes(e.embellishment)){
       const under=[31,32,36,37].includes(e.embellishment),mark={7:'\\backprime',14:'\\rightharpoonup',15:'\\leftharpoonup',19:'\\frown',20:'\\smile',31:'\\frown',32:'\\smile',36:'\\rightharpoondown',37:'\\leftharpoondown'}[e.embellishment];text=`\\${under?'underset':'overset'}{${mark}}{${text}}`;
     }else if(e.embellishment===16&&ctx.fontToken)text=`\\enclose{horizontalstrike}{${text}}`;
     else if([16,21,22,23,29].includes(e.embellishment))text=`\\${{16:'sout',21:'xcancel',22:'cancel',23:'bcancel',29:'underline'}[e.embellishment]}{${text}}`;
@@ -846,8 +1026,7 @@ function renderTemplate(n,ctx){
     if(selector===9){if(variation&~0x33)previewError('Unknown interval variation');const d=['(',')','[',']'];left=d[variation&3];right=d[variation>>4&3];}
     else {if(variation&~3||!variation)previewError('Unknown fence variation');const pair=fencePairs[selector];if(!pair)previewError('White/open bracket template is unsupported');left=variation&1?pair[0]:'.';right=variation&2?pair[1]:'.';}
     const count=(left==='.'?0:1)+(right==='.'?0:1),{slots,decor}=slotsFor(n,1,{chars:count});let j=0;
-    const originalPairs={0:[0x2329,0x232a],4:[0xec07,0xec08],5:[0xec09,0xec0a],6:[0xf8f0,0xf8fb],7:[0xf8ee,0xf8f9],8:[0x301a,0x301b]};
-    for(const [side,d]of [left,right].entries())if(d!=='.'){const c=decor[j++];if(![d.charCodeAt(0),originalPairs[selector]?.[side]].includes(c.code)||c.typeface!==22||c.children?.length)previewError('Custom fence glyph is unsupported');}
+    for(const [side,d]of [left,right].entries())if(d!=='.'){const c=decor[j++];if(![d.charCodeAt(0),fenceNativeCodes[selector]?.[side]].includes(c.code)||c.typeface!==22||c.children?.length)previewError('Custom fence glyph is unsupported');}
     if(selector===2&&variation===1&&!ctx.fontToken){const cases=renderCasePile(slots[0].children,ctx);if(cases)return cases;}
     const escape=d=>({'{':'\\{','}':'\\}','⟨':'\\langle ','⟩':'\\rangle ','‖':'\\|','⌊':'\\lfloor ','⌋':'\\rfloor ','⌈':'\\lceil ','⌉':'\\rceil '}[d]||d);
     return `\\left${escape(left)}${value(slots[0])}\\right${escape(right)}`;

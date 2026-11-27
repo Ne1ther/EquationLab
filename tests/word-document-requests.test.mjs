@@ -89,6 +89,37 @@ test('new requests supersede delivered work and stale finish cannot revive it',a
  assert.equal((await queue.take({hostId:host,waitMs:0})).requestId,second.requestId);
 });
 
+test('128 completed reveals cannot fill the shared pool or evict a live open request',async()=>{
+ let time=1_797_900_000_000;
+ const queue=fixture({now:()=>time}),hostId=hex(160),active={identity:target.identity,name:'A.docx'};
+ await queue.take({hostId,waitMs:0});
+ queue.handle('native-document-workspace',{hostId,active,documents:[{...active,readOnly:false}],revealRequestSupport:true});
+ const submit=async(body,state)=>{
+  const {requestId}=queue.request(body);
+  assert.equal((await queue.take({hostId,waitMs:0})).requestId,requestId);
+  assert.equal(queue.finish({hostId,requestId,state}).state,state);
+  time++;
+  return requestId;
+ };
+ const reveal={target,reveal:true},history=[];
+ for(let i=0;i<128;i++)history.push(await submit(reveal,'revealed'));
+ // A renewed terminal receipt is newer than later-created receipts.
+ assert.equal(queue.cancel({requestId:history[0]}).state,'cancelled');time++;
+ const newest=await submit(reveal,'revealed');
+ assert.deepEqual(queue.status({requestId:history[1]}),{requestId:history[1],state:'expired',reason:'unknown-or-pruned'});
+ assert.equal(queue.status({requestId:history[0]}).state,'cancelled');
+ assert.equal(queue.status({requestId:newest}).state,'revealed');
+ const open=queue.request({target});
+ assert.equal(queue.status({requestId:history[2]}).state,'expired');
+ assert.equal(queue.status({requestId:history[3]}).state,'revealed');
+ assert.equal((await queue.take({hostId,waitMs:0})).requestId,open.requestId);
+ assert.throws(()=>queue.request(reveal),error=>error.statusCode===409);
+ assert.equal(queue.status({requestId:history[3]}).state,'revealed','a rejected reveal consumes no receipt slot');
+ assert.equal(queue.finish({hostId,requestId:open.requestId,state:'opened'}).state,'opened');
+ assert.equal(queue.finish({hostId,requestId:history[1],state:'revealed'}).state,'expired');
+ assert.equal(queue.status({requestId:open.requestId}).state,'opened','a pruned completion cannot affect a newer receipt');
+});
+
 test('cancel is idempotent and terminal cancellation rejects host finish',async()=>{
  const queue=fixture(),host=hex(94),created=queue.request({});
  await queue.take({hostId:host,waitMs:0});

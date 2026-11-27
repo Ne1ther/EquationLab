@@ -320,10 +320,10 @@ test('workspace sidecar carries bounded metadata only and explicit selector is i
  const ribbon=await readFile(new URL('../native-word-probe/src/ribbon_commands.mm',import.meta.url),'utf8');
  const native=await readFile(new URL('../native-word-probe/src/word_document_requests.mm',import.meta.url),'utf8');
  const publish=context.slice(context.indexOf('Private Sub PublishDocumentWorkspace'),context.indexOf('End Sub',context.indexOf('Private Sub PublishDocumentWorkspace')));
- assert.match(publish,/ELWORK3[\s\S]*?Application\.Documents\.Count[\s\S]*?EnsureKnownDocumentIdentity\(candidate\)[\s\S]*?candidate\.Name[\s\S]*?candidate\.ReadOnly/);
+ assert.match(publish,/ELWORK4[\s\S]*?Application\.Documents\.Count[\s\S]*?EnsureKnownDocumentIdentity\(candidate\)[\s\S]*?candidate\.Name[\s\S]*?candidate\.ReadOnly/);
  assert.doesNotMatch(publish,/WordOpenXML|InlineShapes|Selection|\.Activate|\.Select/);
  assert.match(ribbon,/ELWORK1[\s\S]*?ELWORK2/,'native sidecar parser retains ELWORK1 compatibility and ELWORK2 catalog support');
- assert.match(ribbon,/count>128[\s\S]*?name\.length>512[\s\S]*?publishWordWorkspace\(active,documents\)/);
+ assert.match(ribbon,/count>128[\s\S]*?name\.length>512[\s\S]*?publishWordWorkspace\(active,documents,reveal\)/);
  assert.match(ribbon,/ELDREQ2[\s\S]*?documentIdentity[\s\S]*?document-process-mismatch/);
  assert.match(native,/MaximumReplyBytes=512\*1024/);
  assert.match(native,/workspaceDocuments/);
@@ -516,6 +516,54 @@ test('Ribbon right/left and number route only an exact selected OLE into standal
  assert.match(source,/cursor = field\.Result\.End \+ 1/,'literals and following fields are inserted outside the field end delimiter');
  assert.match(source,/Case "C": sequence = "ELChapter": command = "\\c"[\s\S]*?Case "S": sequence = "ELSection": command = "\\c"[\s\S]*?Case Else: sequence = "EquationLab": command = "\\n"/);
  assert.match(source,/If IsEquationReference\(field, Doc\) And Not field\.Locked Then field\.Update/,'reference fields are refreshed through the shared document-bound updater');
+});
+
+test('Word releases an owned undo record and capture channel when insertion setup fails',async()=>{
+ const root=new URL('../native-word-probe/automatic-loader/',import.meta.url);
+ const ribbon=await readFile(new URL('EquationLabRibbon.bas',root),'utf8');
+ const context=await readFile(new URL('EquationLabDocumentContext.bas',root),'utf8');
+ const procedure=(source,name,end='End Sub')=>{
+  const start=source.indexOf(name);
+  assert.notEqual(start,-1);
+  return source.slice(start,source.indexOf(end,start));
+ };
+ const begin=procedure(ribbon,'Public Function ELBeginNumberingTransaction','End Function');
+ assert.match(begin,/CustomRecordLevel <> 0[\s\S]*?Doc\.Bookmarks\.Exists\(sentinel\)[\s\S]*?On Error GoTo Failed\s+record\.StartCustomRecord title/);
+ assert.match(begin,/Failed:[\s\S]*?If record\.CustomRecordLevel > 0 Then record\.EndCustomRecord[\s\S]*?ElseIf sentinelAdded Then\s+Err\.Clear: undoOK = Doc\.Undo[\s\S]*?If recovery <> "" Then Err\.Raise vbObjectError \+ 7381/);
+ const write=procedure(ribbon,'Private Sub ELWriteCaptureBytes');
+ assert.match(write,/On Error GoTo Failed[\s\S]*?Open path For Binary Access Write As #file\s+opened = True\s+Put #file/);
+ assert.match(write,/Failed:[\s\S]*?If opened Then Close #file[\s\S]*?Err\.Raise failureNumber/);
+ assert.match(procedure(ribbon,'Public Sub ELWriteUtf8'),/ELWriteCaptureBytes path, bytes/);
+ assert.match(procedure(ribbon,'Public Sub ELWriteDocumentCapture'),/ELWriteCaptureBytes path, bytes/);
+ const apply=procedure(context,'Private Sub ApplyInsertion');
+ assert.match(apply,/ElseIf failureNumber = vbObjectError \+ 7381 Then[\s\S]*?mutationAttempted = True[\s\S]*?ElseIf mutationAttempted Then[\s\S]*?MathTypeBridgeUncertainInsertion/);
+ const poll=procedure(context,'Public Sub ELPollNavigation');
+ assert.match(poll,/MathTypeBridgeTakeInsertionV2[\s\S]*?On Error Resume Next[\s\S]*?MathTypeBridgeQueueWorkspaceRefresh[\s\S]*?Err\.Clear[\s\S]*?On Error GoTo Failed[\s\S]*?ApplyInsertion insertionToken/);
+ assert.match(poll,/If mInsertionToken > 0 Then\s+ClearInsertion\s+insertionError = EquationLabNativeCommand\("MathTypeBridgeInsertionError"\)/);
+});
+
+test('Word retries only the token-bound completion after committing insertion',async()=>{
+ const source=await readFile(new URL('../native-word-probe/automatic-loader/EquationLabDocumentContext.bas',import.meta.url),'utf8');
+ const procedure=name=>{
+  const start=source.indexOf(name);
+  assert.notEqual(start,-1);
+  return source.slice(start,source.indexOf('End Sub',start));
+ };
+ const begin=procedure('Public Sub ELBeginEquationInsertion');
+ assert.match(begin,/MathTypeBridgeInsertionCompletionSupport[\s\S]*?If completionSupport <> 1 Then Err\.Raise[\s\S]*?Set mInsertionDocument/);
+ const apply=procedure('Private Sub ApplyInsertion');
+ assert.match(apply,/ELCommitNumberingTransaction transaction[\s\S]*?ELQueueInsertionCompletion token, "MathTypeBridgeFinishInsertionV2"/);
+ assert.equal((apply.match(/target\.InsertFile/g)||[]).length,1);
+ const queued=procedure('Private Sub ELQueueInsertionCompletion');
+ assert.match(queued,/mInsertionCompletionToken = token\s+mInsertionCompletionCommand = command\s+mInsertionCompletionAttempts = 0\s+ELRetryInsertionCompletion/);
+ const retry=procedure('Private Sub ELRetryInsertionCompletion');
+ assert.match(retry,/MaximumAttempts As Long = 3/);
+ assert.match(retry,/result = EquationLabNativeCommand\(mInsertionCompletionCommand, mInsertionCompletionToken\)\s+failureNumber = Err\.Number/);
+ assert.match(retry,/If \(failureNumber = 0 And \(result = 0 Or result = 1\)\) Or mInsertionCompletionAttempts >= MaximumAttempts Then[\s\S]*?mInsertionCompletionToken = 0[\s\S]*?Exit Sub[\s\S]*?SchedulePoll/);
+ assert.doesNotMatch(retry,/ApplyInsertion|InsertFile|\.Undo|Doc\./);
+ const poll=procedure('Public Sub ELPollNavigation');
+ assert.ok(poll.indexOf('ELRetryInsertionCompletion')<poll.indexOf('MathTypeBridgeTakeInsertionV2'));
+ assert.match(poll,/If insertionError = 7 Then[\s\S]*?could not confirm the insertion[\s\S]*?ElseIf insertionError <> 0 Then/);
 });
 
 test('Word insertion preview reads sequence resets before the insertion position',async()=>{

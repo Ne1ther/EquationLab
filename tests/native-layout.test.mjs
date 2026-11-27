@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import sharp from 'sharp';
-import {inspectOle,makeOle,oleLatex,patchRuler} from '../src/native.mjs';
+import {characters,inspectOle,makeOle,oleLatex,patchRuler,wrapNative} from '../src/native.mjs';
 import {makeNewOle} from '../src/new-formula.mjs';
 import {patchTypography} from '../src/typography-native.mjs';
 import {renderNative,nativePdf,nativeRendererStats} from '../src/font-renderer.mjs';
@@ -31,8 +31,17 @@ function assertInkInsideViewport(p,label){
  assert.ok(ink[0]>=left-.2&&ink[1]>=top-.2&&ink[2]<=left+width+.2&&ink[3]<=top+height+.2,`${label}: vector ink exceeds its exported viewport`);
 }
 
+function legacyAsteriskOle(latex){
+ const ole=makeNewOle(latex),{native,header,parsed}=inspectOle(ole),star=characters(parsed).find(c=>c.code===0x2217),at=header.length+star.offset;
+ // Reconstruct the earlier Equation Lab CHAR (U+002A, Symbol slot 6,
+ // without an ANSI position) to keep testing the legacy outline fallback.
+ const legacy=Buffer.concat([native.subarray(0,at-3),Buffer.from('0200862a00','hex'),native.subarray(at+3)]);
+ legacy.writeUInt32LE(legacy.length-header.length,8);
+ return wrapNative(legacy,ole);
+}
+
 test('Fourier transform and convolution preview accept the native ASCII asterisk without changing source data',async()=>{
- const latex=String.raw`\hat f(\xi)=\int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx,\qquad (f * g)(t)=\int_{-\infty}^{\infty} f(\tau)g(t-\tau)\,d\tau`,ole=makeNewOle(latex),before=Buffer.from(ole),native=Buffer.from(inspectOle(ole).native);
+ const latex=String.raw`\hat f(\xi)=\int_{-\infty}^{\infty} f(x) e^{-2\pi i x\xi}\,dx,\qquad (f * g)(t)=\int_{-\infty}^{\infty} f(\tau)g(t-\tau)\,d\tau`,ole=legacyAsteriskOle(latex),before=Buffer.from(ole),native=Buffer.from(inspectOle(ole).native);
  const p=await renderNative(ole,{raster:false});
  const pdf=Buffer.from((await nativePdf(ole)).pdf,'base64');
  assert.ok(oleLatex(ole).includes('*'),'the convolution operator remains present in the decoded native content');
@@ -40,7 +49,7 @@ test('Fourier transform and convolution preview accept the native ASCII asterisk
  assert.ok(p.width>250,'the complete Fourier and convolution expression remains horizontally laid out');
  assertInkInsideViewport(p,'Fourier/convolution');
  assert.deepEqual(ole,before);assert.deepEqual(inspectOle(ole).native,native);
- const isolated=await renderNative(makeNewOle('f * g'),{raster:false}),withoutStar=await renderNative(makeNewOle('f g'),{raster:false});
+ const isolated=await renderNative(legacyAsteriskOle('f * g'),{raster:false}),withoutStar=await renderNative(makeNewOle('f g'),{raster:false});
  assert.ok(isolated.faces.some(face=>face.font==='STIX Two Math'),'the Symbol asterisk uses the bundled math outline for preview');
  assert.ok(isolated.width>withoutStar.width+5,'the asterisk contributes visible width instead of disappearing');
 });

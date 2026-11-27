@@ -8,13 +8,14 @@ import { SVG } from 'mathjax-full/js/output/svg.js';
 import { liteAdaptor } from 'mathjax-full/js/adaptors/liteAdaptor.js';
 import { RegisterHTMLHandler } from 'mathjax-full/js/handlers/html.js';
 import { AllPackages } from 'mathjax-full/js/input/tex/AllPackages.js';
-import { inspectOle, nativeLatex, oleLatex, characters, editCharacters, replaceOleLatex,patchRuler,nativeRuler } from './native.mjs';
+import { inspectOle, nativeLatex, oleLatex, characters,patchRuler,nativeRuler } from './native.mjs';
 import {makeNewOle} from './new-formula.mjs';
 import {equationLayout, equationReference, chapterBreak, standaloneNumber,previewNumberFormat} from './layout.mjs';
-import {readTypography,patchTypography} from './typography-native.mjs';
+import {readTypography,patchTypography,editFormulaOle} from './typography-native.mjs';
 import {renderNative,rasterizeNativeSvg} from './font-renderer.mjs';
 import {resolveDocxPart,scanWordNumberingPart} from './document-audit.mjs';
 import {documentGeometry} from './document-geometry.mjs';
+import {documentPageTwips,fitStoredWordObjectPreview,updateWordObjectPreview,wordObjectPreviewLimits,wordPreviewBox} from './word-preview.mjs';
 
 let genericPreviewContext;
 function previewContext(){if(!genericPreviewContext){const adaptor=liteAdaptor();RegisterHTMLHandler(adaptor);genericPreviewContext={adaptor,math:mathjax.document('',{InputJax:new TeX({packages:AllPackages}),OutputJax:new SVG({fontCache:'local'})})};}return genericPreviewContext;}
@@ -70,7 +71,8 @@ export async function createDocx(equations,{fragment=false,references=[],initial
       layout.equation=layout.equation??++count;
       count=layout.equation;
     }
-    const result=equationLayout(objectRun(n,p),layout);
+    const widthTwips=Math.min(layout.widthTwips??Infinity,documentPageTwips.width-2*documentPageTwips.margin);
+    const result=equationLayout(objectRun(n,wordPreviewBox(p,{widthTwips})),layout);
     anchors.push(result);paragraphs.push(result.xml);
   }
   for(const ref of references){const a=anchors[ref.target];if(!a?.bookmarkName)throw Error('引用目标必须是带编号的公式');paragraphs.push(`<w:p>${equationReference(a.bookmarkName,{cachedText:a.numberText,prefix:ref.prefix??'式 '})}</w:p>`);}
@@ -87,9 +89,12 @@ function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFo
   zip.file('_rels/.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rDoc" Type="${NS.r}/officeDocument" Target="word/document.xml"/></Relationships>`);
   zip.file('word/styles.xml',`<w:styles xmlns:w="${NS.w}"><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman"/><w:sz w:val="24"/></w:rPr></w:rPrDefault></w:docDefaults>${equationStyle}</w:styles>`);
   const variables=numberingFormat===null?'':`<w:docVars><w:docVar w:name="EquationLabNumberFormat" w:val="${esc(numberingFormat)}"/></w:docVars>`;
-  zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}"><w:updateFields w:val="true"/><w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>${variables}</w:settings>`);
+  // Word can prompt about updating fields on open even in an equation-only file.
+  const updateFields=paragraphs.some(xml=>/<w:(?:fldChar|fldSimple)\b/.test(xml))?'<w:updateFields w:val="true"/>':'';
+  zip.file('word/settings.xml',`<w:settings xmlns:w="${NS.w}">${updateFields}${generatedCompatibility}${variables}</w:settings>`);
   zip.file('word/_rels/document.xml.rels',`<Relationships xmlns="${NS.rels}"><Relationship Id="rStyles" Type="${NS.r}/styles" Target="styles.xml"/><Relationship Id="rSettings" Type="${NS.r}/settings" Target="settings.xml"/>${relationships.join('')}</Relationships>`);
-  const mainXml=`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr></w:body></w:document>`;
+  const {width,height,margin}=documentPageTwips;
+  const mainXml=`<w:document xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}"><w:body>${fragment?'':'<w:p><w:r><w:rPr><w:b/></w:rPr><w:t>Mac native MathType compatibility prototype</w:t></w:r></w:p>'}${paragraphs.join('')}<w:sectPr><w:pgSz w:w="${width}" w:h="${height}"/><w:pgMar w:top="${margin}" w:right="${margin}" w:bottom="${margin}" w:left="${margin}"/></w:sectPr></w:body></w:document>`;
   zip.file('word/document.xml',mainXml);
   if(insertionBody){
     // Insert only the bookmarked body. Word attaches a document's section
@@ -112,6 +117,7 @@ function packageDocument(zip,paragraphs,relationships,{fragment=true,numberingFo
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 
+const generatedCompatibility='<w:compat><w:compatSetting w:name="compatibilityMode" w:uri="http://schemas.microsoft.com/office/word" w:val="15"/></w:compat>';
 const equationStyle='<w:style w:type="paragraph" w:styleId="EquationLab"><w:name w:val="Equation Lab"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:pPr><w:keepLines/><w:spacing w:before="120" w:after="120"/></w:pPr></w:style>';
 function emptyHiddenShapeRun(run){
   if(run.namespaceURI!==NS.w||run.localName!=='r')return false;
@@ -241,7 +247,7 @@ export async function inspectDocx(buffer,options) {
   return inspectWordPackage(await JSZip.loadAsync(buffer),options);
 }
 
-async function inspectWordPackage(zip,{checkpoint,nativeIndexOnly=false,wordCatalogueOnly=false,wordDirectoryActiveIndex}={}) {
+async function inspectWordPackage(zip,{checkpoint,nativeIndexOnly=false,wordCatalogueOnly=false,wordDirectoryActiveIndex,wordPreviewLimits=false}={}) {
   const wordDirectory=wordDirectoryActiveIndex!==undefined;
   // A pending editor preview can run before parsing the main document XML.
   if(checkpoint)await checkpoint();
@@ -329,13 +335,20 @@ async function inspectWordPackage(zip,{checkpoint,nativeIndexOnly=false,wordCata
   if(wordCatalogueOnly)return {objects};
   let numberFormat=null,numberingRevision=0;
   const settingsEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'settings','word/settings.xml');
-  if(settingsEntry){
-    const settings=parseXml(await settingsEntry.async('string'));
+  const settings=settingsEntry?parseXml(await settingsEntry.async('string')):null;
+  if(settings){
     const variables=Array.from(settings.getElementsByTagNameNS(NS.w,'docVar'));
     const revision=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberingRevision')?.getAttributeNS(NS.w,'val');
     if(revision&&/^\d+$/.test(revision)&&Number(revision)<=2147483646)numberingRevision=Number(revision);
     const variable=variables.find(node=>node.getAttributeNS(NS.w,'name')==='EquationLabNumberFormat');
     if(variable){const value=variable.getAttributeNS(NS.w,'val');try{previewNumberFormat(value);numberFormat=value;}catch{/* Unknown document settings never become a write instruction. */}}
+  }
+  if(wordPreviewLimits){
+    const stylesEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'styles','word/styles.xml');
+    let styles=null;
+    try{if(stylesEntry)styles=parseXml(await stylesEntry.async('string'));}catch{/* An unreadable styles part cannot define preview geometry. */}
+    const geometry=documentGeometry(doc,{styles,settings});
+    for(const object of objects)if(object.element)object.wordPreview=wordObjectPreviewLimits(object.element.parentNode,geometry,styles);
   }
   const legacyNumbers=objects.some(object=>object.layout?.bookmarkName&&object.layout.numberingFamily!=='mathtype');
   const customEntry=relatedMetadataPart(zip,root,'_root.xml','custom-properties','docProps/custom.xml');
@@ -355,18 +368,20 @@ async function inspectWordPackage(zip,{checkpoint,nativeIndexOnly=false,wordCata
   return {zip,doc,mainPart,objects,numberFormat,numberingRevision,hasLegacyNumbering};
 }
 
-export async function editDocx(buffer,index,replacements,options={}) {
-  return updateDocx(buffer,index,ole=>editCharacters(ole,replacements),options);
+export async function editDocx(buffer,index,replacements,{typography,ruler}={}) {
+  if(replacements==null)throw Error('Invalid character replacement');
+  return updateDocx(buffer,index,ole=>editFormulaOle(ole,{replacements,typography}),ruler);
 }
 
-export async function replaceDocxEquation(buffer,index,latex,options={}) {
-  return updateDocx(buffer,index,ole=>replaceOleLatex(ole,latex),options);
+export async function replaceDocxEquation(buffer,index,latex,{typography,ruler}={}) {
+  if(typeof latex!=='string')throw Error('Formula must be LaTeX text');
+  return updateDocx(buffer,index,ole=>editFormulaOle(ole,{latex,typography}),ruler);
 }
 
 /** Apply exact, independently bound equation edits in one package pass. */
 export async function editDocxBatch(buffer,edits) {
   if(!Array.isArray(edits)||edits.length===0)throw Error('Expected a nonempty equation edit list');
-  const document=await inspectDocx(buffer);
+  const document=await inspectDocx(buffer,{wordPreviewLimits:true});
   const seen=new Set();
   const allowed=new Set(['index','expectedNativeSha256','latex','replacements','typography','ruler']);
   const updates=edits.map(edit=>{
@@ -380,8 +395,8 @@ export async function editDocxBatch(buffer,edits) {
     if(replacements!==undefined&&(!replacements||typeof replacements!=='object'||Array.isArray(replacements)||Object.keys(replacements).length===0))throw Error('Expected nonempty character replacements');
     if(latex===undefined&&replacements===undefined&&typography===undefined&&ruler===undefined)throw Error('Equation edit has no operation');
     if(typography!==undefined&&(!typography||typeof typography!=='object'||Array.isArray(typography)))throw Error('Invalid typography patch');
-    const transform=latex!==undefined?ole=>replaceOleLatex(ole,latex):replacements!==undefined?ole=>editCharacters(ole,replacements):ole=>ole;
-    return {object,transform,typography,ruler};
+    const transform=ole=>editFormulaOle(ole,{latex,replacements,typography});
+    return {object,transform,ruler};
   });
   return updateDocxObjects(buffer,document.zip,updates,{skipUnchanged:true});
 }
@@ -417,7 +432,7 @@ export function sharedNumberRangeNodes(object,paragraph,scan){
  * range operation and are rejected here rather than discarded. */
 export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFamily='equationlab'}={}) {
   if(!['equationlab','mathtype'].includes(defaultNumberingFamily))throw Error('Invalid numbering family');
-  const {zip,objects,mainPart}=await inspectDocx(buffer),targets=indices??objects.map(o=>o.index);
+  const {zip,doc,objects,mainPart}=await inspectDocx(buffer),targets=indices??objects.map(o=>o.index);
   const documentFamily=objects.some(o=>o.layout.bookmarkName&&o.layout.numberingFamily!=='mathtype')?'equationlab':objects.some(o=>o.layout.numberingFamily==='mathtype')?'mathtype':defaultNumberingFamily;
   if(!Array.isArray(targets)||!targets.length||new Set(targets).size!==targets.length)throw Error('请选择互不重复的公式');
   const serializer=new XMLSerializer(),changedParts=new Map();
@@ -428,7 +443,10 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
   const stylesEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'styles','word/styles.xml');
   const settingsEntry=relatedMetadataPart(zip,mainRelationships,mainPart,'settings','word/settings.xml');
   const styles=stylesEntry?parseXml(await stylesEntry.async('string')):null;
-  const settings=settingsEntry?parseXml(await settingsEntry.async('string')):null;
+  const settingsXml=await settingsEntry?.async('string');
+  const settings=settingsXml?parseXml(settingsXml):null;
+  const enableFirstFieldUpdate=layout.mode?.startsWith('numbered-')&&settingsXml===`<w:settings xmlns:w="${NS.w}">${generatedCompatibility}</w:settings>`&&
+   isFieldlessEquationLabExport(zip,mainPart,doc,objects,mainRelationships);
   const geometries=new WeakMap();
   let first=true;
   for(const index of [...targets].sort((a,b)=>a-b)) {
@@ -461,7 +479,7 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
     let name=o.layout.bookmarkName,id;
     if(name){const b=Array.from(p.getElementsByTagNameNS(NS.w,'bookmarkStart')).find(b=>b.getAttributeNS(NS.w,'name')===name);id=Number(b.getAttributeNS(NS.w,'id'));existingBookmarks.delete(name);existingBookmarkIds.delete(String(id));}
     if(!geometries.has(o.partDoc))geometries.set(o.partDoc,documentGeometry(o.partDoc,{styles,settings}));
-    const geometry=geometries.get(o.partDoc)(p,{style:layout.style??'EquationLab'});
+    const {heightTwips,...geometry}=geometries.get(o.partDoc)(p,{style:layout.style??'EquationLab'});
     const opts={numberingFamily:o.layout.bookmarkName?(shared?'mathtype':'equationlab'):documentFamily,...layout,...geometry,existingBookmarks,existingBookmarkIds};
     if(o.layout.bookmarkName&&opts.numberingFamily!==(shared?'mathtype':'equationlab'))throw Error('编号计数链需要在 Word 中统一后再更改');
     if(layout.mode?.startsWith('numbered-')){
@@ -477,10 +495,17 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
       if(name){opts.bookmarkName=name;opts.bookmarkId=id;}opts.resetEquation=first&&!!layout.resetEquation||retainedReset!==null;
     }
     else if(name)throw Error('此公式已带引用书签；取消编号会使引用失效，请保留编号');
+    fitStoredWordObjectPreview(o.element.parentNode,{widthTwips:geometry.widthTwips,heightTwips});
     const result=equationLayout(hiddenShapes.map(n=>serializer.serializeToString(n)).join('')+serializer.serializeToString(run),opts),replacement=parseXml(`<root xmlns:w="${NS.w}" xmlns:r="${NS.r}" xmlns:v="${NS.v}" xmlns:o="${NS.o}">${result.xml}</root>`).documentElement.firstChild;
     p.parentNode.replaceChild(o.partDoc.importNode(replacement,true),p);changedParts.set(o.part,o.partDoc);first=false;
   }
   for(const [name,doc]of changedParts)zip.file(name,serializer.serializeToString(doc));
+  if(enableFirstFieldUpdate){
+    const node=settings.createElementNS(NS.w,'w:updateFields');
+    node.setAttributeNS(NS.w,'w:val','true');
+    settings.documentElement.insertBefore(node,settings.documentElement.firstChild);
+    zip.file(settingsEntry.name,serializer.serializeToString(settings));
+  }
   // Ensure the style exists without replacing any of the user's other styles.
   if(styles&&!Array.from(styles.getElementsByTagNameNS(NS.w,'style')).some(n=>n.getAttributeNS(NS.w,'styleId')==='EquationLab')){
     styles.documentElement.appendChild(styles.importNode(parseXml(`<root xmlns:w="${NS.w}">${equationStyle}</root>`).documentElement.firstChild,true));
@@ -489,19 +514,35 @@ export async function arrangeDocx(buffer,{indices,layout={},defaultNumberingFami
   return zip.generateAsync({type:'nodebuffer',compression:'DEFLATE'});
 }
 
-async function updateDocx(buffer,index,transform,{typography,ruler}={}) {
-  const {zip,objects}=await inspectDocx(buffer), obj=objects[index]; if(!obj) throw Error('Equation index not found');
-  return (await updateDocxObjects(buffer,zip,[{object:obj,transform,typography,ruler}])).bytes;
+// Recognize this generator's existing fieldless packages without treating a
+// copied Equation Lab paragraph in an external DOCX as package ownership.
+function isFieldlessEquationLabExport(zip,mainPart,doc,objects,relationships){
+ const generatedParts=/^(?:\[Content_Types\]\.xml|_rels\/\.rels|word\/(?:document\.xml|styles\.xml|settings\.xml|_rels\/document\.xml\.rels|embeddings\/(?:oleObject|nativeBridge)\d+\.bin|media\/(?:image|nativeBridge)\d+\.png))$/;
+ if(mainPart!=='word/document.xml'||Object.values(zip.files).some(entry=>!entry.dir&&!generatedParts.test(entry.name))||
+    doc.getElementsByTagNameNS(NS.w,'fldSimple').length||doc.getElementsByTagNameNS(NS.w,'fldChar').length)return false;
+ const links=Array.from(relationships?.getElementsByTagNameNS(NS.rels,'Relationship')??[]);
+ if(![['rStyles','styles'],['rSettings','settings']].every(([id,name])=>links.some(link=>link.getAttribute('Id')===id&&
+    link.getAttribute('Type')===NS.r+'/'+name&&link.getAttribute('Target')===name+'.xml'&&!link.hasAttribute('TargetMode'))))return false;
+ return objects.every(object=>{
+   const type=object.shape?.getAttribute('type');
+   return object.mainDocument&&object.layout.owned&&/^#_EquationLab_t75_\d+$/.test(type)&&
+    Array.from(object.element.parentNode.getElementsByTagNameNS(NS.v,'shapetype')).some(shape=>shape.getAttribute('id')===type.slice(1));
+ });
+}
+
+async function updateDocx(buffer,index,transform,ruler) {
+  const {zip,objects}=await inspectDocx(buffer,{wordPreviewLimits:true}), obj=objects[index]; if(!obj) throw Error('Equation index not found');
+  return (await updateDocxObjects(buffer,zip,[{object:obj,transform,ruler}])).bytes;
 }
 
 async function updateDocxObjects(original,zip,updates,{skipUnchanged=false}={}) {
   const contentTypes=parseXml(await zip.file('[Content_Types].xml').async('string'));
   const serializer=new XMLSerializer(),changedParts=new Map(),relStates=new Map(),results=[];
   let slot=1;
-  for(const {object:obj,transform,typography,ruler} of updates){
+  for(const {object:obj,transform,ruler} of updates){
     if(obj.parseError)throw Error(obj.parseError);
     if(!obj.shape||!obj.image)throw Error('This object preview layout is not supported; source unchanged');
-    const changed=transform(obj.ole),styled=typography?patchTypography(changed,typography):changed;
+    const styled=transform(obj.ole);
     const ole=ruler===undefined?styled:patchRuler(styled,ruler);
     const beforeNativeSha256=obj.nativeSha256;
     if(skipUnchanged&&ole.equals(obj.ole)){
@@ -538,13 +579,9 @@ async function updateDocxObjects(original,zip,updates,{skipUnchanged=false}={}) 
       entry.setAttribute('ContentType',contentType);
       contentTypes.documentElement.appendChild(entry);
     }
-    obj.shape.setAttribute('style',`width:${preview.width.toFixed(3)}pt;height:${preview.height.toFixed(3)}pt`);
     const container=obj.element.parentNode;
-    container.setAttributeNS(NS.w,'w:dxaOrig',String(Math.round(preview.width*20)));
-    container.setAttributeNS(NS.w,'w:dyaOrig',String(Math.round(preview.height*20)));
-    const run=container.parentNode,properties=run.getElementsByTagNameNS(NS.w,'rPr')[0];
-    const position=properties?.getElementsByTagNameNS(NS.w,'position')[0];
-    if(position)position.setAttributeNS(NS.w,'w:val',String(-Math.round(preview.depth*2)));
+    const {widthTwips,heightTwips}=obj.wordPreview??{};
+    updateWordObjectPreview(obj.shape,container,wordPreviewBox(preview,{widthTwips,heightTwips}));
     changedParts.set(obj.part,obj.partDoc);
     changedParts.set(obj.relPart,obj.rels);
     results.push({index:obj.index,status:'updated',beforeNativeSha256,afterNativeSha256:hash(inspectOle(ole).native)});

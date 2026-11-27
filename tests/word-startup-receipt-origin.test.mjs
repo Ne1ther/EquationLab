@@ -43,5 +43,7 @@ test('dynamic loader separates AutoExec and lazy receipt origins while retaining
  assert.match(connect,/FindSymbol\(mFfiHandle, "ffi_type_sint32"\)/);
  assert.match(ffi,/cif = ELcalloc\(1, 256\)/);assert.match(ffi,/result = ELcalloc\(1, 8\)/);
  assert.match(ffi,/ELffiPrep\(cif, 1, 0, mReturnType, 0\)/);assert.match(ffi,/ELffiCall cif, pointer, result, 0/);
+ assert.match(ffi,/argumentType = mReturnType\s+argumentPointer = VarPtr\(token\)\s+status = ELffiPrep\(cif, 1, 1, mReturnType, VarPtr\(argumentType\)\)/);
+ assert.match(ffi,/ELffiCall cif, pointer, result, VarPtr\(argumentPointer\)/);
  assert.match(ffi,/ELcopyLong\(value, result, 4\)/);assert.match(ffi,/If result <> 0 Then ELfree result\s+If cif <> 0 Then ELfree cif/);
 });

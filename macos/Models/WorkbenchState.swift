@@ -31,10 +31,11 @@ struct SidebarFormula: Identifiable, Decodable {
     var position: Int? = nil
     var numberText: String? = nil
     var numberStatus: String? = nil
+    var revealToken: String? = nil
     private var imageCacheKey: NSString? = nil
 
     private enum CodingKeys: String, CodingKey {
-        case id, label, detail, latex, image, readOnly, position, numberText, numberStatus
+        case id, label, detail, latex, image, readOnly, position, numberText, numberStatus, revealToken
     }
 
     init(from decoder: Decoder) throws {
@@ -50,6 +51,7 @@ struct SidebarFormula: Identifiable, Decodable {
         position = try values.decodeIfPresent(Int.self, forKey: .position)
         numberText = try values.decodeIfPresent(String.self, forKey: .numberText)
         numberStatus = try values.decodeIfPresent(String.self, forKey: .numberStatus)
+        revealToken = try values.decodeIfPresent(String.self, forKey: .revealToken)
     }
 
     static func searchTerms(in query: String) -> [String] {

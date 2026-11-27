@@ -1,6 +1,5 @@
-// Read-only structure adapter for the pinned MathLive 0.111.1 tree. Content
-// changes use the public selection/insert API, so no display-only state leaks
-// into LaTeX or Equation Native records.
+// The adapter reads the pinned MathLive 0.111.1 tree. Content changes use the
+// public selection/insert API so display state stays out of LaTeX and Native.
 (function (host) {
  'use strict';
  const operators = new Map([['\\sum',['求和','Sum']],['\\prod',['乘积','Product']],['\\coprod',['余积','Coproduct']],['\\bigcup',['大并集','Union']],['\\bigcap',['大交集','Intersection']],['\\int',['积分','Integral']],['\\iint',['二重积分','Double integral']],['\\iiint',['三重积分','Triple integral']],['\\oint',['围道积分','Contour integral']],['\\oiint',['曲面积分','Surface integral']],['\\oiiint',['体积分','Volume integral']],['\\varointclockwise',['顺时针围道积分','Clockwise contour integral']],['\\ointctrclockwise',['逆时针围道积分','Counterclockwise contour integral']]]);
@@ -23,6 +22,40 @@
   if(parent.type==='leftright')return text('括号内','Inside fence');
   return null;
  }
+ function matrixCell(atom) {
+  for(let child=atom;child?.parent;child=child.parent){
+   const matrix=child.parent,cell=child.parentBranch;
+   if(matrix.type==='array'&&!matrix.isMultiline&&Array.isArray(cell))return {matrix,cell};
+  }
+  return null;
+ }
+ function isLastCell(matrix,cell) {
+  return cell[0]===matrix.rowCount-1&&cell[1]===matrix.colCount-1;
+ }
+ // MathLive returns the offset after a bare matrix when the click lands just
+ // past its last glyph. Give that narrow area to the final cell, while leaving
+ // clicks farther out, visible delimiters and keyboard navigation alone.
+ host.equationMatrixPointerOffset=function(mathfield,offset,x,y) {
+  if(offset<0||mathfield.readOnly||isComposing(mathfield))return offset;
+  const model=mathfield._mathfield?.model,atom=model?.at(offset);
+  const matrix=atom?.type==='array'?atom:matrixCell(atom)?.matrix;
+  if(!matrix||matrix.isMultiline||(matrix.rightDelim&&matrix.rightDelim!=='.'))return offset;
+  const last=matrix.branch([matrix.rowCount-1,matrix.colCount-1])?.at(-1);
+  if(!last||last.type==='first'||last.type==='placeholder'||last.type==='prompt')return offset;
+  const end=model.offsetOf(last),glyph=mathfield.getElementInfo(end)?.bounds;
+  if(!glyph||glyph.width<=0||glyph.height<=0)return offset;
+  const next=matrix.rightSibling,nextBounds=next&&mathfield.getElementInfo(model.offsetOf(next))?.bounds;
+  let right=Math.min(glyph.right+7,nextBounds?nextBounds.left-1:Infinity);
+  for(let parent=matrix.parent;parent;parent=parent.parent){
+   if(parent.type!=='leftright'||!parent.rightDelim||parent.rightDelim==='.')continue;
+   const fence=mathfield.shadowRoot?.querySelector(`.ML__close[data-atom-id="${parent.id}"]`);
+   if(!fence)return offset;
+   const bounds=fence.getBoundingClientRect();
+   if(x>=bounds.left&&x<=bounds.right&&y>=bounds.top&&y<=bounds.bottom)return model.offsetOf(parent);
+   right=Math.min(right,bounds.left-1);
+  }
+  return atom===matrix&&x>=glyph.right-1&&x<=right&&y>=glyph.top&&y<=glyph.bottom?end:offset;
+ };
  function inspect(mathfield,english=false) {
   const model=mathfield?._mathfield?.model;
   if(!model||typeof model.at!=='function'||typeof model.offsetOf!=='function')return {context:{path:[],canExit:false,canSelect:false,operator:null},model:null};
@@ -41,6 +74,11 @@
   const ownRange=atom.parent&&(structures[atom.type]||operators.has(atom.command))?atomRange(model,atom):null;
   const selectedStructure=!collapsed&&ownRange&&Math.min(...range)===ownRange[0]&&Math.max(...range)===ownRange[1];
   if(selectedStructure)region={atom,branch:null,label:(structures[atom.type]||operators.get(atom.command))[english?1:0]};
+  const endCell=matrixCell(atom);
+  const startCell=collapsed?endCell:matrixCell(model.at(model.anchor));
+  const currentCell=endCell&&startCell?.matrix===endCell.matrix&&startCell.cell[0]===endCell.cell[0]&&startCell.cell[1]===endCell.cell[1]?endCell:null;
+  const matrixScope=currentCell?(isLastCell(currentCell.matrix,currentCell.cell)&&region?.atom===currentCell.matrix?'last-cell':'cell'):
+   collapsed&&atom.type==='array'&&!atom.isMultiline?'outside':null;
   const target=region?.atom,scope=target&&region.branch?target.branch(region.branch):null;
   const scopeRange=scope?.length?[model.offsetOf(scope[0]),model.offsetOf(scope[scope.length-1])]:null;
   const operatorRange=operator?atomRange(model,operator):null;
@@ -49,7 +87,7 @@
   const preservedIntegral=ancestors.some(candidate=>candidate.type==='macro'&&/^\\mt(?:int[A-Z]|bigop)$/.test(candidate.command));
   const context={path:[english?'Equation':'整条公式',...path],rootScope:model.atoms.some(a=>a.type==='surd')?(insideRoot?'inside':'outside'):null,
    placeholder:!!model.selectionIsPlaceholder||atom.type==='placeholder',selectedStructure:!!selectedStructure,structureType:target?.type||null,structureLabel:target?(structures[target.type]||operators.get(target.command)||['上下标结构','Scripted expression'])[english?1:0]:null,
-   canExit:!!target,canSelect:!!target&&!!atomRange(model,target),scopeRange,preservedIntegral,
+   canExit:!!target,canSelect:!!target&&!!atomRange(model,target),scopeRange,matrixScope,preservedIntegral,
    operator:operatorRange?{command:operator.command,label:operators.get(operator.command)[english?1:0],canSetPlacement:!preservedIntegral,placement:operator.explicitSubsupPlacement?(operator.subsupPlacement==='over-under'?'above-below':operator.subsupPlacement==='adjacent'?'adjacent':null):null}:null};
   return {context,model,region,operator,operatorRange,collapsed};
  }
@@ -91,6 +129,7 @@
   function paint(){
    frame=null;const {context,model,region}=inspect(mathfield,!!host.workbenchEnglish);
    boundary.hidden=true;if(!viewport||!region||mathfield.readOnly)return;
+   boundary.classList.toggle('editor-matrix-cell',region.atom.type==='array'&&Array.isArray(region.branch));
    const branch=region.branch?region.atom.branch(region.branch):[region.atom],rects=[];
    for(const atom of branch||[]){if(atom.type==='first')continue;const rect=mathfield.getElementInfo(model.offsetOf(atom))?.bounds;if(rect&&rect.width>0&&rect.height>0)rects.push(rect);}
    if(!rects.length){if(retries++<3)frame=setTimeout(paint,32);return;}retries=0;
@@ -105,6 +144,9 @@
    path.textContent=context.path.join(' › ')||text('编辑范围','Editing scope');
    hint.textContent=context.placeholder?text('占位框是当前输入范围，输入会替换它。','Typing replaces the selected placeholder.'):
     context.selectedStructure?text('已选中'+context.structureLabel+'；输入会替换整个结构。',context.structureLabel+' selected. Typing replaces the whole structure.'):
+    context.matrixScope==='last-cell'?text('当前在矩阵末格，可直接续写。用「移出矩阵」在矩阵外输入。','Typing continues in the last cell. Use Exit Matrix to type outside.'):
+    context.matrixScope==='cell'?text('当前在矩阵单元格内，输入会留在该格。','Typing stays in this matrix cell.'):
+    context.matrixScope==='outside'?text('当前在矩阵外。点击末格可在格内续写。','Typing is outside the matrix. Click the last cell to continue inside.'):
     context.rootScope==='inside'?(context.structureType==='surd'?text('当前在根号内；“移出根号”后继续输入根号外的内容。','Inside the root. Exit the root to type outside it.'):text('当前在根号内；先移出'+context.structureLabel+'，再移出根号。','Inside the root. Exit '+context.structureLabel+' first, then exit the root.')):
     context.rootScope==='outside'?text('当前在根号外，输入不会扩大根号范围。','Outside the root. Typing will not extend its contents.'):
     context.scopeRange?text('虚线标出当前输入范围。','The outline marks the current input scope.'):'';

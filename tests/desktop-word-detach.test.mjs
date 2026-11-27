@@ -78,7 +78,10 @@ test('A closed source document does not discard a dirty draft without an explici
 test('A detached blank draft with only font or ruler changes is not replaced by workspace polling',async()=>{
  for(const settings of ['font','ruler']){
   const e=await editor(()=>({}));e.context.wordTicket=null;e.context.source=null;e.context.selected=null;e.context.mf.value='';
-  if(settings==='font')e.context.window.desktopTypographyPatch=()=>({sizes:{0:{value:'14',unit:'pt'}}});
+  if(settings==='font'){
+   e.context.window.desktopTypographyChanged=()=>true;
+   e.context.window.desktopTypographyPatch=()=>({sizes:{0:{value:'14',unit:'pt'}}});
+  }
   else e.context.editingRuler=[{position:40,align:0}];
   assert.equal(await e.workspace.syncCurrent(),false);
   assert.equal(e.calls.some(call=>call.action==='wordDocumentOpen'||call.action==='wordSessionCancel'),false);

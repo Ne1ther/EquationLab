@@ -1,4 +1,4 @@
-import {makeOle} from './native.mjs';
+import {inspectOle,makeOle} from './native.mjs';
 import {patchTypography,readTypography} from './typography-native.mjs';
 
 function freeze(value){if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}return value;}
@@ -19,12 +19,16 @@ export const MATHTYPE_FACTORY_TYPOGRAPHY=freeze({
  extraSizes:dimensionMap([['%','75'],['%','150'],['pt','1']])
 });
 
-/** New authoring only: factory first, then the caller's explicit preferences.
- * Existing OLE objects MUST use editCharacters/replaceOleLatex/patchTypography
- * on their own source; this helper intentionally accepts only LaTeX. The raw
- * makeOle template remains unchanged for legacy reconstruction/regressions. */
+let factorySeed,factoryNative;
+
+/** Resolve the final typography before emitting formula CHARs so their font
+ * positions belong to the active encoding. This constructor is for new OLE. */
 export function makeNewOle(latex,typography){
- const factory=patchTypography(makeOle(latex),MATHTYPE_FACTORY_TYPOGRAPHY);
- return typography?patchTypography(factory,typography):factory;
+ if(!factorySeed){
+  factorySeed=patchTypography(makeOle('x'),MATHTYPE_FACTORY_TYPOGRAPHY);
+  factoryNative=inspectOle(factorySeed).native;
+ }
+ const sourceNative=typography?inspectOle(patchTypography(factorySeed,typography)).native:factoryNative;
+ return makeOle(latex,sourceNative);
 }
 export function factoryTypography(){return readTypography(makeNewOle('x^3'));}

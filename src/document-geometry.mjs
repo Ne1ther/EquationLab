@@ -31,6 +31,7 @@ export function documentGeometry(doc,{styles=null,settings=null}={}){
  const body=child(doc.documentElement,'body');
  if(!body)return ()=>fail('不是正文容器');
  const blocks=elements(body),sections=[];let first=0;
+ const blockPositions=new Map(blocks.map((block,index)=>[block,index]));
  for(let i=0;i<blocks.length;i++){
   const block=blocks[i],section=block.namespaceURI===W&&block.localName==='sectPr'?block:child(child(block,'pPr'),'sectPr');
   if(section){sections.push({first,last:i,section});first=i+1;}
@@ -57,9 +58,9 @@ export function documentGeometry(doc,{styles=null,settings=null}={}){
   if(attr(child(section,'type'),'val')==='continuous')return pageProperty(index+1,name);
   fail(`节缺少 ${name}`);
  }
- return (paragraph,{style='EquationLab'}={})=>{
-  if(paragraph?.namespaceURI!==W||paragraph.localName!=='p'||paragraph.parentNode!==body)fail('表格、文本框或其他嵌套容器');
-  const blockIndex=blocks.indexOf(paragraph),index=sections.findIndex(s=>blockIndex>=s.first&&blockIndex<=s.last);
+ return (paragraph,{style='EquationLab',previewBodyBlock=paragraph}={})=>{
+  if(paragraph?.namespaceURI!==W||paragraph.localName!=='p'||previewBodyBlock?.parentNode!==body)fail('表格、文本框或其他嵌套容器');
+  const blockIndex=blockPositions.get(previewBodyBlock),index=sections.findIndex(s=>blockIndex>=s.first&&blockIndex<=s.last);
   if(index<0)fail('缺少所属节');
   const section=sections[index].section;
   if(child(section,'sectPrChange'))fail('节属性修订');
@@ -76,6 +77,9 @@ export function documentGeometry(doc,{styles=null,settings=null}={}){
   // (ISO 29500-1 17.15.1.50). rtlGutter only changes the horizontal side.
   const topGutter=setting('gutterAtTop')&&!setting('mirrorMargins');
   const textWidth=pageWidth-left-right-(topGutter?0:gutter);
+  const vertical=[attr(page,'h'),attr(margin,'top'),attr(margin,'bottom')];
+  const heightTwips=vertical.every(value=>value!==null&&/^\d+$/.test(value)&&Number(value)<=31680)
+   ?Number(vertical[0])-Number(vertical[1])-Number(vertical[2])-(topGutter?gutter:0):undefined;
   const cols=child(section,'cols'),count=integer(attr(cols,'num'),'栏数',{min:1,max:2,fallback:1});
   if(cols&&!flag(attr(cols,'equalWidth'),true))fail('非等宽栏');
   const gap=count===1?0:integer(attr(cols,'space'),'栏间距');
@@ -95,11 +99,12 @@ export function documentGeometry(doc,{styles=null,settings=null}={}){
   // Its replacement explicitly clears inherited first-line/hanging indents,
   // as the existing standalone-equation layout has always done.
   const widthTwips=columnWidth-leftIndent-rightIndent;
-  if(!Number.isSafeInteger(widthTwips)||widthTwips<1440||widthTwips>31680)fail('可用区域过窄或超出支持范围');
+  const minimumWidth=previewBodyBlock===paragraph?1440:1;
+  if(!Number.isSafeInteger(widthTwips)||widthTwips<minimumWidth||widthTwips>31680)fail('可用区域过窄或超出支持范围');
   // Clear custom tabs inherited by the replacement style; otherwise an
   // earlier inherited stop can consume the leading equation tab.
   const replacementProps=[child(defaults,'pPr'),...styleProperties(styleMap.has(style)?style:attr(defaultStyle,'styleId'))].filter(Boolean);
   const clearTabPositions=[...new Set(replacementProps.flatMap(props=>children(child(props,'tabs'),'tab').map(tab=>integer(attr(tab,'pos'),'制表位',{min:-31680}))))];
-  return {widthTwips,leftIndentTwips:leftIndent,rightIndentTwips:rightIndent,clearTabPositions};
+  return {widthTwips,heightTwips,leftIndentTwips:leftIndent,rightIndentTwips:rightIndent,clearTabPositions};
  };
 }

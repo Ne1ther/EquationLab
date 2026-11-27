@@ -150,7 +150,11 @@ void EquationLabInstallWordHostPump(){
     [hostPump startPeriodicWakeWithInterval:kWorkspaceReconciliationInterval leeway:0.5];
     [hostPump initializeWordEvents];
 }
-void EquationLabWakeWordHost(){if(eligibleHost()){EquationLabInstallWordHostPump();[hostPump wake];}}
+void EquationLabWakeWordHost(){
+    if(!NSThread.isMainThread)return;
+    if(!hostPump)EquationLabInstallWordHostPump();
+    [hostPump wake];
+}
 void EquationLabScheduleWordHostPoll(){if(eligibleHost()){EquationLabInstallWordHostPump();[hostPump schedulePoll];}}
 void EquationLabWordHostDidPoll(){if(eligibleHost())[hostPump acknowledge];}
 void EquationLabWordHostDidInitialize(){if(eligibleHost())[hostPump acknowledgeInitialization];}

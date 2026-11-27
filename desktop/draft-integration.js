@@ -18,7 +18,7 @@
   const patch=window.desktopTypographyPatch?.();
   if(detached&&!outcomeUnknown&&(!detached.layout||!layoutChanged)&&mf.value===detached.latex&&
    JSON.stringify(patch??null)===detached.typography&&JSON.stringify(editingRuler??[])===detached.ruler)return null;
-  if(!boundEditor&&!mf.value.trim()&&!patch&&!editingRuler?.length&&!layoutChanged&&!outcomeUnknown)return null;
+  if(!boundEditor&&!mf.value.trim()&&!window.desktopTypographyChanged?.()&&!editingRuler?.length&&!layoutChanged&&!outcomeUnknown)return null;
   return {layout,knownLayout,outcomeUnknown,patch};
  }
  function capture(){

@@ -215,6 +215,7 @@ id EquationLabTransportRequest(NSString* path,NSDictionary* body,void(^completio
 void EquationLabTransportLaunch(NSString* url,void(^completion)(NSError*)) {
     launchEquationLabURL(NSWorkspace.sharedWorkspace,[NSURL URLWithString:url],completion);
 }
+bool EquationLabTransportConnectionRefused(NSError* error){return connectionRefused(error);}
 
 @interface ProbeEditState : NSObject
 @property(nonatomic) std::uint64_t sessionId;

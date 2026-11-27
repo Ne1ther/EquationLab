@@ -1,9 +1,17 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {makeOle,inspectOle,wrapNative,oleLatex,replaceOleLatex} from '../src/native.mjs';
+import {MtefReader,makeOle,inspectOle,wrapNative,oleLatex,replaceOleLatex} from '../src/native.mjs';
 import {renderNative,nativePdf} from '../src/font-renderer.mjs';
 
 function editRecords(ole,change){const s=inspectOle(ole),data=change(s),header=Buffer.from(s.header);header.writeUInt32LE(data.length,8);return wrapNative(Buffer.concat([header,data]),ole);}
+test('A Windows MathType ANSI SimSun FONT_DEF resolves without altering source bytes',()=>{
+ const data=Buffer.from('050100070844534d543700001106cbcecce50000','hex');
+ const reader=new MtefReader(data),font=reader.read().records[0];
+ assert.equal(font.name,'SimSun');
+ assert.equal(font.encoding,6);
+ assert.equal(reader.b.subarray(font.start,font.end).toString('hex'),'1106cbcecce500');
+});
+
 test('MathType private blackboard/script characters use real STIX Unicode outlines without rewriting Native',async()=>{
  const ole=makeOle('\\mathbb{E}+\\mathcal{N}+\\centerdot'),before=Buffer.from(ole),latex=oleLatex(ole);
  assert.match(latex,/\\mathbb\{E\}/);assert.match(latex,/\\mathcal\{N\}/);assert.match(latex,/\\centerdot/);

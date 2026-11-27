@@ -78,7 +78,7 @@ End Sub
 Public Function ELBeginNumberingTransaction(ByVal Doc As Document, ByVal title As String) As Collection
     Dim transaction As Collection, variables As Collection, item As Variable
     Dim propertyState As Variant, prop As Object, key As Variant, found As Boolean
-    Dim record As UndoRecord, sentinel As String, serial As Long, sentinelAdded As Boolean, undoOK As Boolean, recovery As String
+    Dim record As UndoRecord, sentinel As String, serial As Long, sentinelAttempted As Boolean, sentinelAdded As Boolean, undoOK As Boolean, recovery As String
     Set record = Application.UndoRecord
     If record.CustomRecordLevel <> 0 Then Err.Raise vbObjectError + 7380, "Equation Lab", "Another Word edit is in progress."
     Set transaction = New Collection: Set variables = New Collection
@@ -102,17 +102,17 @@ Public Function ELBeginNumberingTransaction(ByVal Doc As Document, ByVal title A
             Exit For
         End If
     Next
-    transaction.Add record, "record": transaction.Add variables, "variables"
-    transaction.Add propertyState, "property": transaction.Add False, "started"
-    record.StartCustomRecord title
-    transaction.Remove "started": transaction.Add True, "started"
     ' A net-zero bookmark edit ensures that this record, even if the next
     ' operation fails before its first write, cannot undo a user's prior edit.
     sentinel = "EL_Transaction"
     Do While Doc.Bookmarks.Exists(sentinel)
         serial = serial + 1: sentinel = "EL_Transaction" & CStr(serial)
     Loop
+    transaction.Add record, "record": transaction.Add variables, "variables"
+    transaction.Add propertyState, "property": transaction.Add True, "started"
     On Error GoTo Failed
+    record.StartCustomRecord title
+    sentinelAttempted = True
     Doc.Bookmarks.Add Name:=sentinel, Range:=Doc.Range(0, 0)
     sentinelAdded = True
     Doc.Bookmarks(sentinel).Delete
@@ -125,17 +125,19 @@ Failed:
     On Error Resume Next
     If Doc.Bookmarks.Exists(sentinel) Then sentinelAdded = True
     Err.Clear
-    record.EndCustomRecord
+    If record.CustomRecordLevel > 0 Then record.EndCustomRecord
     If Err.Number <> 0 Then
         recovery = " Could not close the undo record."
     ElseIf sentinelAdded Then
         Err.Clear: undoOK = Doc.Undo
         If Err.Number <> 0 Or Not undoOK Or Doc.Bookmarks.Exists(sentinel) Then recovery = " Undo of the temporary bookmark failed."
-    Else
+    ElseIf sentinelAttempted Then
         recovery = " The attempted bookmark change could not be verified."
     End If
+    Set mTransactionDocument = Nothing
     On Error GoTo 0
-    Err.Raise failureNumber, "Equation Lab", "Could not establish the undo record; inspect the document before saving: " & failureDescription & recovery
+    If recovery <> "" Then Err.Raise vbObjectError + 7381, "Equation Lab", "Recovery failed; inspect the document before saving." & recovery
+    Err.Raise failureNumber, "Equation Lab", "Could not establish the undo record: " & failureDescription
 End Function
 
 Public Sub ELCommitNumberingTransaction(ByVal transaction As Collection)
@@ -152,7 +154,8 @@ Public Sub ELRollbackNumberingTransaction(ByVal Doc As Document, ByVal transacti
     Set record = transaction("record"): Set variables = transaction("variables")
     On Error Resume Next
     If CBool(transaction("started")) Then
-        Err.Clear: record.EndCustomRecord
+        Err.Clear
+        If record.CustomRecordLevel > 0 Then record.EndCustomRecord
         If Err.Number <> 0 Then failure = failure & " Cannot close undo record: " & Err.Description
         If Err.Number = 0 Then
             Err.Clear: undoOK = Doc.Undo
@@ -325,15 +328,10 @@ Private Function CurrentCounter(ByVal sequenceName As String, ByVal fallback As 
 End Function
 
 Public Sub ELWriteUtf8(ByVal path As String, ByVal value As String)
-    Dim bytes() As Byte, i As Long, used As Long, code As Long, file As Integer
+    Dim bytes() As Byte
     If Len(value) = 0 Then Exit Sub
     EncodeTextUtf8 value, bytes
-    file = FreeFile
-    Open path For Output As #file
-    Close #file
-    Open path For Binary Access Write As #file
-    Put #file, , bytes
-    Close #file
+    ELWriteCaptureBytes path, bytes
 End Sub
 
 Public Sub ELWriteDocumentCapture(ByVal path As String, ByVal value As String)
@@ -344,14 +342,31 @@ Public Sub ELWriteDocumentCapture(ByVal path As String, ByVal value As String)
     ' Copy formula-sized VBA UTF-16 buffers in bulk instead of interpreting
     ' every character in EncodeTextUtf8. Only the native capture reader accepts
     ' this BOM-marked sidecar; HTTP still uses bounded compressed UTF-8.
-    Dim bytes() As Byte, file As Integer
+    Dim bytes() As Byte
     bytes = ChrW$(&HFEFF) & value
+    ELWriteCaptureBytes path, bytes
+End Sub
+
+Private Sub ELWriteCaptureBytes(ByVal path As String, ByRef bytes() As Byte)
+    On Error GoTo Failed
+    Dim file As Integer, opened As Boolean
     file = FreeFile
     Open path For Output As #file
+    opened = True
     Close #file
+    opened = False
     Open path For Binary Access Write As #file
+    opened = True
     Put #file, , bytes
     Close #file
+    Exit Sub
+Failed:
+    Dim failureNumber As Long, failureDescription As String
+    failureNumber = Err.Number: failureDescription = Err.Description
+    On Error Resume Next
+    If opened Then Close #file
+    On Error GoTo 0
+    Err.Raise failureNumber, "Equation Lab", failureDescription
 End Sub
 
 Private Sub InsertEquation(ByVal kind As String)

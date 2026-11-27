@@ -17,12 +17,28 @@ function editor(){
  const run=code=>vm.runInContext(code,context);
  run(macroSource);
  run(source.split('const groups=')[0]);
- for(const prefix of ['async function perform(','window.nativeExport=','$(\'save-edit\').onclick=','$(\'copy-latex\').onclick='])run(source.split('\n').find(line=>line.startsWith(prefix)));
+ for(const prefix of ['async function perform(','window.nativeExport=','$(\'save-edit\').onclick=','window.nativeCopyEquationLatex=','$(\'copy-latex\').onclick='])run(source.split('\n').find(line=>line.startsWith(prefix)));
  const flush=()=>new Promise(resolve=>setImmediate(resolve));
  const reply=async(request,ok=true)=>{run(`window.nativeReply(${JSON.stringify({id:request.id,result:ok?{ok:true,data:{svg:'current',nativeBytes:20,path:'/tmp/fixture.docx'}}:{ok:false,error:'unsupported typography'}})})`);await flush();};
  const patch=value=>{context.window.desktopTypographyPatch=()=>value;run('changed()');};
  return {run,element,requests,patch,reply,flush,async ready(){const pending=run('validate()');await reply(requests.at(-1));await pending;}};
 }
+
+test('Copy LaTeX exports standard primes from the active formula or a sidebar row without changing the editor',async()=>{
+ const p=editor();const internal=String.raw`\mtembD{x}+\mtembE{y}_i+\mtembQ{N}_{j}^{*}`;
+ p.element('formula').value=internal;
+ const copy=p.element('copy-latex').onclick();
+ assert.equal(p.requests.at(-1).action,'copyLatex');
+ assert.equal(p.requests.at(-1).payload.latex,String.raw`x'+y''_{i}+N_{j}^{\prime \prime \prime *}`);
+ await p.reply(p.requests.at(-1));assert.equal(await copy,true);
+ assert.equal(p.element('formula').value,internal);
+ const sidebar=p.run(String.raw`window.nativeCopyEquationLatex('\\mtembD{z}')`);
+ assert.equal(p.requests.at(-1).payload.latex,"z'");
+ await p.reply(p.requests.at(-1));assert.equal(await sidebar,true);
+ const sidebarView=await readFile(new URL('../macos/Views/FormulaSidebar.swift',import.meta.url),'utf8');
+ assert.match(sidebarView,/nativeCopyEquationLatex", argument: item\.latex/);
+ assert.equal(p.run(String.raw`window.publicEquationLatex('\\mtembD{\\mtstix{3}{0}{0}{\\ell}}+\\mtstix{3}{0}{0}{\\ell}x')`),String.raw`\ell'+\ell x`);
+});
 
 test('Typography changes keep export visually available, and an immediate export waits for the latest preferences',async()=>{
  const p=editor();await p.ready();

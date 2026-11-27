@@ -21,6 +21,7 @@ const editorMacros={
  ,mtmatrix:{def:'#4',args:4,expand:false}
  ,mtpile:{def:'#3',args:3,expand:false}
  ,mtmissing:{def:'\\square',args:5,expand:false}
+ ,mtstix:{def:'#4',args:4,expand:false}
  ,underrightharpoon:{def:'\\underset{\\rightharpoonup}{#1}',args:1,expand:false}
  ,hline:{def:'\\hspace{0em}',args:0,expand:false}
 };
@@ -30,7 +31,7 @@ const pending=new Map();let sequence=0,revision=0,timer,valid=false,busy=false,s
 const editorCompositions=new Set();let compositionCommitTimer,compositionCommitPending=false;
 window.editorIsComposing=()=>editorCompositions.size>0||compositionCommitPending;
 var editorViewport;
-window.sidebarPublisher=window.createSidebarPublisher?.();
+window.sidebarPublisher=window.createSidebarPublisher?.((document,index)=>window.wordDocumentWorkspace?.revealBinding(document,index)??null);
 let wordTicket=null,wordSaveQueued=false,wordOutcomeUnknown=false,wordNavigating=false,wordNavigationTimer;const idleWaiters=new Set();
 let wordCommitRunning=null;
 let editingRuler,editorHistory=[],editorHistoryIndex=-1,restoringHistory=false;
@@ -43,7 +44,7 @@ function recordEditorHistory(){
  if(old&&old.latex===next.latex&&JSON.stringify(old.ruler)===JSON.stringify(next.ruler))return;
  editorHistory.splice(editorHistoryIndex+1);editorHistory.push(next);if(editorHistory.length>150)editorHistory.shift();editorHistoryIndex=editorHistory.length-1;
 }
-window.resetEditorHistory=()=>{editorHistory=[];editorHistoryIndex=-1;recordEditorHistory();};
+window.resetEditorHistory=()=>{window.noteLatexPasteEdit?.();editorHistory=[];editorHistoryIndex=-1;recordEditorHistory();};
 function canMoveEditorHistory(redo=false){
  if(mf.readOnly||window.editorIsComposing?.())return false;
  const index=editorHistoryIndex+(redo?1:-1);
@@ -74,6 +75,10 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
   if(!source?.documentIdentity)return;
   const document=documents.find(item=>item.identity===source.documentIdentity);
   if(!document)return;
+  if(Number.isSafeInteger(document.numberingRevision)&&document.numberingRevision!==source.liveNumberingRevision){
+   source.liveNumberingRevision=document.numberingRevision;
+   window.updateWordThumbnails?.();
+  }
   if(Number.isSafeInteger(document.numberingRevision)&&Number.isSafeInteger(source.documentNumberingRevision)){
    const stale=!!source.numberingReadbackPending||document.numberingRevision!==source.documentNumberingRevision;
    if(stale!==!!source.numberingRefreshNeeded){
@@ -81,7 +86,6 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
     if(stale&&!source.insertion&&wordSessionChanged())message('Word 中的编号已更新；当前草稿已保留。结束当前编辑后会重新读取编号。');
     requestWorkbenchSync();
    }
-   source.liveNumberingRevision=document.numberingRevision;
   }
   if(typeof document.numberFormat!=='string'||document.numberFormat===source.documentNumberFormat)return;
   const previous=source.documentNumberFormat;
@@ -94,11 +98,15 @@ window.wordDocumentWorkspace=window.createWordDocumentWorkspace?.({
   requestWorkbenchSync();
  },
  empty:()=>{if(!wordTicket)resetNewFormula();},
- captureInsertionDraft:()=>({latex:mf.value,ruler:editingRuler,typography:window.desktopTypographySnapshot?.()??window.desktopTypographyPatch?.()}),
+ captureInsertionDraft:()=>{
+  const latex=mf.value,keepTypography=!!latex.trim()||window.desktopTypographyChanged?.();
+  if(!keepTypography&&!editingRuler?.length)return null;
+  return {latex,ruler:editingRuler,typography:keepTypography?(window.desktopTypographySnapshot?.()??window.desktopTypographyPatch?.()):undefined};
+ },
  state:()=>{
   return {source,wordTicket,selectedIndex:selected?.index,busy:busy||wordNavigating||!!wordCommitRunning||!!window.wordNumberingSaveWaiting||!!window.wordSaveInFlight||!!window.editorIsComposing?.(),outcomeUnknown:wordOutcomeUnknown,draftChanged:wordTicket?wordSessionChanged():window.hasRecoverableDraft?.()===true};
  },
- changed:()=>{renderObjects(false);controls();},
+ changed:()=>{window.updateWordThumbnails?.();renderObjects(false);controls();},
  detach:async({preserveDraft=false}={})=>{
   if(busy||wordSaveQueued||wordOutcomeUnknown||window.wordSaveInFlight||window.editorIsComposing?.())return false;
   const ticket=wordTicket;if(!ticket&&!source)return true;window.wordDocumentWorkspace?.remember(source);
@@ -120,7 +128,7 @@ window.nativeSyncWordWorkspace=async()=>{
  if(window.wordWorkspaceSyncFlight)return window.wordWorkspaceSyncFlight;
  window.wordWorkspaceSyncFlight=(async()=>{
   const followed=await window.wordDocumentWorkspace?.syncCurrent();
-  if((source?.numberingRefreshNeeded||source?.documentLoadFailed)&&wordTicket&&!source.insertion&&source.hasDocumentContext&&!source.documentLoading&&!busy&&!wordNavigating&&!wordOutcomeUnknown&&!wordCommitRunning&&!window.wordDocumentWorkspace?.pending&&!wordSessionChanged()){
+  if((source?.numberingRefreshNeeded||source?.documentLoadFailed)&&wordTicket&&!source.insertion&&source.hasDocumentContext&&!source.documentLoading&&!busy&&!wordNavigating&&!wordOutcomeUnknown&&!wordCommitRunning&&!window.wordDocumentWorkspace?.pending&&!window.wordDocumentWorkspace?.revealing&&!wordSessionChanged()){
    const document=source,index=selected?.index;if(!Number.isInteger(index))return followed;
    // Preserve the old rows as stale until a verified replacement arrives.
    // Retry with bounded backoff instead of giving up permanently or polling Word every second.
@@ -150,6 +158,10 @@ window.nativeRefreshWordWorkspace=()=>{
 window.nativeRetryWordDocumentRead=()=>wordTicket&&source?.documentLoadFailed?window.nativeRefreshWordWorkspace():window.wordDocumentWorkspace?.retryRead();
 window.nativeSwitchWordDocument=()=>window.wordDocumentWorkspace?.switchToCurrent();
 window.nativeChooseWordDocument=identity=>window.wordDocumentWorkspace?.chooseDocument(identity);
+window.nativeRevealWordFormula=async (index,documentIdentity,revealToken)=>{
+ window.cancelWordBackgroundThumbnail?.();
+ return window.wordDocumentWorkspace?.reveal(index,documentIdentity,revealToken);
+};
 window.nativeRefreshWordDocumentList=()=>window.wordDocumentWorkspace?.refreshList();
 function sourceEditMode(){return mode==='rebuild'&&selected&&mf.value===selected.editorBaseline?'characters':mode;}
 function wordSourceUnavailable(){return !!window.wordDocumentWorkspace?.wordDocumentUnavailable&&(!!source||!!wordTicket);}
@@ -221,8 +233,9 @@ async function validate(){
  })();
  try{await validationRunning;}finally{validationRunning=null;}
 }
-function changed(scheduleValidation=true){if(window.editorIsComposing?.())return;window.syncEquationMacros(mf);recordEditorHistory();editorViewport?.refresh();clearTimeout(timer);revision++;$('latex').value=mf.value;valid=false;validationPending=true;controls();status('正在检查原生数据…','检查通过后即可导出 MathType 对象。');if(scheduleValidation)timer=setTimeout(validate,90);window.draftRecovery?.schedule();}
+function changed(scheduleValidation=true){window.cancelWordBackgroundThumbnail?.();if(window.editorIsComposing?.())return;window.noteLatexPasteEdit?.();window.syncEquationMacros(mf);recordEditorHistory();editorViewport?.refresh();clearTimeout(timer);revision++;$('latex').value=mf.value;valid=false;validationPending=true;controls();status('正在检查原生数据…','检查通过后即可导出 MathType 对象。');if(scheduleValidation)timer=setTimeout(validate,90);window.draftRecovery?.schedule();}
 function beginEditorComposition(target){
+ window.noteLatexPasteEdit?.();
  editorCompositions.add(target);compositionCommitPending=false;clearTimeout(timer);clearTimeout(compositionCommitTimer);
  // Invalidate in-flight previews without rewriting either editor, macros,
  // selection, or history while the input method owns its marked text.
@@ -247,6 +260,58 @@ for(const target of [mf,$('latex')]){
   commitEditorInput(target);
  });
 }
+function clipboardHTMLText(html){
+ const template=document.createElement('template');
+ template.innerHTML=html;
+ template.content.querySelectorAll('head,title,style,script').forEach(node=>node.remove());
+ template.content.querySelectorAll('br,p,div,pre,li,tr').forEach(node=>node.after('\n'));
+ return template.content.textContent.trim().replaceAll('\u00a0',' ');
+}
+const latexPasteTarget=$('latex');
+let latexPasteEdits=0,latexPasteSelections=0,latexPasteNonce=0;
+let latexPasteNotice;
+window.noteLatexPasteEdit=()=>{latexPasteEdits++;};
+const noteLatexPasteSelection=()=>{latexPasteSelections++;};
+function showLatexPasteNotice(text){latexPasteNotice=text;message(text,true);}
+// Selection events can be coalesced by the browser. Count the event even if
+// the selection has already returned to the original range by delivery.
+for(const event of ['select','selectionchange','blur','pointerdown'])latexPasteTarget.addEventListener(event,noteLatexPasteSelection);
+latexPasteTarget.addEventListener('keydown',event=>{
+ if(/^(?:Arrow\w+|Home|End|PageUp|PageDown)$/.test(event.key)||((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='a'))noteLatexPasteSelection();
+});
+async function pasteLatexSource(event){
+ const target=event.currentTarget;
+ if(!event.isTrusted||!event.cancelable||!window.webkit?.messageHandlers?.native)return;
+ event.preventDefault();
+ if(target.readOnly||window.editorIsComposing())return;
+ // ClipboardEvent data is only valid during synchronous event dispatch.
+ const fallback=event.clipboardData?.getData('text/plain')??'';
+ const ticket=wordTicket,object=selected,generation=window.wordSessionGeneration??0;
+ const nonce=++latexPasteNonce,edits=latexPasteEdits,selections=latexPasteSelections;
+ const {value,selectionStart,selectionEnd,selectionDirection}=target;
+ // Read the current system pasteboard on either Paste gesture. The web
+ // process supplies its own representation, which can disagree with it.
+ const snapshot=await native('readLatexPasteboard').catch(()=>null);
+ if(nonce!==latexPasteNonce||edits!==latexPasteEdits||selections!==latexPasteSelections||
+  target.readOnly||window.editorIsComposing()||document.activeElement!==target||
+  wordTicket!==ticket||selected!==object||generation!==(window.wordSessionGeneration??0)||target.value!==value||
+  target.selectionStart!==selectionStart||target.selectionEnd!==selectionEnd||target.selectionDirection!==selectionDirection)return;
+ if(snapshot?.state==='ownerChanged'){
+  showLatexPasteNotice(window.workbenchEnglish?'The clipboard changed while pasting. Paste again to use the latest copy.':'剪贴板在粘贴时发生变化，请重新粘贴。');
+  return;
+ }
+ const clipboardText=snapshot?.state==='available'?(snapshot.text??(snapshot.html?clipboardHTMLText(snapshot.html):'')):'';
+ const text=clipboardText||fallback;
+ if(!text){
+  showLatexPasteNotice(window.workbenchEnglish?'The clipboard contains no readable text.':'剪贴板没有可读取的文本。');
+  return;
+ }
+ if(latexPasteNotice&&$('message').textContent===latexPasteNotice)message('');
+ latexPasteNotice=null;
+ target.setRangeText(text.replace(/\r\n?/g,'\n'),selectionStart,selectionEnd,'end');
+ commitEditorInput(target);
+}
+latexPasteTarget.addEventListener('paste',pasteLatexSource);
 const groups={
 '常用结构':[['a/b','\\frac{#0}{#?}','分式'],['xⁿ','#0^{#?}','上标'],['xᵢ','#0_{#?}','下标'],['√x','\\sqrt{#0}','根号'],['ⁿ√x','\\sqrt[#?]{#0}','n次根'],['(x)','\\left(#0\\right)','圆括号'],['[x]','\\left[#0\\right]','方括号'],['{x}','\\left\\{#0\\right\\}','花括号'],['|x|','\\left|#0\\right|','绝对值'],['a/b','\\tfrac{#0}{#?}','小分式'],['a/b','\\sfrac{#0}{#?}','斜分式'],['xᵢⁿ','#0_{#?}^{#?}','上下标'],['⟨x⟩','\\left\\langle #0\\right\\rangle','尖括号'],['‖x‖','\\left\\|#0\\right\\|','范数'],['⌊x⌋','\\left\\lfloor #0\\right\\rfloor','向下取整'],['⌈x⌉','\\left\\lceil #0\\right\\rceil','向上取整']],
 '积分与求和':[['∫','\\int_{#?}^{#?}#0','积分'],['∬','\\iint_{#?}^{#?}#0','二重积分'],['∑','\\sum_{i=1}^{n}#0','求和'],['∏','\\prod_{i=1}^{n}#0','乘积'],['lim','\\lim_{x\\to 0}#0','极限'],['∫','\\int #0','不定积分'],['∭','\\iiint_{#?}^{#?}#0','三重积分'],['∮','\\oint_{#?}#0','围道积分'],['∐','\\coprod_{i=1}^{n}#0','余积'],['⋃','\\bigcup_{i=1}^{n}#0','大并集'],['⋂','\\bigcap_{i=1}^{n}#0','大交集'],['limsup','\\limsup_{n\\to\\infty}#0','上极限'],['∑','\\sum\\limits_{#?}^{#?}#0','求和 · 上下限'],['∑','\\sum\\nolimits_{#?}^{#?}#0','求和 · 右侧上下限']],
@@ -258,7 +323,7 @@ const groups={
 for(const name of Object.keys(groups)){const b=document.createElement('button');b.textContent=name;b.onclick=()=>palette(name);$('categories').append(b);}
 function palette(name){[...$('categories').children].forEach(b=>b.classList.toggle('selected',b.textContent===name));$('palette').replaceChildren();for(const [label,latex,hint]of groups[name]){const b=document.createElement('button');b.textContent=label;b.title=hint||label;b.disabled=!!selected&&(mode==='characters'||!!selected.error);if(hint){const s=document.createElement('small');s.textContent=hint;b.append(s);}b.onclick=()=>{mf.focus();mf.insert(latex,{selectionMode:'placeholder'});changed();};$('palette').append(b);}}
 palette('常用结构');$('undo').onclick=()=>editorUndo();$('redo').onclick=()=>editorUndo(true);$('keyboard').onclick=()=>{if(window.mathVirtualKeyboard.visible)window.mathVirtualKeyboard.hide();else{mf.focus();window.mathVirtualKeyboard.show();}};
-async function perform(fn,acceptWordNavigation=false,{allowPreflightEditing=false}={}){if(busy||wordNavigating&&!acceptWordNavigation)return false;busy=true;window.documentPreflightEditing=allowPreflightEditing;controls();message('正在处理…');try{return await fn()!==false;}catch(e){message(e.message,true);return false;}finally{window.documentPreflightEditing=false;busy=false;controls();for(const wake of [...idleWaiters])wake();}}
+async function perform(fn,acceptWordNavigation=false,{allowPreflightEditing=false}={}){if(busy||wordNavigating&&!acceptWordNavigation)return false;busy=true;window.cancelWordBackgroundThumbnail?.();window.documentPreflightEditing=allowPreflightEditing;controls();message('正在处理…');try{return await fn()!==false;}catch(e){message(e.message,true);return false;}finally{window.documentPreflightEditing=false;busy=false;controls();for(const wake of [...idleWaiters])wake();}}
 async function waitForEditorIdle(timeoutMs=25000){
  while(busy)await new Promise((resolve,reject)=>{
   const wake=()=>{clearTimeout(timeout);idleWaiters.delete(wake);resolve();};
@@ -314,6 +379,7 @@ function renderObjects(invalidate=true){if(invalidate)window.sidebarPublisher?.i
 function selectObject(index,{scheduleValidation=true,restoringDraft=false}={}){selected=source.objects[index];if(!selected)return;loadObjectLayout(selected);mode='rebuild';$('title').textContent='编辑文档中的公式';$('eyebrow').textContent='LEGACY MATHTYPE';$('source-panel').hidden=false;$('save-edit').hidden=false;$('arrange-source').hidden=false;$('source-class').textContent=selected.progId;mf.value=selected.error?'':selected.latex||'';window.syncEquationMacros(mf);selected.editorBaseline=mf.value;editingRuler=selected.ruler??undefined;if(!restoringDraft)window.resetEditorHistory?.();window.desktopTypographyLoad?.(selected.typography);renderModes();const sidebarSync=renderObjects(false);$('original-preview').replaceChildren();if(selected.image){const image=document.createElement('img');image.src=selected.image;image.alt='原文档中的公式预览';$('original-preview').append(image);}if(selected.error)showUnavailableFormula();else if(!restoringDraft)changed(scheduleValidation);return sidebarSync;}
 function renderModes(){mf.readOnly=mode==='characters'||!!selected?.error;$('latex').readOnly=mode==='characters'||!!selected?.error;for(const b of $('palette').querySelectorAll('button'))b.disabled=mode==='characters'||!!selected?.error;$('mode-characters').classList.toggle('selected',mode==='characters');$('mode-rebuild').classList.toggle('selected',mode==='rebuild');$('character-editor').hidden=mode!=='characters';$('character-editor').replaceChildren();$('mode-note').textContent=mode==='characters'?'只修改字符字节，保留原生结构、样式和伴随数据。支持数字、英文字母及已确认编码的希腊字母。':'可编辑分式、根式和上下标等结构；修改结构可能重新排布局部样式。只替换字符时可用“保留结构”。';for(const c of (selected?.characters||[]).filter(c=>c.editable)){const label=document.createElement('label');label.textContent=c.char+' →';const input=document.createElement('input');input.value=c.char;input.maxLength=1;input.dataset.offset=c.offset;input.setAttribute('aria-label',`替换字符 ${c.char}，位置 ${c.offset}`);input.disabled=c.editable!==true||!!selected.error;if(c.editReason)input.title=c.editReason;input.oninput=previewCharacterEdit;label.append(input);$('character-editor').append(label);}if(selected?.error){mf.readOnly=true;valid=false;}if(window.workbenchEnglish!==undefined)window.setWorkbenchLanguage?.(window.workbenchEnglish?'en':'zh-Hans');}
 async function previewCharacterEdit(){
+ window.cancelWordBackgroundThumbnail?.();
  if(window.wordDocumentWorkspace?.wordDocumentUnavailable)return;
  clearTimeout(timer);revision++;valid=false;validationPending=true;controls();
  window.draftRecovery?.schedule();
@@ -342,13 +408,20 @@ $('mode-characters').onclick=()=>switchEditMode('characters');$('mode-rebuild').
 window.nativeExport=()=>perform(async()=>{if(wordTicket)throw Error('请使用保存并返回 Word');await ensureValid();const exportSource=source&&selected&&!window.wordDocumentWorkspace?.wordDocumentUnavailable?{path:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;const r=await native('export',{equations:[{latex:mf.value,layout:wordLayout(),typography:window.desktopTypographyPatch?.(),...rulerPatch()}],fragment:true,source:exportSource});if(r)message('已导出原生 MathType Word：'+r.path);else message('');});
 $('export').onclick=window.nativeExport;
 $('save-edit').onclick=()=>perform(async()=>{if(wordSourceUnavailable())throw Error('文档连接已结束，无法再访问原公式；草稿已保留。');if(!source||!selected)throw Error('请先选择可编辑的原生公式');await ensureValid();const replacements=Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]));const r=await native('edit',{input:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:selected.index,mode:sourceEditMode(),latex:mf.value,replacements,typography:window.desktopTypographyPatch?.(),...rulerPatch()});if(r)message('已另存副本，原始文档保留：'+r.path);else message('');});
-$('copy-latex').onclick=()=>perform(async()=>{await native('copyLatex',{latex:mf.value});message('已复制 LaTeX');});$('copy-png').onclick=()=>perform(async()=>{await ensureValid();const original=source&&selected&&!window.wordDocumentWorkspace?.wordDocumentUnavailable?{path:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;await native('copyPNG',{latex:mf.value,typography:window.desktopTypographyPatch?.(),...rulerPatch(),source:original});message('已复制当前原生偏好的预览图片；提交可编辑公式请使用“导出 MathType Word”。');});
+window.nativeCopyEquationLatex=latex=>perform(async()=>{await native('copyLatex',{latex:window.publicEquationLatex(latex)});message('已复制 LaTeX');});
+$('copy-latex').onclick=()=>window.nativeCopyEquationLatex(mf.value);$('copy-png').onclick=()=>perform(async()=>{await ensureValid();const original=source&&selected&&!window.wordDocumentWorkspace?.wordDocumentUnavailable?{path:source.path,sourceSha256:source.fileCopyGeneration?source.sourceSha256:undefined,index:selected.index,mode:sourceEditMode(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:undefined;await native('copyPNG',{latex:mf.value,typography:window.desktopTypographyPatch?.(),...rulerPatch(),source:original});message('已复制当前原生偏好的预览图片；提交可编辑公式请使用“导出 MathType Word”。');});
+$('latex').addEventListener('copy',event=>{
+ const editor=event.currentTarget,selection=editor.value.slice(editor.selectionStart,editor.selectionEnd),latex=window.publicEquationLatex(selection);
+ if(!event.clipboardData||latex===selection)return;
+ event.clipboardData.setData('text/plain',latex);event.preventDefault();
+});
 let favorites;try{favorites=JSON.parse(localStorage.getItem('equationlab.favorites')||'[]');}catch{favorites=[];}
 function renderFavorites(){return syncSidebar();}
 $('add-favorite').onclick=()=>{if(!mf.value.trim())return;favorites=[mf.value,...favorites.filter(v=>v!==mf.value)].slice(0,20);localStorage.setItem('equationlab.favorites',JSON.stringify(favorites));renderFavorites();message('已收藏当前公式');};renderFavorites();validate();
 
 function syncSidebar(ended=false,navigating=false,switching=false,endedWordTicket=null){const acknowledgement=native('state',{wordSession:!!wordTicket&&!wordNavigating,wordSessionIsInsertion:source?.insertion===true,wordDocumentRequestPending:!!window.wordDocumentWorkspace?.pending,wordTicket,wordSessionEnded:ended,wordSessionNavigating:navigating,wordSessionSwitching:switching,...endedWordTicket?{endedWordTicket}:{}}).catch(()=>{});requestWorkbenchSync();return acknowledgement;}
 window.nativeSelectObject=async index=>{
+ window.cancelWordBackgroundThumbnail?.();
  if(busy||wordNavigating||window.wordDocumentWorkspace?.pending)return;
  if(wordTicket&&(source?.catalogProof||source?.savedCatalogue))return window.wordDocumentWorkspace?.select(index);
  if(selected?.index===index)return;
@@ -414,6 +487,12 @@ $('arrange').onclick=()=>perform(async()=>{if(wordSourceUnavailable())throw Erro
 window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
  const timingStart=performance.now();
  if(!/^[a-f0-9]{64}$/.test(ticket))throw Error('无效的 Word 编辑会话');
+ const cancelledReadback=window.wordDocumentWorkspace?.cancelIncomingNumberingReadback?.(documentRequestId);
+ if(cancelledReadback){
+  await cancelledReadback;
+  await native('wordSessionCancel',{ticket}).catch(()=>{});
+  return false;
+ }
  if(wordOutcomeUnknown){if(ticket!==wordTicket)await native('wordSessionCancel',{ticket}).catch(()=>{});message('上次 Word 结果仍未确认。请先结束当前会话并检查 Word，再打开新的编辑会话。',true);return false;}
  const generation=window.wordSessionGeneration??0;
  try{await waitForEditorIdle();}catch(error){await native('wordSessionCancel',{ticket}).catch(()=>{});message(error.message,true);return false;}
@@ -430,15 +509,19 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   const readStarted=performance.now();
   const r=await native('wordSessionRead',{ticket});
   const readFinished=performance.now();
+  // A cold launch can finish loading typography after the Word snapshot.
+  // Establish inherited preferences once, before evaluating or opening a draft.
+  await window.desktopTypographyReady;
   // A cancelled window must not be resurrected by a delayed Word read.
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   const workspaceDiscardApproved=await window.wordDocumentWorkspace?.prepareIncoming(r,documentRequestId);
+  if(workspaceDiscardApproved===null){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   const insertionDraft=window.wordDocumentWorkspace?.takeInsertionDraft(documentRequestId);
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   const changedDraft=!wordNavigating&&(wordTicket?wordSessionChanged():window.hasRecoverableDraft?.()===true);
   const sameDraftTarget=changedDraft&&wordTicket&&source?.documentIdentity&&r.documentIdentity===source.documentIdentity&&source.documentSnapshot&&r.documentSnapshot===source.documentSnapshot&&r.activeIndex===selected?.index&&/^[a-f0-9]{64}$/.test(selected?.nativeSha256??'')&&r.objects[r.activeIndex]?.nativeSha256===selected.nativeSha256;
   const draft=sameDraftTarget?{latex:mf.value,mode,ruler:editingRuler,numberFormat:$('layout-format').value,numberingRequested:selected.editorNumberingRequested,chapter:$('layout-chapter').value,section:$('layout-section').value,typography:window.desktopTypographyPatch?.(),replacements:Object.fromEntries([...$('character-editor').querySelectorAll('input')].map(e=>[e.dataset.offset,e.value]))}:null;
-  if(changedDraft&&!sameDraftTarget&&!workspaceDiscardApproved){const answer=await native('confirmWordSessionSwitch');if(!answer.discard){await native('wordSessionCancel',{ticket});message('已保留当前编辑；刚才打开的 Word 公式未修改。');return false;}}
+  if(changedDraft&&!sameDraftTarget&&!workspaceDiscardApproved){const answer=await native('confirmWordSessionSwitch',r.insertion?{newFormula:true}:undefined);if(!answer.discard){await native('wordSessionCancel',{ticket});message('已保留当前编辑；刚才打开的 Word 公式未修改。');return false;}}
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
   if(wordTicket&&wordTicket!==ticket&&!wordNavigating)await native('wordSessionCancel',{ticket:wordTicket}).catch(error=>{if(!/Unknown or expired native session/.test(error.message))throw error;});
   if(generation!==(window.wordSessionGeneration??0)){await native('wordSessionCancel',{ticket}).catch(()=>{});return false;}
@@ -449,8 +532,8 @@ window.nativeOpenWordSession=async (ticket,documentRequestId=null)=>{
   let sidebarSync;
   if(r.insertion){
    selected=null;mode='rebuild';editingRuler=undefined;mf.value='';mf.readOnly=false;$('latex').readOnly=false;
-   loadObjectLayout({layout:r.insertionLayout});window.desktopTypographyNew?.();if(r.documentTypographyPreset)window.desktopTypographyRestorePatch?.(r.documentTypographyPreset.typography);r.typographyBaseline=JSON.stringify(window.desktopTypographySnapshot?.()??null);window.resetEditorHistory?.();renderModes();changed(false);sidebarSync=renderObjects();
-   if(insertionDraft){mf.value=insertionDraft.latex;editingRuler=insertionDraft.ruler;window.desktopTypographyRestorePatch?.(insertionDraft.typography);window.resetEditorHistory?.();changed(false);}
+   loadObjectLayout({layout:r.insertionLayout});window.desktopTypographyNew?.(r.documentTypographyPreset?.typography);window.resetEditorHistory?.();renderModes();changed(false);sidebarSync=renderObjects();
+   if(insertionDraft){mf.value=insertionDraft.latex;editingRuler=insertionDraft.ruler;if(insertionDraft.typography)window.desktopTypographyRestorePatch?.(insertionDraft.typography);window.resetEditorHistory?.();changed(false);}
   }else sidebarSync=r.objects.length?selectObject(r.activeIndex??0,{scheduleValidation:false,restoringDraft:!!draft}):renderObjects();
   if(draft){mf.value=draft.latex;mode=draft.mode;editingRuler=draft.ruler;$('layout-format').value=draft.numberFormat;selected.editorNumberingRequested=draft.numberingRequested;$('layout-chapter').value=draft.chapter;$('layout-section').value=draft.section;renderModes();window.desktopTypographyRestorePatch?.(draft.typography);for(const input of $('character-editor').querySelectorAll('input'))if(Object.hasOwn(draft.replacements,input.dataset.offset))input.value=draft.replacements[input.dataset.offset];changed(false);}
  $('word-session-actions').hidden=false;$('export').hidden=true;$('save-edit').hidden=true;$('arrange-source').hidden=true;
@@ -505,7 +588,7 @@ async function loadWordDocument(ticket,initial){
       while(current()&&(busy||validationRunning||validationPending||wordCommitRunning||wordSaveQueued))await new Promise(resolve=>setTimeout(resolve,40));
       if(!current()||wordOutcomeUnknown)return;
       full.insertionLayout=initial.insertionLayout;full.layoutBaseline=initial.layoutBaseline;
-      if(full.documentTypographyPreset&&!initial.documentTypographyPreset&&!mf.value.trim()&&JSON.stringify(window.desktopTypographySnapshot?.()??null)===initial.typographyBaseline){window.desktopTypographyRestorePatch?.(full.documentTypographyPreset.typography);changed();}
+      if(full.documentTypographyPreset&&!initial.documentTypographyPreset&&!mf.value.trim()&&!window.desktopTypographyChanged?.()){window.desktopTypographyNew?.(full.documentTypographyPreset.typography);changed();}
       carryWordNumberingRevision(initial,full);source=full;if(valid)validatedFormulaKey=formulaKey();
       window.wordDocumentWorkspace?.remember(full);await renderObjects();controls();setTimeout(()=>loadWordThumbnails(ticket,full),0);return;
      }
@@ -551,53 +634,148 @@ function carryWordNumberingRevision(initial,full){
  }
 }
 async function loadWordThumbnails(ticket,document,indices=[selected?.index??document.activeIndex]){
- const queue=document.thumbnailQueue??(document.thumbnailQueue=new Set());
- const inFlight=document.thumbnailInFlight??(document.thumbnailInFlight=new Set());
- const current=()=>!wordNavigating&&wordTicket===ticket&&source===document&&(!!ticket||!!document.fileCopyGeneration);
+ const workspace=window.wordDocumentWorkspace;
+ const visible=()=>workspace?workspace.visibleSource(source):source;
+ const revision=()=>[document.documentSnapshot,document.documentNumberingRevision,document.liveNumberingRevision,document.sourceSha256].join(':');
+ const canPreload=document.hasDocumentContext&&!document.documentLoading&&!document.documentLoadFailed&&!document.catalogProof&&/^[a-f0-9]{64}$/.test(document.sourceSha256??'');
+ if(window.wordThumbnailsSuspended||wordNavigating||workspace?.wordDocumentUnavailable||wordTicket!==ticket||visible()!==document||
+    !ticket&&!document.fileCopyGeneration&&!canPreload)return;
+ const generation=window.wordSessionGeneration??0;
+ let job=window.wordThumbnailJob;
+ if(job&&(job.document!==document||job.ticket!==ticket||job.revision!==revision()||job.generation!==generation)){
+  window.cancelWordBackgroundThumbnail();job=null;
+ }
+ if(!job){
+  job={document,ticket,revision:revision(),generation,queue:new Set(document.visibleThumbnailIndices),cursor:0,running:false,requestId:null,cancelling:null};
+  window.wordThumbnailJob=job;
+ }
+ const current=()=>window.wordThumbnailJob===job&&!window.wordThumbnailsSuspended&&!wordNavigating&&
+  !workspace?.wordDocumentUnavailable&&wordTicket===ticket&&visible()===document&&revision()===job.revision&&
+  generation===(window.wordSessionGeneration??0);
  const needsThumbnail=index=>Number.isInteger(index)&&document.objects[index]&&!document.objects[index].image&&!document.objects[index].error;
- if(!current())return;
- for(const index of indices)if(needsThumbnail(index)&&!inFlight.has(index))queue.add(index);
- if(document.thumbnailRunning)return;document.thumbnailRunning=true;
- const retried=new Set();
- try{
-  // Collect the visible rows from one scroll update before starting work.
-  await new Promise(resolve=>setTimeout(resolve,120));
-  while(queue.size){
-   if(!current())return;
-   if(busy||wordCommitRunning||validationPending||validationRunning){await new Promise(resolve=>setTimeout(resolve,120));continue;}
-   const batch=[];
-   if(queue.delete(selected?.index)&&needsThumbnail(selected.index))batch.push(selected.index);
-   for(const index of queue){
-    queue.delete(index);
-    if(needsThumbnail(index))batch.push(index);
-    if(batch.length===4)break;
-   }
-   if(!batch.length)continue;
-   for(const index of batch)inFlight.add(index);
-   try{
-    const result=ticket
-     ? await native('wordSessionThumbnails',{ticket,indices:batch,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot})
-     : await native('fileCopyThumbnails',{path:document.path,sourceSha256:document.sourceSha256,indices:batch});
-    if(!current())return;
-    const updated=[];
-    for(const {index,image} of result.images){
-     if(!inFlight.has(index)||!image||!needsThumbnail(index))continue;
-     const object=document.objects[index];
-     object.image=image;updated.push(index);
-     if(object.latex&&!document.favoriteThumbnailLookup?.has(object.latex))document.favoriteThumbnailLookup?.set(object.latex,image);
-    }
-    if(updated.length){window.sidebarPublisher?.invalidate(document,updated);requestWorkbenchSync();}
-   }catch{
-    if(!current())return;
-    for(const index of batch)if(!retried.has(index)&&(selected?.index===index||document.visibleThumbnailIndices?.has(index))){retried.add(index);queue.add(index);}
-   }finally{for(const index of batch)inFlight.delete(index);}
+ const publish=images=>{
+  const updated=[];
+  for(const {index,image} of images){
+   if(!image||!needsThumbnail(index))continue;
+   const object=document.objects[index];object.image=image;updated.push(index);
+   if(object.latex&&!document.favoriteThumbnailLookup?.has(object.latex))document.favoriteThumbnailLookup?.set(object.latex,image);
   }
- }finally{document.thumbnailRunning=false;}
+  if(updated.length){window.sidebarPublisher?.invalidate(document,updated);requestWorkbenchSync();}
+ };
+ if(!current())return;
+ for(const index of indices)if(needsThumbnail(index)&&!job.inFlight?.includes(index))job.queue.add(index);
+ if(job.running||!job.queue.size&&(!canPreload||job.cursor>=document.objects.length))return;
+ job.running=true;
+ const pause=ms=>new Promise(resolve=>setTimeout(resolve,ms)),retried=new Set();
+ const interactive=()=>busy||wordCommitRunning||validationPending||validationRunning||workspace?.pending||workspace?.revealing||window.editorIsComposing?.();
+ const cacheRequest=async(index,visible)=>{
+  const requestId=window.wordThumbnailRequestId=(window.wordThumbnailRequestId??0)+1;
+  job.requestId=requestId;
+  try{
+   return await native('wordDocumentThumbnail',{requestId,index,sourceSha256:document.sourceSha256,nativeSha256:document.objects[index].nativeSha256,visible});
+  }finally{if(job.requestId===requestId)job.requestId=null;}
+ };
+ try{
+  await pause(35);
+  while(current()){
+   if(!job.queue.size&&!canPreload)return;
+   if(interactive()){await pause(100);continue;}
+   if(job.queue.size){
+    const batch=[];
+    const limit=ticket||document.fileCopyGeneration?4:1;
+    if(job.queue.delete(selected?.index)&&needsThumbnail(selected.index))batch.push(selected.index);
+    for(const index of job.queue){
+     if(batch.length===limit)break;
+     job.queue.delete(index);
+     if(needsThumbnail(index))batch.push(index);
+    }
+    if(!batch.length)continue;
+    job.inFlight=batch;
+    try{
+     let result;
+     if(ticket)result=await native('wordSessionThumbnails',{ticket,indices:batch,documentIdentity:document.documentIdentity,documentSnapshot:document.documentSnapshot});
+     else if(document.fileCopyGeneration)result=await native('fileCopyThumbnails',{path:document.path,sourceSha256:document.sourceSha256,indices:batch});
+     else result={images:[{index:batch[0],...(await cacheRequest(batch[0],true))}]};
+     if(!current())return;
+     publish(result.images.filter(({index})=>batch.includes(index)));
+    }catch{
+     if(!current())return;
+     for(const index of batch)if(!retried.has(index)&&(selected?.index===index||document.visibleThumbnailIndices?.has(index))){retried.add(index);job.queue.add(index);}
+    }finally{job.inFlight=null;}
+    continue;
+   }
+   // One idle row per turn. The renderer can admit saves and visible
+   // thumbnails between jobs, and no idle job requests a new Word capture.
+   while(job.cursor<document.objects.length&&(!needsThumbnail(job.cursor)||!/^[a-f0-9]{64}$/.test(document.objects[job.cursor].nativeSha256??'')))job.cursor++;
+   if(job.cursor>=document.objects.length)return;
+   await pause(90);
+   if(!current())return;
+   if(job.queue.size||interactive())continue;
+   const index=job.cursor,nativeSha256=document.objects[index]?.nativeSha256;
+   try{
+    const result=await cacheRequest(index,false);
+    if(!current())return;
+    if(result?.cancelled)continue;
+    if(result?.unavailable){job.cursor=document.objects.length;return;}
+    if(document.objects[index]?.nativeSha256===nativeSha256)publish([{index,image:result?.image}]);
+   }catch{if(!current())return;}
+   job.cursor++;
+  }
+ }finally{job.running=false;}
 }
-window.nativeRequestWordThumbnail=index=>{if(source&&!source.catalogProof&&(wordTicket||source.fileCopyGeneration)){(source.visibleThumbnailIndices??=new Set()).add(index);void loadWordThumbnails(wordTicket,source,[index]);}};
-window.nativeReleaseWordThumbnail=index=>{if(source){source.visibleThumbnailIndices?.delete(index);if(index!==selected?.index)source.thumbnailQueue?.delete(index);}};
-window.nativeWordThumbnailVisibility=value=>{try{const item=JSON.parse(value);if(!source||item.path!==source.path||item.fileCopyGeneration!==source.fileCopyGeneration||!Number.isInteger(item.index))return;if(item.visible===true)window.nativeRequestWordThumbnail(item.index);else if(item.visible===false)window.nativeReleaseWordThumbnail(item.index);}catch{}};
+window.cancelWordBackgroundThumbnail=()=>{
+ const job=window.wordThumbnailJob;
+ if(job?.requestId&&!job.inFlight&&job.cancelling!==job.requestId){
+  job.cancelling=job.requestId;
+  void native('wordDocumentThumbnailCancel',{requestId:job.requestId}).catch(()=>{});
+ }
+};
+window.nativeStopWordThumbnails=()=>{
+ window.wordThumbnailsSuspended=true;
+ window.cancelWordBackgroundThumbnail();
+ window.wordThumbnailJob=null;
+ window.wordDocumentWorkspace?.cancelReveal?.();
+};
+window.nativeResumeWordThumbnails=()=>{
+ window.wordThumbnailsSuspended=false;
+ window.updateWordThumbnails();
+};
+window.updateWordThumbnails=()=>{
+ const workspace=window.wordDocumentWorkspace;
+ const document=workspace?workspace.visibleSource(source):source;
+ const job=window.wordThumbnailJob;
+ if(job&&(document!==job.document||wordTicket!==job.ticket||
+  job.generation!==(window.wordSessionGeneration??0)||
+  [document.documentSnapshot,document.documentNumberingRevision,document.liveNumberingRevision,document.sourceSha256].join(':')!==job.revision)){
+  window.cancelWordBackgroundThumbnail();window.wordThumbnailJob=null;
+ }
+ if(!window.wordThumbnailsSuspended&&document?.hasDocumentContext&&!document.documentLoading&&!document.documentLoadFailed&&/^[a-f0-9]{64}$/.test(document.sourceSha256??'')){
+  void loadWordThumbnails(wordTicket,document,document===source?[selected?.index]:[]);
+ }
+};
+window.nativeRequestWordThumbnail=index=>{
+ const workspace=window.wordDocumentWorkspace;
+ const document=workspace?workspace.visibleSource(source):source;
+ if(!document||document.catalogProof)return;
+ (document.visibleThumbnailIndices??=new Set()).add(index);
+ window.cancelWordBackgroundThumbnail();
+ void loadWordThumbnails(wordTicket,document,[index]);
+};
+window.nativeReleaseWordThumbnail=index=>{
+ const job=window.wordThumbnailJob;
+ const workspace=window.wordDocumentWorkspace,document=workspace?workspace.visibleSource(source):source;
+ document?.visibleThumbnailIndices?.delete(index);
+ if(job&&job.document===document&&index!==selected?.index)job.queue.delete(index);
+};
+window.nativeWordThumbnailVisibility=value=>{try{
+ const workspace=window.wordDocumentWorkspace,document=workspace?workspace.visibleSource(source):source;
+ const item=JSON.parse(value);
+ if(!document||item.path!==(document.path??'')||item.documentIdentity&&item.documentIdentity!==document.documentIdentity||
+    item.fileCopyGeneration!==document.fileCopyGeneration||!Number.isInteger(item.index))return;
+ if(item.visible===true)window.nativeRequestWordThumbnail(item.index);else if(item.visible===false)window.nativeReleaseWordThumbnail(item.index);
+}catch{}};
 window.nativeResetSidebar=()=>{window.sidebarPublisher?.reset();requestWorkbenchSync();};
+
 async function bindSelectedWordFormula(){
  // Kept as a validation boundary for callers. The original Word owner now
  // applies an explicitly identified document target without reopening the App.
@@ -738,7 +916,7 @@ window.nativeCommitWordSession=()=>{
 async function finishWordSave(timing,confirmation,numbering){
  const confirmed=wordSaveQueued?performance.now():null;
  const workspace=window.wordDocumentWorkspace;
- workspace?.rememberAfterSave?.(source,selected?.index,confirmation?.change,mf.value,numbering);
+ workspace?.rememberAfterSave?.(source,selected?.index,confirmation?.change,mf.value,numbering,confirmation?.thumbnail);
  const endedTicket=wordTicket;wordTicket=null;wordSaveQueued=false;wordOutcomeUnknown=false;
  await syncSidebar(true,false,false,endedTicket);if(wordTicket)return;
  let draftCleared=true;try{await window.clearSavedDrafts?.();}catch{draftCleared=false;}if(wordTicket)return;
@@ -777,16 +955,17 @@ function wordSessionChanged({ignoreNumberFormat=false}={}){
  if(window.editorIsComposing?.())return true;
  if(source?.insertion){
   const initial=source.insertionLayout??{},layout=wordLayout();
-  return !!mf.value.trim()||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!=='[]'||
+  return !!mf.value.trim()||!!window.desktopTypographyChanged?.()||JSON.stringify(editingRuler??[])!=='[]'||
    layout.mode!==(initial.mode||'inline')||layout.numberFormat!==(initial.numberFormat??'(#E1)')||layout.chapter!==(initial.chapter??1)||layout.section!==(initial.section??1);
  }
  return !selected||
   source?.wordNumberingContextSupported&&['chapter','section'].some(key=>!$('layout-'+key).disabled&&$('layout-'+key).value!==(selected.editorCounterBaseline?.[key]??String(selected.layout?.[key]??'')))||
-  mf.value!==selected.editorBaseline||!!window.desktopTypographyPatch?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||
+  mf.value!==selected.editorBaseline||!!window.desktopTypographyChanged?.()||JSON.stringify(editingRuler??[])!==JSON.stringify(selected.ruler??[])||
   !ignoreNumberFormat&&source?.wordNumberingSupported&&!$('layout-format').disabled&&($('layout-format').value!==(selected.editorNumberFormatBaseline??selected.layout?.numberFormat??'')||selected.editorNumberingRequested)||
   [...$('character-editor').querySelectorAll('input')].some(input=>input.value!==(selected.characters.find(c=>String(c.offset)===input.dataset.offset)?.char));
 }
 window.nativePrepareToClose=async()=>{
+ window.nativeStopWordThumbnails?.();
  if(window.wordDocumentWorkspace?.pending&&!wordTicket){window.wordSessionGeneration=(window.wordSessionGeneration??0)+1;await window.wordDocumentWorkspace.cancelPending();}
  if(wordOutcomeUnknown)return await window.nativeCancelWordSession();
  if(wordCommitRunning){const saved=await wordCommitRunning;if(saved||!wordTicket)return saved;if(wordOutcomeUnknown)return await window.nativeCancelWordSession();const answer=await native('confirmWordSessionSwitch',{closing:true});return answer.discard?await window.nativeCancelWordSession():false;}
@@ -799,6 +978,7 @@ window.nativePrepareToClose=async()=>{
  return saved;
 };
 window.nativeCancelWordSession=async()=>{
+ window.cancelWordBackgroundThumbnail?.();
  window.wordNumberingSaveWaiting=null;
  await window.wordDocumentWorkspace?.cancelPending();
  if(wordOutcomeUnknown){
@@ -832,7 +1012,7 @@ function requestWorkbenchSync(){
  workbenchScheduled=true;
  // A WKWebView may suspend animation frames while its native window is in
  // the background. Native controls still need current state in that case.
- setTimeout(()=>{workbenchScheduled=false;try{publishWorkbenchState();}catch(error){window.webkit.messageHandlers.native.postMessage({action:'workbenchError',payload:{error:error.message}});}},16);
+ setTimeout(()=>{workbenchScheduled=false;try{publishWorkbenchState();window.updateWordThumbnails?.();}catch(error){window.webkit.messageHandlers.native.postMessage({action:'workbenchError',payload:{error:error.message}});}},16);
 }
 function workbenchFields(container,kind){
  return [...$(container).children].map(row=>{

@@ -8,6 +8,7 @@ import {readTypography,patchTypography} from './typography-native.mjs';
 import {renderNative} from './font-renderer.mjs';
 import {makeNewOle} from './new-formula.mjs';
 import {openDocxPackage,parseDocxXml,readDocxInput,resolveDocxPart} from './document-audit.mjs';
+import {updateWordObjectPreview,wordPreviewBox} from './word-preview.mjs';
 
 const PRESET='EquationLabTypographyPreset';
 const PRESET_SCHEMA='equationlab.document-typography-preset.v1';
@@ -99,7 +100,7 @@ async function makePlan(bytes,options,{checkpoint}={}){
  const preset=options.preset===undefined?undefined:options.preset===null?null:normalizeTypographyPreset(options.preset);
  if(preset)patchTypography(makeNewOle('x'),preset.typography);
  if(!patch&&preset===undefined)throw Error('A typography patch or document preset is required');
- const document=await inspectDocx(bytes,{checkpoint}),indices=options.indices??(patch?document.objects.map(o=>o.index):[]);
+ const document=await inspectDocx(bytes,{checkpoint,wordPreviewLimits:true}),indices=options.indices??(patch?document.objects.map(o=>o.index):[]);
  if(Object.keys(document.zip.files).some(p=>/^_xmlsignatures\//.test(p)))throw Error('Signed documents cannot be changed by the copy engine');
  const settings=await settingsInfo(document.zip,document.mainPart);
  if(settings.doc&&Array.from(settings.doc.getElementsByTagNameNS(NS.w,'documentProtection')).some(n=>['1','true','on'].includes(n.getAttributeNS(NS.w,'enforcement'))))throw Error('Protected documents require an authorized Word host operation');
@@ -118,8 +119,10 @@ async function makePlan(bytes,options,{checkpoint}={}){
    target.warnings=before.warnings??[];
    if(ole.equals(object.ole)){target.status='unchanged';target.reason='Requested preferences already match';}
    else {
-    const preview=await renderNative(ole);
-    if(preview.warnings?.length)throw Error('Preview has unresolved glyphs: '+preview.warnings.join(' '));
+    const rendered=await renderNative(ole);
+    if(rendered.warnings?.length)throw Error('Preview has unresolved glyphs: '+rendered.warnings.join(' '));
+    const {widthTwips,heightTwips}=object.wordPreview??{};
+    const preview={png:rendered.png,...wordPreviewBox(rendered,{widthTwips,heightTwips})};
     if(!preview.png?.length||![preview.width,preview.height,preview.depth].every(Number.isFinite)||preview.width<=0||preview.height<=0)throw Error('Invalid regenerated equation preview');
     target.status='ready';target.preview={pngSha256:hash(preview.png),width:preview.width,height:preview.height,depth:preview.depth};prepared.set(index,{ole,preview});
    }
@@ -163,10 +166,6 @@ async function writePreset(document,preset,types,serializer){
  contentType(types,info.path,'application/vnd.openxmlformats-officedocument.wordprocessingml.settings+xml');
  if(!info.related){relation(info.rels,'settings',posix.relative(posix.dirname(document.mainPart),info.path));document.zip.file(info.relPart,serializer.serializeToString(info.rels));}
 }
-function shapeDimensions(shape,preview){
- const properties=(shape.getAttribute('style')??'').split(';').map(s=>s.trim()).filter(Boolean).filter(s=>!/^(?:width|height)\s*:/i.test(s));
- shape.setAttribute('style',[...properties,`width:${preview.width.toFixed(3)}pt`,`height:${preview.height.toFixed(3)}pt`].join(';'));
-}
 
 /** Applies a previously inspected plan to exactly those input bytes. A new file
  * is created only with output, using exclusive creation: no existing path, hard
@@ -191,11 +190,7 @@ export async function applyTypography(input,plan,{output}={}){
    const rels=changedRels.get(object.relPart)??object.rels;changedRels.set(object.relPart,rels);
    object.image.setAttributeNS(NS.r,'r:id',relation(rels,'image',posix.relative(posix.dirname(object.part),imagePart)));
    object.element.setAttributeNS(NS.r,'r:id',relation(rels,'oleObject',posix.relative(posix.dirname(object.part),olePart)));
-   shapeDimensions(object.shape,preview);
-   const container=object.element.parentNode,run=container.parentNode;
-   container.setAttributeNS(NS.w,'w:dxaOrig',String(Math.round(preview.width*20)));container.setAttributeNS(NS.w,'w:dyaOrig',String(Math.round(preview.height*20)));
-   const props=Array.from(run.childNodes).find(n=>n.namespaceURI===NS.w&&n.localName==='rPr'),position=props&&Array.from(props.childNodes).find(n=>n.namespaceURI===NS.w&&n.localName==='position');
-   if(position)position.setAttributeNS(NS.w,'w:val',String(-Math.round(preview.depth*2)));
+   updateWordObjectPreview(object.shape,object.element.parentNode,preview);
    contentType(types,imagePart,'image/png');contentType(types,olePart,'application/vnd.openxmlformats-officedocument.oleObject');changedParts.set(object.part,object.partDoc);
   }
   for(const [part,doc]of changedParts)document.zip.file(part,serializer.serializeToString(doc));

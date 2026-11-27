@@ -346,8 +346,8 @@ test('Letter catalog provides every standard case, exact displayed glyphs and ex
   if(item.requiresUnicodeFont){
    const ole=makeNewOle(item.latex),parsed=inspectOle(ole).parsed;
    assert.equal(characters(parsed)[0].char,item.symbol);
-   assert.ok(characters(parsed)[0].typeface<0,'Missing Symbol variants must use an explicit bundled font');
-   assert.ok(parsed.records.some(r=>r.type===17&&r.name==='STIX Two Math'));
+   assert.ok(characters(parsed)[0].typeface<0,'Missing Symbol variants must use an explicit Unicode font');
+   assert.ok(parsed.records.some(r=>r.type===17&&r.name==='Cambria Math'));
    assert.ok((await renderNative(ole,{raster:false})).svg.includes('data-c='));
   }else assert.ok((await renderNative(makeNewOle(item.latex),{raster:false})).svg.includes('data-c='));
  }

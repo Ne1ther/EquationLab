@@ -1,7 +1,7 @@
 import {createHash} from 'node:crypto';
 import {readFile,stat} from 'node:fs/promises';
 
-const OBJECT_FIELDS=['index','path','part','mainDocument','progId','ole','latex','previewError','parseError','layout','typography','typographyError','ruler','nativeSha256','characters','application','imagePath'];
+const OBJECT_FIELDS=['index','path','part','mainDocument','progId','ole','latex','previewError','parseError','layout','typography','typographyError','ruler','nativeSha256','characters','application','imagePath','wordPreview'];
 const digest=bytes=>createHash('sha256').update(bytes).digest('hex');
 const identity=info=>[info.dev,info.ino,info.size,info.mtimeNs,info.ctimeNs].join(':');
 const fileIdentity=async path=>identity(await stat(path,{bigint:true}));
@@ -98,6 +98,12 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   }
   return promise;
  }
+ function getContent(key){
+  const entry=entries.get(key);
+  if(!entry)return null;
+  hits++;touch(key,entry);
+  return entry.document;
+ }
  // Ordered paths form the key: extractors may return positional results, and
  // changing order or removing duplicates would change the caller's contract.
  const previewKey=(hash,paths)=>typeof hash==='string'&&paths.every(path=>typeof path==='string')?JSON.stringify([hash,paths]):null;
@@ -137,5 +143,5 @@ export function createDocumentSnapshotCache({inspect,readTypographyPreset=async(
   rememberPreview(key,result);
   return result;
  }
- return {get,getStoredPreviews,hasContent:key=>entries.has(key),stats:()=>({entries:entries.size,files:files.size,retainedBytes,hits,misses,pendingPaths:pendingPaths.size,pendingContent:pendingContent.size,previewEntries:previews.size,previewRetainedBytes,previewHits,previewMisses})};
+ return {get,getContent,getStoredPreviews,hasContent:key=>entries.has(key),stats:()=>({entries:entries.size,files:files.size,retainedBytes,hits,misses,pendingPaths:pendingPaths.size,pendingContent:pendingContent.size,previewEntries:previews.size,previewRetainedBytes,previewHits,previewMisses})};
 }

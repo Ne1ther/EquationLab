@@ -430,6 +430,7 @@ test('Only a verified format-only Word edit can commit before the full document 
   c.$('layout-chapter').value='2';c.$('layout-section').value='1';
   c.$('layout-chapter').disabled=c.$('layout-section').disabled=true;
   c.window.desktopTypographyPatch=()=>variant==='style'?{fullSize:18}:null;
+  c.window.desktopTypographyChanged=()=>variant==='style';
   if(variant==='stale')c.source.numberingRefreshNeeded=true;
   if(variant==='other owner')c.source.objects[0]={...object};
   if(variant==='formula')c.mf.value='y';

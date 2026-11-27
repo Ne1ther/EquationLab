@@ -21,6 +21,9 @@ std::int32_t EquationLabWordInsertionNumberingNext();
 void EquationLabFinishWordInsertion(bool ok);
 // Call when Word cannot determine whether the live-range insertion took effect.
 void EquationLabFinishWordInsertionUncertain();
+enum class WordInsertionOutcome { Failed, Committed, Unconfirmed };
+// 0 accepted, 1 obsolete (including a repeated result), -1 invalid caller.
+std::int32_t EquationLabFinishClaimedWordInsertion(std::int32_t token,WordInsertionOutcome outcome);
 // Returns the insertion error, or 7 when the outcome/acknowledgement is unconfirmed.
 std::int32_t EquationLabWordInsertionError();
 // Read-only list enrichment for a partial insertion context. Claim once, then
